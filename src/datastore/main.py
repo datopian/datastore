@@ -8,7 +8,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from datastore.api.errors import register_exception_handlers
-from datastore.api.routes import router
+from datastore.api.routes import datastore_router, router
 from datastore.config import get_settings
 
 
@@ -61,6 +61,7 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(router)
+    app.include_router(datastore_router, prefix="/api/3")
     return app
 
 
