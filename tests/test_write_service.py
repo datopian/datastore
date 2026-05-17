@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from datastore.core.config import Config
-from datastore.services.write import create_datastore
+from datastore.services.write import create_datastore, upsert_datastore
 
 
 class _FakeCKAN:
@@ -111,3 +111,88 @@ def test_missing_package_returns_none_package_id() -> None:
     result = asyncio.run(create_datastore(ctx, data_dict))
 
     assert result.package_id is None
+
+
+# --- upsert_datastore -------------------------------------------------------
+
+
+def test_upsert_returns_typed_result() -> None:
+    ctx = _ctx()
+    data_dict = {
+        "resource_id": "res-1",
+        "records": [{"a": 1}, {"a": 2}],
+        "method": "upsert",
+    }
+
+    result = asyncio.run(upsert_datastore(ctx, data_dict))
+
+    assert result.resource_id == "res-1"
+    assert result.method == "upsert"
+    # Optional fields stay None when their flags default to False — the
+    # exclude_none serializer drops them from the wire body.
+    assert result.records is None
+    assert result.total is None
+
+
+def test_upsert_default_method_is_upsert() -> None:
+    """`method` is optional; absence resolves to 'upsert' inside the service."""
+    ctx = _ctx()
+    result = asyncio.run(upsert_datastore(ctx, {
+        "resource_id": "res-1",
+        "records": [{"a": 1}],
+        # method absent
+    }))
+
+    assert result.method == "upsert"
+
+
+def test_upsert_echoes_records_when_include_records() -> None:
+    ctx = _ctx()
+    records = [{"a": 1}, {"a": 2}]
+    result = asyncio.run(upsert_datastore(ctx, {
+        "resource_id": "res-1",
+        "records": records,
+        "method": "upsert",
+        "include_records": True,
+    }))
+
+    assert result.records == records
+
+
+def test_upsert_returns_total_when_include_total() -> None:
+    """BigQuery placeholder returns `total=len(records)`; the service lifts it."""
+    ctx = _ctx()
+    result = asyncio.run(upsert_datastore(ctx, {
+        "resource_id": "res-1",
+        "records": [{"a": 1}, {"a": 2}],
+        "method": "upsert",
+        "include_total": True,
+    }))
+
+    assert result.total == 2
+
+
+def test_upsert_omits_total_when_include_total_false() -> None:
+    """Even if the engine populates total, the service gates on the request flag."""
+    ctx = _ctx()
+    result = asyncio.run(upsert_datastore(ctx, {
+        "resource_id": "res-1",
+        "records": [{"a": 1}, {"a": 2}],
+        "method": "upsert",
+        "include_total": False,
+    }))
+
+    assert result.total is None
+
+
+def test_upsert_records_optional() -> None:
+    """`records` may be omitted — service defaults to [] and doesn't crash."""
+    ctx = _ctx()
+    result = asyncio.run(upsert_datastore(ctx, {
+        "resource_id": "res-1",
+        "method": "upsert",
+        # records absent
+    }))
+
+    assert result.resource_id == "res-1"
+    assert result.records is None  # include_records defaults to False

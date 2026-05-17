@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from datastore.infrastructure.ckan_client import CKANClient
 from datastore.infrastructure.engines.base import (
     DatastoreBackend,
     SearchResult,

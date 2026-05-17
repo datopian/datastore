@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from datastore.schemas.validators import FieldSpec, StringOrList
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from datastore.schemas.validators import FieldSpec, StringOrList
 
 UpsertMethod = Literal["upsert", "insert", "update"]
 

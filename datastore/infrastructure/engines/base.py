@@ -45,7 +45,8 @@ class DatastoreBackend(ABC):
         """Query records. Returns SearchResult with lazy row iterator."""
 
     @abstractmethod
-    def upsert(self, resource_id: str, records: list, method: str, include_total: bool) -> WriteResult:
+    def upsert(self, resource_id: str, records: list, method: str,
+               include_total: bool) -> WriteResult:
         """Insert / update / upsert records.
 
         `include_total=True` → after the write, recompute and return the

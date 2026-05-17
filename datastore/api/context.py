@@ -3,15 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
+from fastapi import Depends, Header
+from starlette.requests import Request
+
 from datastore.api import auth as auth_fns
 from datastore.api.auth import Permission
 from datastore.core.config import Config, get_config
 from datastore.core.helper import parse_authorization_header
 from datastore.infrastructure.cache import CachePort
 from datastore.infrastructure.ckan_client import CKANClient
-from fastapi import Depends, Header
-from starlette.requests import Request
-
 
 # --- FastAPI dependency seams ------------------------------------------------
 ConfigDep = Annotated[Config, Depends(get_config)]

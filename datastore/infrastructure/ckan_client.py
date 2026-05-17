@@ -86,9 +86,11 @@ class CKANClient:
         """Map HTTP-level CKAN failures to our APIError taxonomy."""
         status = response.status_code
         if status in (401, 403, 409):
-            raise AuthorizationError(f"Access denied: Action {action} requires an authenticated user")
+            raise AuthorizationError(
+                f"Access denied: Action {action} requires an authenticated user"
+            )
         if status == 404:
-            raise NotFoundError(f"Not found")
+            raise NotFoundError("Not found")
         if status >= 500:
             raise ServerError(f"CKAN returned {status} for {action}")
 

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  # Run on every push to main (i.e. after a PR merges) so the default branch
+  # is always green and the badge reflects reality.
+  push:
+    branches: [main]
+
+  # Run on every PR targeting main so reviewers see the result before merge.
+  pull_request:
+    branches: [main]
+
+  # Manual re-run from the Actions tab.
+  workflow_dispatch:
+
+# Cancel any in-flight CI on the same branch / PR when a new push lands.
+# Saves minutes on a chatty PR and keeps the "latest commit" status accurate.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint + Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies (editable, with dev tools)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check datastore tests
+
+      - name: Tests (pytest)
+        run: pytest -q

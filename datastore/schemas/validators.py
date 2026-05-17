@@ -5,8 +5,9 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from datastore.core.constants import POSTGRES_TYPES
 from pydantic import BaseModel, BeforeValidator, ConfigDict
+
+from datastore.core.constants import POSTGRES_TYPES
 
 # --- validator functions -----------------------------------------------------
 

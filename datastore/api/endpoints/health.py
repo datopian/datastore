@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datastore.api.responses import ORJSONResponse, ckan_success
-from datastore.core.config import get_config
-from datastore.schemas.responses import StatusResponse, WelcomeResponse
 from fastapi import APIRouter
 from starlette.requests import Request
+
+from datastore.api.responses import ckan_success
+from datastore.core.config import get_config
+from datastore.schemas.responses import StatusResponse, WelcomeResponse
 
 router = APIRouter(tags=["health"])
 

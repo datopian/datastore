@@ -13,6 +13,7 @@ import logging
 from typing import Any, Literal, get_args
 
 import orjson
+
 from datastore.core.exceptions import AuthorizationError
 from datastore.infrastructure.cache import CachePort
 from datastore.infrastructure.ckan_client import CKANClient

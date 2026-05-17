@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi.testclient import TestClient
+
 from tests.conftest import FakeCKAN
 
 CREATE_URL = "/api/3/action/datastore_create"
