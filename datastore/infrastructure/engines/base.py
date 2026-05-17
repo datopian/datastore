@@ -19,7 +19,7 @@ class SearchResult:
 @dataclass(slots=True)
 class WriteResult:
     rows_written: int = 0
-    record_count: int | None = None
+    total: int | None = None
 
 
 class DatastoreBackend(ABC):
@@ -30,8 +30,12 @@ class DatastoreBackend(ABC):
 
     @abstractmethod
     def create(self, resource_id: str, fields: list, unique_keys: list,
-               records: list | None) -> WriteResult:
-        """Create/alter table, optionally with bulk insert."""
+               records: list | None, include_total: bool) -> WriteResult:
+        """Create/alter table, optionally with bulk insert.
+
+        `include_total=True` → after the insert, recompute and return the
+        total row count via `WriteResult.total`. `False` → leave it `None`.
+        """
 
     @abstractmethod
     def search(self, resource_id: str, filters: dict | None, q: str | None,
@@ -42,8 +46,10 @@ class DatastoreBackend(ABC):
 
     @abstractmethod
     def upsert(self, resource_id: str, records: list, method: str, include_total: bool) -> WriteResult:
-        """Insert/update/upsert records.. `include_total=True`
-        (sets `WriteResult.record_count`). `False` → leave it `None`.
+        """Insert / update / upsert records.
+
+        `include_total=True` → after the write, recompute and return the
+        total row count via `WriteResult.total`. `False` → leave it `None`.
         """
 
     @abstractmethod

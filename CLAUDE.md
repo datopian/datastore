@@ -501,11 +501,14 @@ is easy to follow.
       {"id": "bidder_metadata",            "type": "object",   "info": {"...": "..."}}
     ],
     "primary_key": ["auction_id", "product_code"],
-    "unique_key": ["auction_id", "product_code"],
-    "records_inserted": 2
+    "unique_key": ["auction_id", "product_code"]
   }
 }
 ```
+
+Optional response fields (omitted from the body when not requested):
+- `records` — echoes the input rows back when the request sets `include_records: true`.
+- `total` — total row count after the write, populated when `include_total: true`.
 
 ### 6.2 `GET /api/3/datastore_search`
 
@@ -597,14 +600,15 @@ GET /api/3/datastore_search
       "bidder_metadata": {"unit_id": "SSE-PEH-3", "rejection_reason": "above_cap"}
     }
   ],
-  "calculate_record_count": false,
+  "include_records": false,
+  "include_total": false,
   "force": false
 }
 ```
 
-- `method`: `upsert` | `insert` | `update`. `upsert` and `update` require `unique_key`.
-- `unique_key` (preferred) / `primary_key` (back-compat): which fields identify a row.
-- `calculate_record_count`: if `true`, runs a `COUNT(*)` after the write — adds a query, off by default.
+- `method`: `upsert` | `insert` | `update`. The table's stored `unique_key` (set at `datastore_create`) decides which rows match — the request body itself never carries it.
+- `include_records`: if `true`, echoes the written rows back in the response.
+- `include_total`: if `true`, the engine runs a `COUNT(*)` after the write and populates `result.total`. Off by default.
 - `force`: bypasses optional client-side guards (reserved; backend-specific).
 
 **Response**
@@ -612,14 +616,19 @@ GET /api/3/datastore_search
 {
   "help": "...",
   "success": true,
-  "rows_written": 2,
-  "records": [
-    {"auction_id": 144, "product_code": "DCL", "...": "..."},
-    {"auction_id": 153, "product_code": "FFR", "...": "..."}
-  ],
-  "record_count": null
+  "result": {
+    "resource_id": "balancing_auction_results_2025",
+    "method": "upsert"
+  }
 }
 ```
+
+Optional fields appear in `result` only when requested:
+
+- `records` — echoes input rows when `include_records: true`.
+- `total` — total row count after the write when `include_total: true`.
+
+`null` is never serialised — fields that aren't populated are simply omitted (see `_orjson_default` in `api/responses.py`).
 
 ### 6.4 `GET /api/3/datastore_search_sql`
 
@@ -738,7 +747,7 @@ metadata catalog (titles, descriptions, units, examples) without a side store.
     ],
     "unique_key": ["auction_id", "product_code"],
     "primary_key": ["auction_id", "product_code"],
-    "record_count": 18420
+    "total": 18420
   }
 }
 ```

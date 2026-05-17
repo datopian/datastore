@@ -20,6 +20,8 @@ async def create_datastore(
     fields = data_dict.get("fields") or []
     records = data_dict.get("records") or []
     primary_key = data_dict.get("primary_key") or []
+    include_records = bool(data_dict.get("include_records", False))
+    include_total = bool(data_dict.get("include_total", False))
 
     is_new_resource = isinstance(resource, dict)
     if is_new_resource:
@@ -30,11 +32,12 @@ async def create_datastore(
 
     # TODO: placeholder engine call — replace once the real backend lands.
     engine = get_datastore_engine(context, mode="rw")
-    engine.create(
+    write_result = engine.create(
         resource_id=resource_id,
         fields=fields,
         unique_keys=primary_key,
         records=records,
+        include_total=include_total,
     )
 
     return DatastoreCreateResponse.Result(
@@ -42,15 +45,15 @@ async def create_datastore(
         package_id=package.get("id"),
         fields=fields,
         primary_key=primary_key,
-        records_inserted=len(records),
+        records=records if include_records else None,
+        total=write_result.get("total") if include_total else None,
     )
 
 
 async def upsert_datastore(
     context: RequestContext, data_dict: dict[str, Any]
 ) -> DatastoreUpsertResponse.Result:
-    """Run the `datastore_upsert` action.
-    """
+    """Run the `datastore_upsert` action."""
     resource_id = data_dict["resource_id"]
     records = data_dict.get("records") or []
     method = data_dict.get("method") or "upsert"
@@ -59,7 +62,7 @@ async def upsert_datastore(
 
     # TODO: placeholder engine call — replace once the real backend lands.
     engine = get_datastore_engine(context, mode="rw")
-    engine.upsert(
+    write_result = engine.upsert(
         resource_id=resource_id,
         records=records,
         method=method,
@@ -69,7 +72,6 @@ async def upsert_datastore(
     return DatastoreUpsertResponse.Result(
         resource_id=resource_id,
         method=method,
-        records_affected=len(records),
         records=records if include_records else None,
-        record_count=None,
+        total=write_result.get("total") if include_total else None,
     )

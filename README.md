@@ -162,7 +162,8 @@ class DatastoreCreateResponse(ResponseModel):
         package_id: str | None = None
         fields: list[FieldSpec]
         primary_key: list[str] = Field(default_factory=list)
-        records_inserted: int
+        records: list[dict[str, Any]] | None = None   # when include_records=True
+        total: int | None = None                      # when include_total=True
 
     result: Result
 ```

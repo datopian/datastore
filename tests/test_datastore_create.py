@@ -60,7 +60,6 @@ def test_create_with_resource_id_succeeds(client: TestClient) -> None:
     assert result["resource_id"] == "balancing_auction_results_2025"
     assert result["package_id"] == "pkg-balancing-2025"
     assert result["primary_key"] == ["auction_id", "product_code"]
-    assert result["records_inserted"] == 2
     assert [f["id"] for f in result["fields"]] == ["auction_id", "product_code"]
 
 
@@ -72,7 +71,6 @@ def test_create_with_resource_dict_succeeds(client: TestClient) -> None:
     assert body["success"] is True
     result = body["result"]
     assert result["package_id"] == "pkg-balancing-2025"
-    assert result["records_inserted"] == 0
 
 
 # 2. Missing required field -------------------------------------------------

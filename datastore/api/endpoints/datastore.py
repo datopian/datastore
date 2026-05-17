@@ -32,13 +32,15 @@ async def datastore_create(
             package_id=payload.resource.get("package_id"),
             permission="create",
         )
-
+        
     data_dict.update(
         {
             "resource": payload.resource_id or payload.resource,
             "fields": payload.fields,
             "records": payload.records,
             "primary_key": payload.primary_key,
+            "include_records": payload.include_records,
+            "include_total": payload.include_total,
         }
     )
 

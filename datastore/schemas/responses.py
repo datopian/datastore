@@ -56,7 +56,10 @@ class DatastoreCreateResponse(ResponseModel):
         package_id: str | None = None
         fields: list[FieldSpec]
         primary_key: list[str] = Field(default_factory=list)
-        records_inserted: int
+        # Echoed input rows when the request set `include_records=True`.
+        records: list[dict[str, Any]] | None = None
+        # Total row count after the write — set only when `include_total=True`.
+        total: int | None = None
 
     result: Result
 
@@ -67,10 +70,7 @@ class DatastoreUpsertResponse(ResponseModel):
     class Result(BaseModel):
         resource_id: str
         method: str
-        records_affected: int
-        # Echoed input rows when the request set `include_records=True`.
         records: list[dict[str, Any]] | None = None
-        # Populated only when `include_total=True` (engine recomputes COUNT(*)).
-        record_count: int | None = None
+        total: int | None = None
 
     result: Result

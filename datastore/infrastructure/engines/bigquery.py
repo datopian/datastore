@@ -32,30 +32,23 @@ class BigQueryBackend(DatastoreBackend):
         fields: list,
         unique_keys: list,
         records: list | None,
+        include_total: bool,
     ) -> WriteResult:
-        """Create/alter table, optionally with records insert."""
+        """Create/alter table, optionally with records insert.
+
+        Placeholder: echoes inputs. Real impl (Phase 8) issues
+        `CREATE TABLE IF NOT EXISTS`, bulk-inserts records, and runs
+        `COUNT(*)` when `include_total=True`.
+        """
+        print(include_total)
         return {
             "fields": fields,
             "records": records,
             "unique_keys": unique_keys,
+            "include_total": include_total,
+            "total": len(records) if include_total else None,
         }
 
-    def search(
-        self,
-        resource_id: str,
-        filters: dict | None,
-        q: str | None,
-        distinct: bool,
-        plain: bool,
-        language: str,
-        limit: int,
-        offset: int,
-        fields: list | None,
-        sort: str | None,
-        include_total: bool,
-    ) -> SearchResult:
-        """Query records. Returns SearchResult with lazy row iterator."""
-        {}
 
     def upsert(
         self,
@@ -76,7 +69,25 @@ class BigQueryBackend(DatastoreBackend):
             "records": records,
             "method": method,
             "include_total": include_total,
+            "total": len(records)
         }
+
+    def search(
+        self,
+        resource_id: str,
+        filters: dict | None,
+        q: str | None,
+        distinct: bool,
+        plain: bool,
+        language: str,
+        limit: int,
+        offset: int,
+        fields: list | None,
+        sort: str | None,
+        include_total: bool,
+    ) -> SearchResult:
+        """Query records. Returns SearchResult with lazy row iterator."""
+        {}
 
     def search_sql(self, sql: str, limit: int) -> SearchResult:
         """Execute raw SQL SELECT. Returns SearchResult with lazy row iterator."""

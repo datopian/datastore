@@ -45,7 +45,6 @@ def test_existing_resource_skips_resource_create() -> None:
     assert result.resource_id == "existing-resource-id"
     assert result.package_id == "pkg-1"
     assert result.primary_key == ["a"]
-    assert result.records_inserted == 2
     assert ctx.ckan.created == []  # no CKAN call
 
 
@@ -63,13 +62,12 @@ def test_new_resource_creates_via_ckan() -> None:
 
     assert result.resource_id == "new-res-id"
     assert result.package_id == "pkg-1"
-    assert result.records_inserted == 0
     assert len(ctx.ckan.created) == 1
     assert ctx.ckan.created[0]["package_id"] == "pkg-1"
 
 
-def test_missing_records_counts_zero() -> None:
-    """`records` may be omitted entirely — service should default to []."""
+def test_missing_records_is_handled() -> None:
+    """`records` may be omitted entirely — service should default to [] and not echo."""
     ctx = _ctx()
     data_dict = {
         "package": {"id": "pkg-x"},
@@ -81,7 +79,7 @@ def test_missing_records_counts_zero() -> None:
 
     result = asyncio.run(create_datastore(ctx, data_dict))
 
-    assert result.records_inserted == 0
+    assert result.records is None  # include_records defaults to False
 
 
 def test_primary_key_defaults_to_empty_list() -> None:
@@ -113,4 +111,3 @@ def test_missing_package_returns_none_package_id() -> None:
     result = asyncio.run(create_datastore(ctx, data_dict))
 
     assert result.package_id is None
-    assert result.records_inserted == 1

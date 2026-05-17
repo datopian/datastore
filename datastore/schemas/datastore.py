@@ -19,6 +19,8 @@ class DatastoreCreateRequest(BaseModel):
     fields: list[FieldSpec] = Field(min_length=1)
     primary_key: StringOrList = None
     records: list[dict[str, Any]] | None = None
+    include_records: bool = False
+    include_total: bool = False
     force: bool | None = None
 
     @model_validator(mode="after")
@@ -39,6 +41,7 @@ class DatastoreUpsertRequest(BaseModel):
     resource_id: str
     records: list[dict[str, Any]] | None = None
     method: UpsertMethod = "upsert"
-    force: bool = False
     include_records: bool = False
     include_total: bool = False
+    force: bool = False
+
