@@ -1,0 +1,17 @@
+{
+  "resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937",
+  "method": "update",
+  "records": [
+    {
+      "auction_id": 144,
+      "product_code": "DCL",
+      "accepted": false,
+      "bidder_metadata": {"unit_id": "DRAX-1", "rejection_reason": "settlement_dispute"}
+    },
+    {
+      "auction_id": 144,
+      "product_code": "DCH",
+      "clearing_price_gbp_per_mwh": 50.85
+    }
+  ]
+}
