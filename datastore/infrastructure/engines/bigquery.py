@@ -33,7 +33,7 @@ class BigQueryBackend(DatastoreBackend):
         unique_keys: list,
         records: list | None,
     ) -> WriteResult:
-        """Create/alter table, optionally with bulk insert."""
+        """Create/alter table, optionally with records insert."""
         return {
             "fields": fields,
             "records": records,
@@ -62,11 +62,21 @@ class BigQueryBackend(DatastoreBackend):
         resource_id: str,
         records: list,
         method: str,
-        key_fields: list | None,
-        calculate_record_count: bool,
+        include_total: bool,
     ) -> WriteResult:
-        """Insert/update/upsert records. key_fields = resolved primary_key."""
-        {}
+        """Insert / update / upsert records.
+        Placeholder: echoes inputs so the call path is exercised end-to-end:
+          - "insert"  → `insert_rows_json` (or DML INSERT for large batches)
+          - "update"  → DML `UPDATE ... WHERE <key_fields> IN @keys`
+          - "upsert"  → `MERGE` with `UNNEST(@records)` as source
+        and runs `COUNT(*)` when `include_total=True`.
+        """
+        return {
+            "resource_id": resource_id,
+            "records": records,
+            "method": method,
+            "include_total": include_total,
+        }
 
     def search_sql(self, sql: str, limit: int) -> SearchResult:
         """Execute raw SQL SELECT. Returns SearchResult with lazy row iterator."""

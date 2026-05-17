@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 
 def _orjson_default(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):
-        return obj.model_dump()
+        return obj.model_dump(exclude_none=True)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 

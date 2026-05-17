@@ -41,9 +41,10 @@ class DatastoreBackend(ABC):
         """Query records. Returns SearchResult with lazy row iterator."""
 
     @abstractmethod
-    def upsert(self, resource_id: str, records: list, method: str,
-               key_fields: list | None, calculate_record_count: bool) -> WriteResult:
-        """Insert/update/upsert records. key_fields = resolved unique_key/primary_key."""
+    def upsert(self, resource_id: str, records: list, method: str, include_total: bool) -> WriteResult:
+        """Insert/update/upsert records.. `include_total=True`
+        (sets `WriteResult.record_count`). `False` → leave it `None`.
+        """
 
     @abstractmethod
     def search_sql(self, sql: str, limit: int) -> SearchResult:

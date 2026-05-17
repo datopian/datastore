@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from datastore.infrastructure.engines import get_datastore_engine
-from datastore.schemas.responses import DatastoreCreateResponse
+from datastore.schemas.responses import (
+    DatastoreCreateResponse,
+    DatastoreUpsertResponse,
+)
 
 if TYPE_CHECKING:  # type-only — no runtime import from api/
     from datastore.api.context import RequestContext
@@ -40,4 +43,33 @@ async def create_datastore(
         fields=fields,
         primary_key=primary_key,
         records_inserted=len(records),
+    )
+
+
+async def upsert_datastore(
+    context: RequestContext, data_dict: dict[str, Any]
+) -> DatastoreUpsertResponse.Result:
+    """Run the `datastore_upsert` action.
+    """
+    resource_id = data_dict["resource_id"]
+    records = data_dict.get("records") or []
+    method = data_dict.get("method") or "upsert"
+    include_records = bool(data_dict.get("include_records", False))
+    include_total = bool(data_dict.get("include_total", False))
+
+    # TODO: placeholder engine call — replace once the real backend lands.
+    engine = get_datastore_engine(context, mode="rw")
+    engine.upsert(
+        resource_id=resource_id,
+        records=records,
+        method=method,
+        include_total=include_total,
+    )
+
+    return DatastoreUpsertResponse.Result(
+        resource_id=resource_id,
+        method=method,
+        records_affected=len(records),
+        records=records if include_records else None,
+        record_count=None,
     )

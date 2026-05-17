@@ -11,6 +11,8 @@ it and adds an inner `Result` class plus a `result: Result` field.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from datastore.schemas.validators import FieldSpec
@@ -55,5 +57,20 @@ class DatastoreCreateResponse(ResponseModel):
         fields: list[FieldSpec]
         primary_key: list[str] = Field(default_factory=list)
         records_inserted: int
+
+    result: Result
+
+
+class DatastoreUpsertResponse(ResponseModel):
+    """Response for `POST /api/3/datastore_upsert`."""
+
+    class Result(BaseModel):
+        resource_id: str
+        method: str
+        records_affected: int
+        # Echoed input rows when the request set `include_records=True`.
+        records: list[dict[str, Any]] | None = None
+        # Populated only when `include_total=True` (engine recomputes COUNT(*)).
+        record_count: int | None = None
 
     result: Result

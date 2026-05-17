@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datastore.api.context import Context
 from datastore.api.responses import ORJSONResponse, ckan_success
-from datastore.schemas.datastore import DatastoreCreateRequest
-from datastore.schemas.responses import DatastoreCreateResponse
-from datastore.services.write import create_datastore
+from datastore.schemas.datastore import DatastoreCreateRequest, DatastoreUpsertRequest
+from datastore.schemas.responses import (
+    DatastoreCreateResponse,
+    DatastoreUpsertResponse,
+)
+from datastore.services.write import create_datastore, upsert_datastore
 from fastapi import APIRouter, HTTPException
 from starlette.requests import Request
 
@@ -43,9 +46,20 @@ async def datastore_create(
     return ckan_success(request, result)
 
 
-@router.post("/datastore_upsert")
-def datastore_upsert() -> ORJSONResponse:
-    raise HTTPException(status_code=501, detail="datastore_upsert is not implemented")
+@router.post("/datastore_upsert", response_model=DatastoreUpsertResponse)
+async def datastore_upsert(
+    request: Request,
+    payload: DatastoreUpsertRequest,
+    context: Context,
+):
+    """`POST /api/3/datastore_upsert` — authorize, then upsert / insert / update rows."""
+    data_dict = await context.auth.authorize(
+        resource_id=payload.resource_id,
+        permission="update",
+    )
+    data_dict.update(payload.model_dump())
+    result = await upsert_datastore(context, data_dict)
+    return ckan_success(request, result)
 
 
 @router.post("/datastore_delete")
