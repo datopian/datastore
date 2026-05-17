@@ -39,7 +39,6 @@ class BigQueryBackend(DatastoreBackend):
         `CREATE TABLE IF NOT EXISTS`, bulk-inserts records, and runs
         `COUNT(*)` when `include_total=True`.
         """
-        print(include_total)
         return {
             "fields": fields,
             "records": records,
@@ -75,7 +74,7 @@ class BigQueryBackend(DatastoreBackend):
         self,
         resource_id: str,
         filters: dict | None,
-        q: str | None,
+        q: str | dict | None,
         distinct: bool,
         plain: bool,
         language: str,
@@ -85,8 +84,23 @@ class BigQueryBackend(DatastoreBackend):
         sort: str | None,
         include_total: bool,
     ) -> SearchResult:
-        """Query records. Returns SearchResult with lazy row iterator."""
-        {}
+        """Query records. Returns SearchResult with lazy row iterator.
+
+        Placeholder: returns an empty result set so the call path is
+        exercised end-to-end. Real impl (Phase 8) builds a parameterised
+        SELECT honouring `filters` / `q` / `distinct` / `sort`, optionally
+        runs `COUNT(*)` when `include_total=True`, and yields tuples
+        page-by-page from `query_job.result()`.
+        """
+        column_metadata: list[dict] = (
+            [{"id": c, "type": "any"} for c in fields] if fields else []
+        )
+        return SearchResult(
+            fields=column_metadata,
+            records=iter([]),
+            total=0 if include_total else None,
+            records_truncated=False,
+        )
 
     def search_sql(self, sql: str, limit: int) -> SearchResult:
         """Execute raw SQL SELECT. Returns SearchResult with lazy row iterator."""

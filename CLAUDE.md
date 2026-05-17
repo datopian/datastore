@@ -136,8 +136,10 @@ datastore-api/
 │   │ ── 3. SCHEMAS (Pydantic — boundary validation only) ──
 │   ├── schemas/                      # Inbound request bodies + outbound response
 │   │   ├── __init__.py               # types. Never passed between services or
-│   │   ├── datastore.py              # returned from engines.
-│   │   │                             #   datastore.py  – DatastoreCreateRequest
+│   │   ├── request.py                # returned from engines.
+│   │   │                             #   request.py    – DatastoreCreateRequest,
+│   │   │                             #                   DatastoreUpsertRequest,
+│   │   │                             #                   DatastoreSearchRequest
 │   │   ├── responses.py              #   responses.py  – ResponseModel base +
 │   │   │                             #                   per-endpoint envelopes
 │   │   │                             #                   (WelcomeResponse,
@@ -303,7 +305,7 @@ flowchart LR
 - Endpoints call services; services call engines / CKAN client via `context.ckan`. Endpoints never touch SQL.
 - `services/write.py` owns cross-cutting validation that requires context from multiple inputs (e.g., resolving `primary_key` against declared fields once that lands).
 - Engines (when implemented) return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`. Peak memory ≈ 1 row regardless of result size.
-- Pydantic validates inbound (`schemas/datastore.py`) and documents outbound (`schemas/responses.py`). Outbound serialisation goes through `_success_response` → `ORJSONResponse` → orjson.
+- Pydantic validates inbound (`schemas/request.py`) and documents outbound (`schemas/responses.py`). Outbound serialisation goes through `_success_response` → `ORJSONResponse` → orjson.
 - Per-request CKAN client binding happens once in `get_context` (`api/context.py`): the long-lived `httpx.AsyncClient` is owned by the lifespan; each request gets a shallow copy with `api_key` bound.
 - No DI container. FastAPI's `Depends` + the engine `registry.py` factory are the only wiring mechanisms.
 
@@ -559,13 +561,17 @@ GET /api/3/datastore_search
     ],
     "total": 2,
     "_links": {
-      "start": "https://example.com/api/3/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=0",
-      "next":  "https://example.com/api/3/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=100",
-      "prev":  null
+      "start": "/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100",
+      "next":  "/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=100"
     }
   }
 }
 ```
+
+`_links` follows CKAN convention: relative path + query, all non-`offset`
+params from the request preserved. `start` omits `offset` (it defaults to
+0); `next` advances `offset` by `limit`. Clients detect end-of-data by an
+empty `records` array on the next page — there's no `prev` field today.
 
 `records_format=lists` returns each record as a positional array (column order matches `fields`).
 `records_format=csv` / `tsv` return a streaming text body with the header row first.
@@ -778,7 +784,7 @@ The original phase plan that used to live here has mostly shipped. This section 
 
 - [x] **Foundation** — `pyproject.toml`, `Dockerfile`, `Makefile`, `.env.example`, `docker-compose.yml`. App factory + lifespan in [datastore/main.py](datastore/main.py). Body-size middleware in [datastore/api/middleware.py](datastore/api/middleware.py).
 - [x] **CKAN API surface** — `/api/3/action/datastore_*` mounted via [datastore/api/routes.py](datastore/api/routes.py). `datastore_create` implemented end-to-end; the other five datastore actions return `HTTP 501` (mapped to CKAN envelope `__type: "Not Implemented"`). Health endpoints (`/`, `/health`, `/ready`) return the CKAN envelope shape.
-- [x] **Request validation** — `DatastoreCreateRequest` in [datastore/schemas/datastore.py](datastore/schemas/datastore.py) with strict `extra="forbid"`, exactly-one `resource_id` / `resource` invariant, and `FieldSpec` validators in [validators.py](datastore/schemas/validators.py). Pydantic errors → `RequestValidationError` → CKAN error envelope with a `fields` map.
+- [x] **Request validation** — `DatastoreCreateRequest` in [datastore/schemas/request.py](datastore/schemas/request.py) with strict `extra="forbid"`, exactly-one `resource_id` / `resource` invariant, and `FieldSpec` validators in [validators.py](datastore/schemas/validators.py). Pydantic errors → `RequestValidationError` → CKAN error envelope with a `fields` map.
 - [x] **Response models** — [datastore/schemas/responses.py](datastore/schemas/responses.py) defines `ResponseModel` (`help` + `success`) and per-endpoint envelopes with a nested `Result` class. Routes declare `response_model=...` for OpenAPI; services return the typed inner `Result`.
 - [x] **Error envelope** — handlers in [datastore/api/error_handlers.py](datastore/api/error_handlers.py); taxonomy in [datastore/core/exceptions.py](datastore/core/exceptions.py) (`ValidationError`, `AuthorizationError`, `NotFoundError`, `ConflictError`, `ServerError` + `HTTP_STATUS_TO_TYPE_LABEL`).
 - [x] **Auth gate** — `context.auth.authorize(resource_id=…, package_id=…)` in [datastore/api/auth.py](datastore/api/auth.py); calls CKAN `datastore_authorize` on cache miss. Cache uses the `CachePort` Protocol so `InMemoryCache` and `RedisCache` are interchangeable based on `REDIS_URL`. TTL is `AUTH_CACHE_TTL`. The raw api_key never reaches the cache — it's hashed via `_key_id` (JWT `jti` or sha256 prefix).
@@ -792,7 +798,7 @@ The original phase plan that used to live here has mostly shipped. This section 
 Rough priority order. Tick each box as the change set lands.
 
 - [ ] **Wire the remaining datastore endpoints.** For each of `datastore_upsert`, `datastore_delete`, `datastore_search`, `datastore_search_sql`, `datastore_info`:
-  - [ ] Add the request schema to `schemas/datastore.py` (or a query-param dataclass for GETs).
+  - [ ] Add the request schema to `schemas/request.py` (or a query-param dataclass for GETs).
   - [ ] Add the response envelope to `schemas/responses.py` (subclass `ResponseModel`, define inner `Result`).
   - [ ] Add the service function in `services/{read,write}.py` returning the inner `Result` model.
   - [ ] Replace the `HTTPException(501)` in `endpoints/datastore.py` with the real handler + `response_model=...`.

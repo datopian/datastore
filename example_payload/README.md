@@ -16,6 +16,13 @@ example_payload/
 ├── datastore_create/
 │   ├── with_resource_id.json     # existing-resource flow
 │   └── with_resource.json        # new-resource flow (resource dict with package_id)
+├── datastore_search/
+│   ├── basic.json                # minimal — just resource_id
+│   ├── with_filters.json         # narrow by column values (e.g. product_code, accepted)
+│   ├── with_full_text.json       # `q` full-text query, plain + language
+│   ├── paginated_sorted.json     # fields + sort + limit + offset + include_total
+│   └── response.json             # sample RESPONSE for paginated_sorted.json,
+│                                 # showing the CKAN envelope + `_links`
 └── datastore_upsert/
     ├── upsert.json               # default — corrects one row + adds a new one
     ├── insert.json               # method=insert; new rows only
@@ -35,13 +42,14 @@ Three steps:
    The filename is the only label the reader sees — make it tell the story.
 
 3. **Match the request schema.** Each endpoint has a Pydantic model in
-   [datastore/schemas/datastore.py](../datastore/schemas/datastore.py).
-   The payload must validate against it. Quick check:
+   [datastore/schemas/request.py](../datastore/schemas/request.py).
+   The payload must validate against it. (Files named `response*.json`
+   are sample server responses — skip this step for those.) Quick check:
 
    ```sh
    python -c "
    import json
-   from datastore.schemas.datastore import DatastoreUpsertRequest
+   from datastore.schemas.request import DatastoreUpsertRequest
    DatastoreUpsertRequest.model_validate(
        json.load(open('example_payload/datastore_upsert/upsert.json'))
    )

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict
@@ -46,7 +47,53 @@ def check_postgres_type(value: Any) -> str | None:
     return canonical
 
 
+def to_json_object(value: Any) -> dict[str, Any] | None:
+    """Decode a query-string JSON object. Pass-through dicts; reject the rest."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        raise ValueError("must be a JSON object")
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("must be a JSON object")
+    return parsed
+
+
+def to_str_or_json_object(value: Any) -> str | dict[str, Any] | None:
+    """`q`-style param: plain string, or JSON object when the value starts with `{`."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        if value.lstrip().startswith("{"):
+            return to_json_object(value)
+        return value
+    raise ValueError("must be a string or JSON object")
+
+
+def to_csv_list(value: Any) -> list[str] | None:
+    """Coerce a comma-separated string to a list; pass-through lists."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    if isinstance(value, str):
+        parts = [token.strip() for token in value.split(",")]
+        return [p for p in parts if p]
+    raise ValueError("must be a comma-separated string or list of strings")
+
+
 # --- reusable Annotated types ------------------------------------------------
+# The parser functions above (`to_json_object`, `to_str_or_json_object`,
+# `to_csv_list`) are invoked directly at the service boundary; they don't
+# need an Annotated wrapper because FastAPI's `Annotated[Model, Query()]`
+# only accepts scalar fields on the model — see DatastoreSearchRequest.
 StringOrList = Annotated[list[str] | None, BeforeValidator(to_list)]
 PostgresType = Annotated[str | None, BeforeValidator(check_postgres_type)]
 

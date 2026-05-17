@@ -9,7 +9,7 @@ description = "CKAN-compatible datastore API with pluggable storage backends"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 dependencies = [
-    "fastapi[standard]>=0.113,<0.114",
+    "fastapi[standard]>=0.115,<0.116",
     "pydantic>=2.7,<3",
     "pydantic-settings>=2.3",
     "orjson>=3.10",

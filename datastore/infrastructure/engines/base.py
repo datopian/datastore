@@ -5,9 +5,16 @@ from typing import Iterator
 
 @dataclass
 class SearchResult:
-    """Lightweight result container. row_iterator yields tuples — no dicts, no Pydantic."""
+    """Lightweight result container.
+
+    `records` is a lazy iterator of tuples — no dicts, no Pydantic.
+    The API layer streams it straight to the response body so peak
+    memory stays ≈ 1 row regardless of how many rows the engine
+    returns. Don't materialise this iterator anywhere except inside
+    the streaming serialiser.
+    """
     fields: list[dict]  # [{"id": "col_name", "type": "text"}, ...]
-    row_iterator: Iterator[tuple]
+    records: Iterator[tuple]
     total: int | None = None
     records_truncated: bool = False
 
@@ -38,11 +45,17 @@ class DatastoreBackend(ABC):
         """
 
     @abstractmethod
-    def search(self, resource_id: str, filters: dict | None, q: str | None,
+    def search(self, resource_id: str, filters: dict | None,
+               q: str | dict | None,
                distinct: bool, plain: bool, language: str, limit: int,
                offset: int, fields: list | None, sort: str | None,
                include_total: bool) -> SearchResult:
-        """Query records. Returns SearchResult with lazy row iterator."""
+        """Query records. Returns SearchResult with lazy row iterator.
+
+        `q` is a CKAN-style full-text query: `str` scans every text column,
+        `dict[col, term]` scans the named columns. `include_total=True`
+        runs a `COUNT(*)` and sets `SearchResult.total`.
+        """
 
     @abstractmethod
     def upsert(self, resource_id: str, records: list, method: str,

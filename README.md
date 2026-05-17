@@ -35,7 +35,7 @@ datastore/
 │   └── helper.py                 # Pure helpers (e.g. parse_authorization_header)
 │
 ├── schemas/                      # Pydantic request/response shapes (boundary validation only)
-│   ├── datastore.py              # Inbound request bodies (DatastoreCreateRequest, …)
+│   ├── request.py                # Inbound request models (DatastoreCreateRequest, …)
 │   ├── responses.py              # Outbound CKAN envelopes (ResponseModel + per-endpoint)
 │   └── validators.py             # Reusable Annotated types + field validators
 │

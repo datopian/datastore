@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from datastore.schemas.validators import FieldSpec
 
@@ -72,5 +72,26 @@ class DatastoreUpsertResponse(ResponseModel):
         method: str
         records: list[dict[str, Any]] | None = None
         total: int | None = None
+
+    result: Result
+
+
+class DatastoreSearchResponse(ResponseModel):
+    """Response for `GET /api/3/datastore_search`."""
+
+    class Result(BaseModel):
+        # `_links` starts with an underscore, which pydantic treats as a
+        # private attribute by default — alias it onto a regular field.
+        model_config = ConfigDict(populate_by_name=True)
+
+        resource_id: str
+        fields: list[dict[str, Any]]
+        records: list[dict[str, Any]]
+        limit: int
+        offset: int
+        total: int | None = None
+        links: dict[str, str] = Field(
+            alias="_links", default_factory=dict
+        )
 
     result: Result

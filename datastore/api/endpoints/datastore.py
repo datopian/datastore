@@ -1,15 +1,24 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query
 from starlette.requests import Request
+from starlette.responses import StreamingResponse
 
 from datastore.api.context import Context
 from datastore.api.responses import ORJSONResponse, _success_response
-from datastore.schemas.datastore import DatastoreCreateRequest, DatastoreUpsertRequest
+from datastore.schemas.request import (
+    DatastoreCreateRequest,
+    DatastoreSearchRequest,
+    DatastoreUpsertRequest,
+)
 from datastore.schemas.responses import (
     DatastoreCreateResponse,
+    DatastoreSearchResponse,
     DatastoreUpsertResponse,
 )
+from datastore.services.read import search_datastore
 from datastore.services.write import create_datastore, upsert_datastore
 
 router = APIRouter(tags=["datastore"])
@@ -70,9 +79,30 @@ def datastore_delete() -> ORJSONResponse:
     raise HTTPException(status_code=501, detail="datastore_delete is not implemented")
 
 
-@router.get("/datastore_search")
-def datastore_search() -> ORJSONResponse:
-    raise HTTPException(status_code=501, detail="datastore_search is not implemented")
+@router.get("/datastore_search", response_model=DatastoreSearchResponse)
+async def datastore_search(
+    request: Request,
+    context: Context,
+    params: Annotated[DatastoreSearchRequest, Query()],
+):
+    """`GET /api/3/datastore_search` — authorize, then stream rows.
+
+    All of the search business logic — engine call, pagination link
+    building, format dispatch — lives in `services.read.search_datastore`.
+    Every format emits the same JSON envelope, so this endpoint just
+    authorizes, assembles `data_dict`, and wraps the service's body
+    iterator in a `StreamingResponse` with a fixed `application/json`
+    media type.
+    """
+    data_dict = await context.auth.authorize(
+        resource_id=params.resource_id,
+        permission="read",
+    )
+    data_dict.update(params.model_dump())
+    body_iter = await search_datastore(
+        context, data_dict, request_url=str(request.url)
+    )
+    return StreamingResponse(body_iter, media_type="application/json")
 
 
 @router.get("/datastore_search_sql")
