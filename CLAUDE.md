@@ -110,7 +110,7 @@ datastore-api/
 │   │   │                             # (per-request handles: config, auth, ckan)
 │   │   ├── auth.py                   # CKAN `datastore_authorize` with TTL cache —
 │   │   │                             # pure async functions; `AuthContext` wraps state
-│   │   ├── responses.py              # CKAN envelope helpers (ckan_success / ckan_error)
+│   │   ├── responses.py              # CKAN envelope helpers (_success_response / _error_response)
 │   │   │                             # + orjson-backed ORJSONResponse
 │   │   ├── error_handlers.py         # APIError / HTTPException / RequestValidationError
 │   │   │                             # → CKAN error envelope mapping
@@ -277,7 +277,7 @@ flowchart LR
     Svc --> Eng["infrastructure/engines/\nregistry.get_datastore_engine"]
     Eng --> BQ["bigquery.py (placeholder)"]
     Eng --> DL[("ducklake.py (planned)")]
-    Routes --> Resp["api/responses.py\nckan_success / ckan_error"]
+    Routes --> Resp["api/responses.py\n_success_response / _error_response"]
     Resp --> Schema["schemas/responses.py\nResponseModel + Result"]
 
     classDef ext fill:#fff5e6,stroke:#d97706,color:#7c2d12
@@ -303,7 +303,7 @@ flowchart LR
 - Endpoints call services; services call engines / CKAN client via `context.ckan`. Endpoints never touch SQL.
 - `services/write.py` owns cross-cutting validation that requires context from multiple inputs (e.g., resolving `primary_key` against declared fields once that lands).
 - Engines (when implemented) return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`. Peak memory ≈ 1 row regardless of result size.
-- Pydantic validates inbound (`schemas/datastore.py`) and documents outbound (`schemas/responses.py`). Outbound serialisation goes through `ckan_success` → `ORJSONResponse` → orjson.
+- Pydantic validates inbound (`schemas/datastore.py`) and documents outbound (`schemas/responses.py`). Outbound serialisation goes through `_success_response` → `ORJSONResponse` → orjson.
 - Per-request CKAN client binding happens once in `get_context` (`api/context.py`): the long-lived `httpx.AsyncClient` is owned by the lifespan; each request gets a shallow copy with `api_key` bound.
 - No DI container. FastAPI's `Depends` + the engine `registry.py` factory are the only wiring mechanisms.
 
@@ -820,5 +820,5 @@ Hard rules from §3 (recap):
 - Only `datastore/api/` and `datastore/main.py` may import from `fastapi` / `starlette`.
 - Only `datastore/schemas/` and `datastore/core/config.py` may import from `pydantic` / `pydantic_settings`.
 - Engines return lazy row iterators of tuples (when streaming lands). Never `list[dict]`.
-- Pydantic validates at the boundary; orjson serialises out via `ckan_success`.
+- Pydantic validates at the boundary; orjson serialises out via `_success_response`.
 - No DI container — FastAPI's `Depends` + the engine `registry.py` factory are the only wiring.

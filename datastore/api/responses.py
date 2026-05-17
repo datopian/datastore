@@ -25,7 +25,7 @@ def _help(request: Request) -> str:
     return str(request.url)
 
 
-def ckan_success(
+def _success_response(
     request: Request,
     result: BaseModel | dict[str, Any],
     *,
@@ -39,7 +39,7 @@ def ckan_success(
     )
 
 
-def ckan_error(
+def _error_response(
     request: Request,
     *,
     status_code: int,

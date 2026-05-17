@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from starlette.requests import Request
 
 from datastore.api.context import Context
-from datastore.api.responses import ORJSONResponse, ckan_success
+from datastore.api.responses import ORJSONResponse, _success_response
 from datastore.schemas.datastore import DatastoreCreateRequest, DatastoreUpsertRequest
 from datastore.schemas.responses import (
     DatastoreCreateResponse,
@@ -46,7 +46,7 @@ async def datastore_create(
     )
 
     result = await create_datastore(context, data_dict)
-    return ckan_success(request, result)
+    return _success_response(request, result)
 
 
 @router.post("/datastore_upsert", response_model=DatastoreUpsertResponse)
@@ -62,7 +62,7 @@ async def datastore_upsert(
     )
     data_dict.update(payload.model_dump())
     result = await upsert_datastore(context, data_dict)
-    return ckan_success(request, result)
+    return _success_response(request, result)
 
 
 @router.post("/datastore_delete")

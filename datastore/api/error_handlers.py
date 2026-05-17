@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from starlette.requests import Request
 
-from datastore.api.responses import ORJSONResponse, ckan_error
+from datastore.api.responses import ORJSONResponse, _error_response
 from datastore.core.exceptions import HTTP_STATUS_TO_TYPE_LABEL, APIError
 
 log = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             type(exc).__name__, exc.status_code, exc.type_label,
             request.method, request.url.path,
         )
-        return ckan_error(
+        return _error_response(
             request,
             status_code=exc.status_code,
             type_label=exc.type_label,
@@ -65,7 +65,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             "RequestValidationError at %s %s: %d field(s) failed; first=%s",
             request.method, request.url.path, len(fields), message,
         )
-        return ckan_error(
+        return _error_response(
             request,
             status_code=400,
             type_label="Validation Error",
@@ -81,7 +81,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             "HTTPException %d (%s) at %s %s: %s",
             exc.status_code, label, request.method, request.url.path, message,
         )
-        return ckan_error(
+        return _error_response(
             request,
             status_code=exc.status_code,
             type_label=label,
@@ -94,7 +94,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             "unhandled exception at %s %s", request.method, request.url.path,
             exc_info=exc,
         )
-        return ckan_error(
+        return _error_response(
             request,
             status_code=500,
             type_label="Internal Error",

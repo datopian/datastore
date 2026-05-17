@@ -13,7 +13,7 @@ datastore/
 │   ├── context.py                # RequestContext  (per-request DI bundle)
 │   ├── auth.py                   # CKAN datastore_authorize with TTL cache
 │   ├── middleware.py             # ASGI middleware (e.g. BodySizeLimitMiddleware)
-│   ├── responses.py              # CKAN envelope helpers (ckan_success / ckan_error)
+│   ├── responses.py              # Envelope response helpers (_success_response / _error_response)
 │   ├── error_handlers.py         # Exception handlers (APIError → CKAN error envelope)
 │   └── endpoints/                # Route handlers, one file per resource group
 │       ├── health.py             # /, /health, /ready
@@ -142,7 +142,7 @@ async def datastore_create(
 
     # The service does the actual work (CKAN resource_create, engine.create, …).
     result = await create_datastore(context, data_dict)
-    return ckan_success(request, result)
+    return _success_response(request, result)
 ```
 
 - `context.auth` — `AuthContext`: cached `datastore_authorize` permission check. Holds the bound `api_key`, the cache, the TTL, and the CKAN client it delegates to.
@@ -177,10 +177,10 @@ async def create_datastore(...) -> DatastoreCreateResponse.Result: ...
 # route
 @router.post("/datastore_create", response_model=DatastoreCreateResponse)
 async def datastore_create(...):
-    return ckan_success(request, await create_datastore(...))
+    return _success_response(request, await create_datastore(...))
 ```
 
-`ckan_success` wraps the `Result` into the full `{help, success, result}` envelope. `response_model=...` makes `/docs` document the contract; the service return type lets mypy catch drift.
+`_success_response` wraps the `Result` into the full `{help, success, result}` envelope. `response_model=...` makes `/docs` document the contract; the service return type lets mypy catch drift.
 
 Endpoints that aren't implemented yet `raise HTTPException(status_code=501, …)` — the error handler converts that to a CKAN error envelope with `__type: "Not Implemented"`.
 
