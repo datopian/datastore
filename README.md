@@ -1,6 +1,15 @@
 # Datastore API
-A FastAPI service providing a CKAN-compatible API for tabular data storage and querying, with pluggable backends (BigQuery, DuckDB, etc.) 
 
+A CKAN datastore like API for tabular data storage and querying,
+built on the FastAPI framework with a pluggable storage engine
+(BigQuery today; DuckLake on the roadmap). Exposes
+`/api/3/action/datastore_*` action endpoints.
+
+Each request is authorised against an upstream CKAN instance via
+`datastore_authorize` and TTL-cached (in-process by default; Redis when
+`REDIS_URL` is set), so the heavy datastore work lives in this service
+while CKAN remains the single source of truth for users, packages,
+resources, and permissions.
 
 ## Project structure
 
@@ -71,6 +80,34 @@ What's shipped and what's next. Tick each box as the change set lands.
 - [ ] DuckLake backend (second concrete engine implementing the same ABC)
 - [ ] Observability — JSON structured logs + request-id middleware
 - [ ] Opt-in query-result cache (deferred until BigQuery + streaming land)
+
+
+## CKAN-side requirement
+
+This service does not implement its own user / permission model.
+Every request is gated by a call to CKAN's `datastore_authorize`
+action, which is **not part of stock CKAN** — it ships in the
+[`ckanext-datastore-authz`](https://github.com/datopian/ckanext-datastore-authz)
+extension.
+
+Before pointing this service at a CKAN instance, install the extension
+on the CKAN side and confirm the action is reachable:
+
+```sh
+curl -s "$CKAN_URL/api/3/action/datastore_authorize" \
+     -H "Authorization: $CKAN_API_KEY" \
+     -H 'Content-Type: application/json' \
+     -d '{"resource_id": "<some-resource-id>"}' | jq
+```
+
+If that returns a CKAN envelope with `success: true` and a
+`result.{package, resource}` body, you're set. If you get 404, the
+extension isn't installed or isn't enabled in CKAN's `ckan.plugins`.
+
+For local dev without a CKAN at all, set `AUTH_ENABLED=false` in `.env`
+— the auth gate returns a stub decision and every request passes.
+
+
 
 ## Development setup
 

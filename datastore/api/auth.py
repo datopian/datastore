@@ -14,7 +14,7 @@ from typing import Any, Literal, get_args
 
 import orjson
 
-from datastore.core.exceptions import AuthorizationError
+from datastore.core.exceptions import AuthorizationError, ValidationError
 from datastore.infrastructure.cache import CachePort
 from datastore.infrastructure.ckan_client import CKANClient
 
@@ -40,10 +40,12 @@ async def authorize(
 
     """
     if bool(resource_id) == bool(package_id):
-        raise ValueError("exactly one of resource_id or package_id required")
+        raise ValidationError("exactly one of resource_id or package_id required")
 
     if permission is not None and permission not in ALLOWED_PERMISSIONS:
-        raise ValueError(f"permission must be one of {sorted(ALLOWED_PERMISSIONS)}")
+        raise ValidationError(
+            f"permission must be one of {sorted(ALLOWED_PERMISSIONS)}"
+        )
 
     if not enabled:
         log.debug("auth disabled; returning stub for resource_id=%s package_id=%s",
