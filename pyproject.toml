@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "datastore-api"
+name = "datastore"
 version = "0.1.0"
 description = "CKAN-compatible datastore API with pluggable storage backends"
 readme = "README.md"
@@ -29,10 +29,10 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/datastore"]
+packages = ["datastore"]
 
 [tool.ruff]
-src = ["src"]
+src = ["datastore"]
 line-length = 100
 
 [tool.ruff.lint]
@@ -40,7 +40,6 @@ select = ["E", "F", "I"]
 
 [tool.mypy]
 strict = true
-mypy_path = "src"
 packages = ["datastore"]
 
 [[tool.mypy.overrides]]
@@ -53,6 +52,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-p no:ckan -p no:ckan_fixtures"
 markers = [
     "unit: fast tests with no I/O",
     "integration: tests that require real services",

@@ -6,11 +6,11 @@ storage backend (BigQuery Datastore or Ducklake as future support).
 
 ## 1. Goals
 
-- CKAN-compatible request/response shapes for `/api/3/datastore_*`.
-- Pluggable backend selected by `DATASTORE_BACKEND` env var (`duckdb` or `bigquery`).
-- Streaming responses for search (peak memory ≈ 1 row).
+- CKAN-compatible request/response shapes for `/api/3/action/datastore_*`.
+- Pluggable backend selected by `DATASTORE_ENGINE` env var (`bigquery` or `ducklake`).
+- Streaming responses for search (peak memory ≈ 1 row). _Planned, not yet implemented._
 - Strict request validation, structured error responses.
-- CKAN-based auth gate with Redis-cached decisions.
+- CKAN-based auth gate with TTL-cached decisions (InMemory by default; Redis when `REDIS_URL` is set).
 
 
 ## 2. Technology Stack
@@ -54,76 +54,164 @@ strict = true
 
 ## 3. Folder Structure
 
+**Stack split.** Two libraries do most of the heavy lifting and each has one
+home in the tree:
+
+- **Starlette** — the web part. Lives in `datastore/api/` and `datastore/main.py`. Everything that
+  touches `Request`, `Response`, `StreamingResponse`, middleware, status codes,
+  routing, or `Depends` lives here. Nothing else imports from `fastapi` or
+  `starlette`.
+- **Pydantic** — the data part. Lives in `datastore/schemas/` (request/response
+  models) and `datastore/core/config.py` (`BaseSettings`). Used for **boundary
+  validation only** — never as the internal data type passed between services
+  or returned from engines (those use plain dicts, dataclasses, and tuples to
+  keep per-row cost at zero).
+
+### Layer rule
+
+```
+api  ──▶  services  ──▶  infrastructure
+ ▲           │                 │
+ │           └──▶ schemas ◀────┘     (schemas = Pydantic models, plain data)
+ │                ▲
+ └─ uses schemas for request/response shapes only
 ```
 
-datastore/
+One-way dependency arrow. `infrastructure/` never imports from `api/` or
+`services/`. `services/` never imports from `api/`. `api/` is the only layer
+that knows about FastAPI/Starlette.
+
+### Tree
+
+```
+datastore-api/
 │
-├── pyproject.toml                    # Dependencies, project metadata
+├── pyproject.toml                    # Project metadata + deps + tool config
 ├── README.md
-├── .env.example                      # Template for env vars
+├── CLAUDE.md                         # This document — design + execution plan
+├── .env.example                      # Template for env vars (every Config field)
 ├── .gitignore
 ├── Makefile                          # run, test, lint, format
-├── docker-compose.yml                # postgres, redis, ckan, app
+├── docker-compose.yml                # local: app + redis + ckan
 ├── Dockerfile
 │
-├── src/
-│   └── datastore/
-│       ├── __init__.py
-│       ├── main.py                   # FastAPI app + lifespan + router include
-│       ├── config.py                 # Pydantic Settings (env-driven)
-│       ├── container.py              # Wires engines, CKAN, cache → use cases
-│       │
-│       │ ── 1. API LAYER ────────────────────────────────
-│       ├── api/
-│       │   ├── __init__.py
-│       │   ├── routes.py             # All 8 endpoints
-│       │   ├── schemas.py            # Pydantic request/response models
-│       │   ├── deps.py               # Auth + engine selection dependencies
-│       │   └── errors.py             # Exception → HTTP handlers
-│       │
-│       │ ── 2. APPLICATION LAYER ────────────────────────
-│       ├── application/
-│       │   ├── __init__.py
-│       │   ├── use_cases.py          # 8 use case classes
-│       │   ├── ports.py              # EnginePort, CKANPort, CachePort
-│       │   └── access_control.py     # Permission checks via CKAN
-│       │
-│       │ ── 3. DOMAIN LAYER ────────────────────────────
-│       ├── domain/
-│       │   ├── __init__.py
-│       │   ├── models.py             # Dataset, Field, Record, Query
-│       │   ├── rules.py              # Identifier + query validation
-│       │   └── errors.py             # Domain exceptions
-│       │
-│       │ ── 4. INFRASTRUCTURE LAYER ────────────────────
-│       └── infrastructure/
-│           ├── __init__.py
-│           ├── cache.py              # RedisCache + InMemoryCache (one file)
-│           ├── ckan_client.py        # CKAN HTTP integration
-│           └── engines/
-│               ├── __init__.py
-│               ├── base.py           # Shared helpers
-│               ├── registry.py       # Engine factory by name
-│               ├── bigquery.py
-│               ├── postgres.py
-│               └── ducklake.py
-│
-├── tests/
+├── datastore/
 │   ├── __init__.py
-│   ├── conftest.py                   # Fixtures: app, fake engines, fake CKAN, in-memory cache
-│   ├── test_domain.py                # Pure rule tests
-│   ├── test_use_cases.py             # With fakes
-│   └── test_api.py                   # End-to-end HTTP tests
+│   ├── main.py                       # FastAPI app factory: create_app() +
+│   │                                 # lifespan (httpx client, cache, ckan client);
+│   │                                 # registers middleware + exception handlers;
+│   │                                 # module-level `app = create_app()` for uvicorn.
+│   │
+│   │ ── 1. API LAYER ─────────────────────────  (FastAPI + Starlette live here)
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── routes.py                 # Top-level APIRouter; mounts endpoints/
+│   │   ├── context.py                # RequestContext + AuthContext + ContextDep
+│   │   │                             # (per-request handles: config, auth, ckan)
+│   │   ├── auth.py                   # CKAN `datastore_authorize` with TTL cache —
+│   │   │                             # pure async functions; `AuthContext` wraps state
+│   │   ├── responses.py              # CKAN envelope helpers (ckan_success / ckan_error)
+│   │   │                             # + orjson-backed ORJSONResponse
+│   │   ├── error_handlers.py         # APIError / HTTPException / RequestValidationError
+│   │   │                             # → CKAN error envelope mapping
+│   │   ├── middleware.py             # ASGI middleware (BodySizeLimitMiddleware today)
+│   │   └── endpoints/                # One module per resource group
+│   │       ├── __init__.py
+│   │       ├── health.py             # /, /health, /ready (CKAN-shaped envelopes)
+│   │       └── datastore.py          # /api/3/action/datastore_* (6 routes;
+│   │                                 # 1 implemented, 5 return HTTP 501)
+│   │
+│   │ ── 2. CORE (cross-cutting, framework-agnostic) ──────
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py                 # Pydantic-Settings `Config` (env-driven) +
+│   │   │                             # `get_config()` lru-cached factory
+│   │   ├── constants.py              # Shared constants (POSTGRES_TYPES map)
+│   │   ├── exceptions.py             # APIError taxonomy: ValidationError,
+│   │   │                             # AuthorizationError, NotFoundError,
+│   │   │                             # ConflictError, ServerError +
+│   │   │                             # HTTP_STATUS_TO_TYPE_LABEL map
+│   │   └── helper.py                 # Pure helpers (parse_authorization_header, …)
+│   │
+│   │ ── 3. SCHEMAS (Pydantic — boundary validation only) ──
+│   ├── schemas/                      # Inbound request bodies + outbound response
+│   │   ├── __init__.py               # types. Never passed between services or
+│   │   ├── datastore.py              # returned from engines.
+│   │   │                             #   datastore.py  – DatastoreCreateRequest
+│   │   ├── responses.py              #   responses.py  – ResponseModel base +
+│   │   │                             #                   per-endpoint envelopes
+│   │   │                             #                   (WelcomeResponse,
+│   │   │                             #                   StatusResponse,
+│   │   │                             #                   DatastoreCreateResponse)
+│   │   └── validators.py             #   validators.py – FieldSpec, StringOrList,
+│   │                                 #                   PostgresType, helper fns
+│   │
+│   │ ── 4. SERVICES (business logic, plain Python) ──────
+│   ├── services/                     # Orchestration: validate → call engine →
+│   │   ├── __init__.py               # shape result. Inputs: plain types or
+│   │   ├── write.py                  # validated schemas. Outputs: typed response
+│   │   │                             # models. No FastAPI, no raw SQL.
+│   │   │                             #   write.py – create_datastore (real;
+│   │   │                             #              upsert/delete pending)
+│   │   └── read.py                   #   read.py  – placeholder (search /
+│   │                                 #              search_sql / info pending)
+│   │
+│   │ ── 5. INFRASTRUCTURE (adapters to the outside world) ─
+│   └── infrastructure/
+│       ├── __init__.py
+│       ├── cache.py                  # CachePort (Protocol) + InMemoryCache +
+│       │                             # RedisCache (TTL-based)
+│       ├── ckan_client.py            # CKANClient — httpx async wrapper around
+│       │                             # CKAN /api/3/action; bind(api_key) per request
+│       └── engines/
+│           ├── __init__.py           # Re-exports get_datastore_engine, Mode
+│           ├── base.py               # DatastoreBackend ABC +
+│           │                         # SearchResult / WriteResult dataclasses
+│           ├── registry.py           # get_datastore_engine(context, *, mode)
+│           │                         # factory; reads context.config.DATASTORE_ENGINE
+│           ├── bigquery.py           # google-cloud-bigquery adapter (placeholder)
+│           └── ducklake.py           # DuckLake adapter (planned, not yet implemented)
 │
-├── scripts/
-│   ├── run_local.sh
-│   └── seed_dev_data.py
-│
-└── docs/
-    ├── architecture.md               # Layer diagram + dependency rule
-    ├── adding-an-engine.md           # How to plug in a new backend
-    └── api.md                        # Endpoint reference
+└── tests/
+    ├── __init__.py
+    ├── conftest.py                   # FakeCKAN, InMemoryCache, TestClient fixture;
+    │                                 # CKAN pytest plugin disabled via pyproject
+    ├── test_datastore_create.py      # End-to-end HTTP suite (TestClient)
+    └── test_write_service.py         # Service-level units with a fake context
 ```
+
+`scripts/` and `docs/` are intentionally absent today. Add them when there's a concrete need
+(seed scripts, operational runbooks). Until then the README + this file are the docs.
+
+### What goes where — rules of thumb
+
+| Folder | Put here | Do NOT put here |
+|---|---|---|
+| `datastore/main.py` | App factory, lifespan, middleware order, handler registration | Routes, business logic |
+| `datastore/api/endpoints/` | Route declarations, request parsing, response building | SQL, engine calls, validation rules — delegate to services |
+| `datastore/api/context.py` | `RequestContext`, `AuthContext`, `ContextDep`, `get_context` (per-request DI bundle) | The logic those handles invoke — that lives in `services/` / `infrastructure/` |
+| `datastore/api/auth.py` | CKAN `datastore_authorize` orchestration with TTL cache (pure async functions) | Raw CKAN HTTP plumbing — call `CKANClient` |
+| `datastore/api/responses.py` | CKAN envelope helpers, `ORJSONResponse` | Anything that needs DB access |
+| `datastore/api/error_handlers.py` | Exception → CKAN error envelope mapping | Business rules — raise `APIError` from wherever the rule lives |
+| `datastore/core/` | Config (`Config`), exceptions, constants, pure helpers | I/O, FastAPI imports, business orchestration |
+| `datastore/schemas/` | Pydantic `BaseModel` request / response / validator types | Methods that do work — schemas are data shapes only |
+| `datastore/services/` | Validation that needs cross-input context, calls to engines/cache/CKAN, result shaping | `fastapi`/`starlette` imports, raw SQL strings, HTTP clients (call adapters) |
+| `datastore/infrastructure/` | Adapters: cache (Redis / in-memory), CKAN HTTP client, storage engines (BigQuery / DuckLake) | Business rules, FastAPI types, orchestration |
+| `tests/` | Test code only | Fixtures that reach into production internals through back doors — go through the public API |
+
+### Hard rules
+
+1. **Only `datastore/api/` and `datastore/main.py` may import from `fastapi` or `starlette`.**
+   Greppable invariant: `rg "from (fastapi|starlette)" datastore/services datastore/infrastructure datastore/core` must return nothing.
+2. **Only `datastore/schemas/` and `datastore/core/config.py` may import from `pydantic` / `pydantic_settings`.**
+   Engines and services pass plain dicts, tuples, and dataclasses.
+3. **Engines return a lazy row iterator of tuples, never `list[dict]`.** Streaming
+   peak memory ≈ 1 row regardless of result size.
+4. **Pydantic validates at the boundary; orjson serialises out.** Don't use
+   `model.model_dump()` on hot paths — build dicts inline and `orjson.dumps()`.
+5. **No `container.py` / DI framework.** FastAPI's `Depends` plus the engine
+   `registry.py` factory are the only wiring mechanisms.
+
 ---
 
 ## 4. Architecture
@@ -145,12 +233,12 @@ flowchart TB
             PodN["Pod<br/>..."]
         end
 
-        Config["ConfigMap<br/>DATASTORE_BACKEND<br/>BQ_PROJECT<br/>MAX_REQUEST_BODY_MB"]
-        Secret["Secret<br/>CKAN API key<br/>BQ_CREDENTIALS_JSON<br/>AUTH_REDIS_URL"]
+        Config["ConfigMap<br/>DATASTORE_ENGINE<br/>BQ_PROJECT<br/>MAX_REQUEST_BODY_MB<br/>AUTH_CACHE_TTL"]
+        Secret["Secret<br/>CKAN API key<br/>BQ_CREDENTIALS_JSON<br/>REDIS_URL"]
         Redis[("Redis<br/>StatefulSet or managed<br/>auth + query cache")]
     end
 
-    CKAN["CKAN<br/>/api/3/action/resource_show"]
+    CKAN["CKAN<br/>/api/3/action/datastore_authorize"]
     BQ["BigQuery API<br/>datastore backend"]
 
     Client -->|HTTPS| Ingress
@@ -179,40 +267,45 @@ Inside each pod:
 ```mermaid
 flowchart LR
     HTTP([HTTP request]) --> Uvicorn["uvicorn"]
-    Uvicorn --> MW["middleware/\nbody-size, GZip, logging"]
-    MW --> Auth["api/deps.py\ncheck_ckan_access"]
-    Auth -->|cache hit/miss| RedisCache[("Redis")]
-    Auth -->|cache miss| CKANSvc["CKAN\nresource_show"]
-    Auth --> Routes["api/routes/\ndatastore.py"]
-    Routes --> Svc["services/\ndatastore_service.py"]
-    Svc --> ABC["backends/base.py\nDatastoreBackend ABC"]
-    ABC --> BQSvc["backends/bigquery/\nbackend.py"]
-    ABC --> Duckb[("backends/duckdb/\nbackend.py")]
-    Routes --> Resp["responses/\nstream.py + ckan.py"]
+    Uvicorn --> MW["api/middleware.py\nbody-size + GZip"]
+    MW --> Ctx["api/context.py\nget_context → RequestContext"]
+    Ctx --> Routes["api/endpoints/\ndatastore.py + health.py"]
+    Routes --> Auth["api/auth.py\nauthorize (TTL cache)"]
+    Auth -->|cache hit/miss| Cache[("infrastructure/cache.py\nInMemory or Redis")]
+    Auth -->|cache miss| CKANSvc["CKAN\n/api/3/action/datastore_authorize"]
+    Routes --> Svc["services/\nwrite.py (read.py pending)"]
+    Svc --> Eng["infrastructure/engines/\nregistry.get_datastore_engine"]
+    Eng --> BQ["bigquery.py (placeholder)"]
+    Eng --> DL[("ducklake.py (planned)")]
+    Routes --> Resp["api/responses.py\nckan_success / ckan_error"]
+    Resp --> Schema["schemas/responses.py\nResponseModel + Result"]
 
     classDef ext fill:#fff5e6,stroke:#d97706,color:#7c2d12
     classDef store fill:#ecfdf5,stroke:#059669,color:#064e3b
-    class CKANSvc,BQSvc ext
-    class RedisCache,Duckdb store
+    class CKANSvc,BQ ext
+    class Cache,DL store
 ```
 
 **Layer responsibilities**
 
 | Layer | Lives in | Knows about |
 |---|---|---|
-| HTTP | `api/routes/`, `api/schemas/`, `api/deps.py` | Request parsing, status codes, FastAPI |
-| Business logic | `services/` | Domain rules, orchestration — no SQL, no HTTP |
-| Domain | `domain/` | Field normalisation, error types, identifier validation |
-| Storage | `backends/` | SQL dialect, connection management, row iterators |
-| Response | `responses/` | orjson serialization, streaming, CKAN envelope, CSV/TSV |
+| HTTP | `api/endpoints/`, `api/routes.py`, `api/middleware.py` | Request parsing, status codes, FastAPI |
+| Request bundle | `api/context.py` (+ `api/auth.py` for the auth method) | Per-request handles: config, ckan client (bound), auth-with-cache |
+| Response | `api/responses.py`, `schemas/responses.py` | CKAN envelope shape, orjson, typed result models |
+| Errors | `api/error_handlers.py`, `core/exceptions.py` | APIError taxonomy → status code + `__type` label |
+| Business logic | `services/` | Orchestration — no FastAPI, no raw SQL, no HTTP plumbing |
+| Storage | `infrastructure/engines/` | Backend ABC + concrete adapters; SQL dialect, connection management, row iterators (when implemented) |
+| External adapters | `infrastructure/cache.py`, `infrastructure/ckan_client.py` | TTL cache (InMemory / Redis), httpx-based CKAN client |
+| Cross-cutting | `core/` | Config, constants, exceptions, pure helpers |
 
 **Key design rules**
-- Routes call services; services call backends. Routes never touch SQL.
-- `services/datastore_service.py` owns cross-cutting validation (e.g., `unique_key` ⊆ field ids) that requires context from multiple inputs.
-- Backends return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`.
-- `responses/stream.py` converts the iterator to JSON/CSV bytes one row at a time. Peak memory ≈ 1 row regardless of result size.
-- Pydantic is for **inbound** validation only (`api/schemas/`). Outbound responses are plain dicts → `orjson.dumps` → `Response`.
-- One read-backend and one write-backend instance, created in `core/lifespan.py`. DuckDB: separate read-only connection for searches.
+- Endpoints call services; services call engines / CKAN client via `context.ckan`. Endpoints never touch SQL.
+- `services/write.py` owns cross-cutting validation that requires context from multiple inputs (e.g., resolving `primary_key` against declared fields once that lands).
+- Engines (when implemented) return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`. Peak memory ≈ 1 row regardless of result size.
+- Pydantic validates inbound (`schemas/datastore.py`) and documents outbound (`schemas/responses.py`). Outbound serialisation goes through `ckan_success` → `ORJSONResponse` → orjson.
+- Per-request CKAN client binding happens once in `get_context` (`api/context.py`): the long-lived `httpx.AsyncClient` is owned by the lifespan; each request gets a shallow copy with `api_key` bound.
+- No DI container. FastAPI's `Depends` + the engine `registry.py` factory are the only wiring mechanisms.
 
 **Pod-level shape**
 - One container per pod: the FastAPI app. Sidecars only for observability (e.g., OpenTelemetry collector).
@@ -225,36 +318,41 @@ flowchart LR
 - `Deployment` with N replicas, fronted by a `ClusterIP` `Service`.
 - `Ingress` (NGINX, Traefik, etc.) terminates TLS and routes by host/path.
 - `HorizontalPodAutoscaler` on CPU + custom metric (request rate).
-- Config: non-secret env vars in `ConfigMap` (`DATASTORE_BACKEND`, `MAX_REQUEST_BODY_MB`, `BQ_PROJECT`); secrets in `Secret` (CKAN API key, `BQ_CREDENTIALS_JSON`, `AUTH_REDIS_URL`).
-- Redis as in-cluster `StatefulSet` or external managed instance — connection string from Secret.
-- DuckDB backend requires single-replica `StatefulSet` + `PersistentVolumeClaim`; BigQuery backend supports horizontal `Deployment`.
+- Config: non-secret env vars in `ConfigMap` (`DATASTORE_ENGINE`, `MAX_REQUEST_BODY_MB`, `BQ_PROJECT`, `AUTH_CACHE_TTL`, `HTTP_TIMEOUT_SECONDS`); secrets in `Secret` (CKAN API key, `BQ_CREDENTIALS_JSON`, `REDIS_URL`).
+- Redis as in-cluster `StatefulSet` or external managed instance — connection string from Secret. Empty `REDIS_URL` falls back to the in-process `InMemoryCache` (single-pod only).
+- DuckLake backend will require single-replica `StatefulSet` + `PersistentVolumeClaim` (when implemented); BigQuery backend supports horizontal `Deployment`.
 
 ---
 
 ## 5. API Surface
 
-All datastore endpoints sit under `/api/3/`. Health endpoints at the root.
+All datastore endpoints sit under `/api/3/action/` to match the CKAN action API.
+Health endpoints at the root.
 
 ### 5.1 Health
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/` | Welcome banner — `{"message": "..."}` |
-| GET | `/health` | Liveness — always 200 if process is up |
-| GET | `/ready` | Readiness — 200 if both backends pass `healthcheck()`, else 503 |
+All three return the CKAN envelope shape `{help, success, result: {...}}`.
+
+| Method | Path | Status | Result |
+|---|---|---|---|
+| GET | `/` | implemented | `{"message": APP_MESSAGE}` |
+| GET | `/health` | implemented | `{"status": "ok"}` — liveness; always 200 if process is up |
+| GET | `/ready` | implemented (stub result) | `{"status": "ready"}` — should become 503 when backend `healthcheck()` fails (planned) |
 
 ### 5.2 Datastore endpoints
 
-All datastore endpoints accept the auth gate (`Depends(check_ckan_access)`).
+Each endpoint takes a single `ContextDep`. The handler calls `context.auth.authorize(...)` and delegates to a service in `services/`.
 
-| Method | Path | Body / Params | Response |
-|---|---|---|---|
-| POST | `/api/3/datastore_create` | `DatastoreCreateRequest` | `DatastoreCreateResponse` |
-| GET | `/api/3/datastore_search` | query params | streaming JSON / CSV / TSV |
-| POST | `/api/3/datastore_upsert` | `DatastoreUpsertRequest` | `DatastoreUpsertResponse` |
-| GET | `/api/3/datastore_search_sql` | `sql`, `limit` | streaming JSON |
-| POST | `/api/3/datastore_delete` | `DatastoreDeleteRequest` | `DatastoreDeleteResponse` |
-| GET | `/api/3/datastore_info` | `resource_id` | `DatastoreInfoResponse` |
+| Method | Path | Status | Body / Params | Response model |
+|---|---|---|---|---|
+| POST | `/api/3/action/datastore_create` | **implemented** | `DatastoreCreateRequest` | `DatastoreCreateResponse` |
+| POST | `/api/3/action/datastore_upsert` | _501 stub_ | `DatastoreUpsertRequest` (TBD) | `DatastoreUpsertResponse` (TBD) |
+| POST | `/api/3/action/datastore_delete` | _501 stub_ | `DatastoreDeleteRequest` (TBD) | `DatastoreDeleteResponse` (TBD) |
+| GET | `/api/3/action/datastore_search` | _501 stub_ | query params | streaming JSON / CSV / TSV (planned) |
+| GET | `/api/3/action/datastore_search_sql` | _501 stub_ | `sql`, `limit` | streaming JSON (planned) |
+| GET | `/api/3/action/datastore_info` | _501 stub_ | `resource_id` | `DatastoreInfoResponse` (TBD) |
+
+Stub endpoints raise `HTTPException(status_code=501, …)`; the error handler in `api/error_handlers.py` converts that to a CKAN envelope with `__type: "Not Implemented"`.
 
 ---
 
@@ -662,521 +760,56 @@ metadata catalog (titles, descriptions, units, examples) without a side store.
 `__type` taxonomy: `Validation Error` (400), `Authorization Error` (403),
 `Not Found Error` (404), `Conflict Error` (409), `Internal Error` (500).
 
----
 
-## 7. Execution Plan
+## 7. Roadmap
 
-Each phase is independently shippable, testable, and adds exactly one concern.
-No phase breaks APIs delivered by previous phases.
+The original phase plan that used to live here has mostly shipped. This section now tracks what's done, what's next, and the guardrails that apply to every change. For the current file layout see §3.
 
----
+### Done
 
-### Global Execution Rules
+- [x] **Foundation** — `pyproject.toml`, `Dockerfile`, `Makefile`, `.env.example`, `docker-compose.yml`. App factory + lifespan in [datastore/main.py](datastore/main.py). Body-size middleware in [datastore/api/middleware.py](datastore/api/middleware.py).
+- [x] **CKAN API surface** — `/api/3/action/datastore_*` mounted via [datastore/api/routes.py](datastore/api/routes.py). `datastore_create` implemented end-to-end; the other five datastore actions return `HTTP 501` (mapped to CKAN envelope `__type: "Not Implemented"`). Health endpoints (`/`, `/health`, `/ready`) return the CKAN envelope shape.
+- [x] **Request validation** — `DatastoreCreateRequest` in [datastore/schemas/datastore.py](datastore/schemas/datastore.py) with strict `extra="forbid"`, exactly-one `resource_id` / `resource` invariant, and `FieldSpec` validators in [validators.py](datastore/schemas/validators.py). Pydantic errors → `RequestValidationError` → CKAN error envelope with a `fields` map.
+- [x] **Response models** — [datastore/schemas/responses.py](datastore/schemas/responses.py) defines `ResponseModel` (`help` + `success`) and per-endpoint envelopes with a nested `Result` class. Routes declare `response_model=...` for OpenAPI; services return the typed inner `Result`.
+- [x] **Error envelope** — handlers in [datastore/api/error_handlers.py](datastore/api/error_handlers.py); taxonomy in [datastore/core/exceptions.py](datastore/core/exceptions.py) (`ValidationError`, `AuthorizationError`, `NotFoundError`, `ConflictError`, `ServerError` + `HTTP_STATUS_TO_TYPE_LABEL`).
+- [x] **Auth gate** — `context.auth.authorize(resource_id=…, package_id=…)` in [datastore/api/auth.py](datastore/api/auth.py); calls CKAN `datastore_authorize` on cache miss. Cache uses the `CachePort` Protocol so `InMemoryCache` and `RedisCache` are interchangeable based on `REDIS_URL`. TTL is `AUTH_CACHE_TTL`. The raw api_key never reaches the cache — it's hashed via `_key_id` (JWT `jti` or sha256 prefix).
+- [x] **Request context** — `RequestContext` + `AuthContext` + `ContextDep` in [datastore/api/context.py](datastore/api/context.py). The CKAN client is bound to the caller's `api_key` once per request via `ckan.bind(api_key)`.
+- [x] **Service layer** — [datastore/services/write.py](datastore/services/write.py)'s `create_datastore` orchestrates the new-vs-existing-resource flow, calls CKAN `resource_create` when the resource has no `id`, and hands off to the storage engine.
+- [x] **Engine abstraction** — `DatastoreBackend` ABC + `SearchResult` / `WriteResult` dataclasses in [base.py](datastore/infrastructure/engines/base.py). Factory in [registry.py](datastore/infrastructure/engines/registry.py) reads `context.config.DATASTORE_ENGINE`. `BigQueryBackend` placeholder in [bigquery.py](datastore/infrastructure/engines/bigquery.py).
+- [x] **Tests** — end-to-end TestClient suite in [tests/test_datastore_create.py](tests/test_datastore_create.py); service-level units with a fake context in [tests/test_write_service.py](tests/test_write_service.py). CKAN pytest plugin disabled via `addopts = "-p no:ckan -p no:ckan_fixtures"` in `pyproject.toml`.
 
-Every phase must satisfy these before it can be called done:
+### Next
+
+Rough priority order. Tick each box as the change set lands.
+
+- [ ] **Wire the remaining datastore endpoints.** For each of `datastore_upsert`, `datastore_delete`, `datastore_search`, `datastore_search_sql`, `datastore_info`:
+  - [ ] Add the request schema to `schemas/datastore.py` (or a query-param dataclass for GETs).
+  - [ ] Add the response envelope to `schemas/responses.py` (subclass `ResponseModel`, define inner `Result`).
+  - [ ] Add the service function in `services/{read,write}.py` returning the inner `Result` model.
+  - [ ] Replace the `HTTPException(501)` in `endpoints/datastore.py` with the real handler + `response_model=...`.
+- [ ] **Real BigQuery backend.** Replace the stub in `infrastructure/engines/bigquery.py`. Initialise `bigquery.Client(project=BQ_PROJECT)` once in the lifespan; store `unique_key` + per-field `info` in the table description (JSON, 16 KB cap); implement parameterised `search` / `upsert` (MERGE) / `delete` (DML) / `search_sql` / `info` / `healthcheck`. Type map per §6.1.
+- [ ] **Streaming search.** Once `datastore_search` is wired, add `stream_search` / `stream_csv` / `stream_tsv` helpers in `api/responses.py`. Engines must return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`. The route returns `StreamingResponse` with `media_type` chosen by `records_format`. Target: peak memory ≈ 1 row regardless of result size.
+- [ ] **Real `/ready` healthcheck.** Construct read/write engine instances in the lifespan (the current placeholder doesn't open a connection). Stash on `app.state`. `/ready` calls `engine.healthcheck()` for both and returns 503 if either fails. `terminationGracePeriodSeconds: 30` in the k8s manifest so streams drain.
+- [ ] **DuckLake backend.** Second concrete engine implementing the same ABC. Single-replica `StatefulSet` + `PersistentVolumeClaim` in k8s. Local mode reads `DUCKDB_PATH`; DuckLake mode reads a catalog URL.
+- [ ] **Observability.** JSON structured logger in `core/logging.py`; per-request middleware in `api/middleware.py` injects a `request_id` and logs `method`, `path`, `status`, `duration_ms`. The `log.debug` lines already in `auth.py` and `error_handlers.py` light up under `LOG_LEVEL=DEBUG`.
+- [ ] **Opt-in query cache.** Auth decisions already cache via the existing `CachePort`. A separate query-result cache (small/hot SELECTs) was in the old plan but isn't on the critical path — defer until BigQuery + streaming land.
+
+### Guardrails
+
+Apply to every change, current and future:
 
 | Invariant | Check |
 |---|---|
 | App starts | `uvicorn datastore.main:app` exits 0 |
 | Health always works | `GET /health` → 200 |
 | OpenAPI loads | `GET /docs` renders without error |
-| No regression | All previous phase tests still pass |
-
-Constraints:
-- No backend logic before Phase 6
-- No real streaming before Phase 9
-- No Redis dependency before Phase 10
-
----
-
-### Phase 0 — Foundation & Project Bootstrap
-
-**Goal:** Production-grade project skeleton matching the §3 layout. Config, lifespan, error-handler wiring, and health endpoints — no business logic, no domain models, no engines.
-
-**Files to create**
-
-Project root
-- `pyproject.toml` — deps from §2; `[tool.ruff.lint]`, `[tool.mypy]`, `[tool.pytest.ini_options]` (`testpaths = ["tests"]`, markers: `unit`, `integration`); `[tool.hatch.build.targets.wheel] packages = ["src/datastore"]`.
-- `Dockerfile` — multi-stage: deps layer (`pip install`) + app layer (`COPY src/`); runs `uvicorn datastore.main:app --host 0.0.0.0 --port 8000`.
-- `Makefile` — `run`, `test`, `lint`, `format` targets.
-- `.env.example` — every var from `config.py` with a safe default.
-- `.gitignore` — Python, venv, `.env`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`.
-- `docker-compose.yml` — placeholder service for `app` (postgres/redis/ckan wired in later phases).
-
-`src/datastore/` (each layer needs `__init__.py`)
-- `main.py` — FastAPI app factory `create_app()`:
-  - `lifespan` async context manager (stub — wires engines/Redis from Phase 6+).
-  - Registers `GZipMiddleware` and a body-size guard (rejects `Content-Length > MAX_REQUEST_BODY_MB`).
-  - Mounts the `api.routes` router.
-  - Installs exception handlers from `api.errors`.
-  - Module-level `app = create_app()` for uvicorn.
-- `config.py` — `Settings(BaseSettings)` via `pydantic-settings` with `model_config = SettingsConfigDict(env_file=".env", extra="ignore")`. Fields: `APP_MESSAGE`, `MAX_REQUEST_BODY_MB=50`, `DATASTORE_ENGINE="bigquery"`, `BQ_PROJECT`, `REDIS_URL`, `CKAN_URL`, `LOG_LEVEL="INFO"`. Module-level constants: `DEFAULT_LIMIT=1000`, `MAX_LIMIT=10000`, `BATCH_SIZE=500`. `@lru_cache` `get_settings()`.
-- `container.py` — empty stub class `Container` with a `TODO` comment; gets populated in Phase 4+ as engines/CKAN/cache come online.
-
-`src/datastore/api/`
-- `routes.py` — single `APIRouter` exposing:
-  - `GET /` → `{"message": settings.APP_MESSAGE}`
-  - `GET /health` → `{"status": "ok"}` (always 200 while process is up).
-  - `GET /ready` → `{"status": "ready"}` (stub 200 until Phase 6 wires real `healthcheck()` calls).
-- `errors.py` — `register_exception_handlers(app)`: minimal handler for unhandled `Exception` → 500 JSON `{"detail": "internal_error"}`. CKAN-envelope handlers land in Phase 3.
-- `schemas.py`, `deps.py` — empty placeholders so layer is importable.
-
-`src/datastore/{application,domain,infrastructure}/`
-- Each layer just has `__init__.py` + a `# placeholder` comment file (e.g., `ports.py`, `models.py`, `engines/registry.py`) so the structure is committed and future imports won't fight `mypy --strict`.
-
-`tests/`
-- `conftest.py` — `client` fixture that yields a `TestClient(create_app())`.
-- `test_api.py` — health-only tests for this phase (datastore tests added in Phase 1+).
-
-**Done criteria**
-- `uvicorn datastore.main:app --reload` starts with no errors.
-- `GET /` → `{"message": "..."}` (200).
-- `GET /health` → `{"status": "ok"}` (200).
-- `GET /ready` → 200 (stub).
-- `GET /docs` renders, shows the 3 health routes only.
-- `ruff check src tests` clean; `mypy --strict src` clean.
-- No imports from `application/`, `domain/`, `infrastructure/` in this phase.
-
-**Tests** (`tests/test_api.py`)
-- `test_welcome` — `GET /` returns `APP_MESSAGE`.
-- `test_health` — `GET /health` returns 200 with valid JSON.
-- `test_ready_stub` — `GET /ready` returns 200.
-- `test_openapi_loads` — `GET /openapi.json` returns 200 and parses.
-
-**Git**
-```
-chore: bootstrap datastore API project foundation
-```
-
----
-
-### Phase 1 — API Surface (Echo Mode)
-
-**Goal:** Every CKAN endpoint exists and is reachable. No validation, no logic — each endpoint echoes its input back in a CKAN envelope.
-
-**Files to create / update**
-
-- `app/api/routes/datastore.py` — all 6 endpoints with stub bodies:
-  ```python
-  @router.post("/datastore_create")
-  def datastore_create(request: Request, payload: dict = Body(...)):
-      return json_response({
-          "help": str(request.url), "success": True,
-          "result": {"resource_id": payload.get("resource_id"), "stub": True},
-      })
-  ```
-  Search + SQL endpoints return `StreamingResponse` with empty `records: []`.
-- `app/responses/base.py` — `json_response(payload)` wraps `orjson.dumps` in `Response`.
-- `app/api/router.py` — mount `datastore` router under `/api/3`; no auth dependency yet.
-- OpenAPI `summary`, `description`, `responses` per endpoint (§6) — write now, cheapest time.
-
-**Endpoints**
-
-| Method | Path |
-|---|---|
-| POST | `/api/3/datastore_create` |
-| GET | `/api/3/datastore_search` |
-| POST | `/api/3/datastore_upsert` |
-| GET | `/api/3/datastore_search_sql` |
-| POST | `/api/3/datastore_delete` |
-| GET | `/api/3/datastore_info` |
-
-**Done criteria**
-- All 6 endpoints return 200 with CKAN envelope `{"help":"...","success":true,"result":{...}}`.
-- `/openapi.json` shows 6 datastore + 3 health endpoints.
-- No Pydantic models on requests — `payload: dict = Body(...)`.
-
-**Tests** (`tests/integration/api/`)
-- `test_echo.py` — one test per endpoint: status 200, content-type `application/json`, top-level keys present.
-
-**Git**
-```
-feat: implement CKAN API surface in echo mode
-```
-
----
-
-### Phase 2 — Request Validation (Strict CKAN + Frictionless)
-
-**Goal:** Lock down the inbound contract. Every invalid request returns a structured CKAN error. Responses still return stubs — no backend calls.
-
-**Files to create / update**
-
-- `app/domain/resource_id.py` — `is_valid_identifier()`, `SqlIdentifier` annotated type.
-- `app/domain/models.py`
-  - `_normalise_field_type` — SQL aliases → Frictionless canonical (see §6.1 type list).
-  - `to_ckan_type` — DB-reported type string → Frictionless canonical (used from Phase 6).
-  - `resolve_unique_key` — `unique_key` wins over deprecated `primary_key`; normalise `str → list[str]`.
-  - `_validate_with_frictionless` — calls `frictionless.Schema.from_descriptor`; raises `ValueError` on bad shape.
-  - `_normalise_info` — strips whitespace from all string values in the `info` blob; drops `info.type` (outer `type` is canonical).
-- `app/api/schemas/common.py` — `SqlIdentifier`, `UniqueKey`, `FieldSpec` (with `info` dict), CKAN envelope response types.
-- `app/api/schemas/datastore.py` — Pydantic request models, all `model_config = {"extra": "forbid"}`:
-  - `DatastoreCreateRequest` — cross-field: `unique_key` ⊆ declared field ids; record keys ⊆ field ids.
-  - `DatastoreUpsertRequest` — cross-field: `unique_key` required when `method` ∈ {`upsert`, `update`}.
-  - `DatastoreDeleteRequest`
-  - Query-param dataclasses (not `BaseModel`): `SearchParams`, `SearchSQLParams`, `InfoParams`.
-- `app/api/deps.py` — `get_search_params()`: clamps `limit` to `[0, MAX_LIMIT]`, validates `records_format` ∈ `{objects, lists, csv, tsv}`.
-- `app/api/pagination.py` — `build_links(resource_id, limit, offset, total)` → `_links` dict.
-- `app/middleware/error_handler.py` — maps `RequestValidationError` → CKAN `error.fields` map.
-- Update `app/api/routes/datastore.py` — typed `DatastoreCreateRequest = Body(...)` etc.; stubs still return mocked data.
-- Response Pydantic models on routes via `response_model=...` for `/docs` only — at runtime use `Response(orjson.dumps(...))`.
-
-**Done criteria**
-- POST `datastore_create` with `unique_key` referencing unknown field → 400, `error.__type == "Validation Error"`, `error.fields.unique_key` populated.
-- POST `datastore_create` with an unrecognised top-level key → 400, message contains `Unknown field`.
-- POST `datastore_upsert` with `method=update` and no `unique_key` → 400.
-- `GET /docs` shows correct request + response schemas for all 6 endpoints.
-
-**Tests**
-- `tests/unit/domain/` — field normalisation, type alias mapping, `resolve_unique_key`, `_normalise_info`.
-- `tests/unit/services/test_validation.py` — cross-field rules.
-- Phase 0 + 1 tests still pass.
-
-**Git**
-```
-feat: add strict request validation with Frictionless schema support
-```
-
----
-
-### Phase 3 — CKAN Response & Error System
-
-**Goal:** All response paths — success and failure — return CKAN-compliant envelopes. No raw exceptions leak.
-
-**Files to create / update**
-
-- `app/domain/errors.py` — `APIError` base + `ValidationError` (400), `AuthorizationError` (403), `NotFoundError` (404), `ConflictError` (409), `ServerError` (500).
-- `app/middleware/error_handler.py`
-  - `APIError` → CKAN error envelope with `__type` from error class.
-  - `HTTPException` → CKAN envelope, `__type` derived from status code.
-  - `RequestValidationError` → CKAN `error.fields` map (updates Phase 2 scaffold).
-- `app/responses/formats/ckan.py` — `ckan_success(help, result)`, `ckan_error(help, type, message, fields=None)`.
-
-Error envelope shape (see §6.7):
-```json
-{
-  "help": "<url>",
-  "success": false,
-  "error": {"__type": "Validation Error", "message": "...", "fields": {}}
-}
-```
-
-**Done criteria**
-- Any unhandled exception → 500 with CKAN error envelope, no stack trace in response body.
-- `raise ValidationError("bad field")` inside a route → 400 CKAN envelope.
-- All previous tests pass.
-
-**Tests**
-- `tests/unit/domain/test_errors.py` — each error class maps to the correct status + `__type`.
-- `tests/integration/api/test_error_envelope.py` — force each error type via a test route; assert envelope shape.
-
-**Git**
-```
-feat: implement CKAN response and error envelope system
-```
-
----
-
-### Phase 4 — Auth Layer (CKAN resource_show + Redis cache)
-
-**Goal:** Every datastore endpoint is gated by a CKAN auth check. Redis caches decisions to avoid a round-trip per request.
-
-**Files to create**
-
-- `app/cache/redis.py` — `ConnectionPool` init/shutdown; `get_redis()` FastAPI dependency.
-- `app/services/auth_service.py`
-  1. Extract `api_key` from `Authorization` header or `api_key` query param.
-  2. Check Redis: `auth:{api_key}:{resource_id}` → `allow` / `deny`.
-  3. On miss: `GET {CKAN_URL}/api/3/action/resource_show?id={resource_id}` via `httpx.AsyncClient`. Cache result for `AUTH_CACHE_TTL` seconds.
-  4. Fail-open if Redis is unavailable (call CKAN directly, skip caching).
-- `app/api/deps.py` — `check_ckan_access` FastAPI dependency (wraps `auth_service`).
-- `app/api/router.py` — add `dependencies=[Depends(check_ckan_access)]` to the datastore router.
-- `app/core/config.py` — add `CKAN_URL`, `AUTH_CACHE_TTL` (default 300 s), `AUTH_ENABLED` (default `true`).
-
-**Done criteria**
-- Request without `Authorization` header → 403 CKAN envelope.
-- Valid key + resource → 200 (passed through to stub response).
-- Second identical request hits Redis (verify with `MONITOR` or spy on `auth_service`).
-- `AUTH_ENABLED=false` bypasses auth entirely (for local dev without a CKAN instance).
-
-**Tests**
-- `tests/unit/services/test_auth_service.py` — cache hit, cache miss + CKAN call, CKAN 403, Redis failure fail-open.
-- `tests/integration/api/test_auth.py` — missing key → 403; valid key (mock CKAN) → 200.
-
-**Git**
-```
-feat: add CKAN auth layer with Redis caching
-```
-
----
-
-### Phase 5 — Service Layer (Business Logic Separation)
-
-**Goal:** Routes contain zero logic. All orchestration lives in `services/`. Routes become one-liners: parse → call service → return response.
-
-**Files to create / update**
-
-- `app/services/datastore_service.py`
-  - `create(resource_id, fields, key_fields, records) → dict`
-  - `search(params: SearchParams) → SearchResult` (stub returns empty `SearchResult`)
-  - `upsert(resource_id, records, method, key_fields, calculate_record_count) → dict`
-  - `delete(resource_id, filters) → dict`
-  - `info(resource_id) → dict`
-  - `search_sql(sql, limit) → SearchResult` (stub)
-  - Each method validates cross-cutting rules (e.g., field existence before upsert) then calls `self._backend.<method>()` — backend is injected via constructor, so service is fully unit-testable without a real DB.
-- `app/api/routes/datastore.py` — routes become:
-  ```python
-  @router.post("/datastore_create")
-  def datastore_create(payload: DatastoreCreateRequest, svc: DatastoreService = Depends(get_service)):
-      result = svc.create(...)
-      return json_response({"help": ..., "success": True, "result": result})
-  ```
-- `app/api/deps.py` — `get_service()` dependency: constructs `DatastoreService(backend=get_write_backend())`.
-
-**Done criteria**
-- Routes have no `if`, no SQL, no direct backend calls.
-- `DatastoreService` can be unit-tested with a `Mock()` backend.
-- All previous tests pass unchanged.
-
-**Tests**
-- `tests/unit/services/test_datastore_service.py` — each method with mock backend: correct args passed, cross-field rules enforced.
-
-**Git**
-```
-refactor: introduce datastore service layer; routes become thin wrappers
-```
-
----
-
-### Phase 6 — Backend Abstraction (ABC + Factory)
-
-**Goal:** The service layer calls a backend interface. The concrete backend is selected by `DATASTORE_BACKEND` env var. Both DuckDB and BigQuery implement the same ABC.
-
-**Files to create**
-
-- `app/backends/base.py`
-  ```python
-  @dataclass
-  class SearchResult:
-      fields: list[dict]            # [{"id": ..., "type": ..., "info": {...}}]
-      row_iterator: Iterator[tuple] # lazy — never materialise all rows
-      total: int | None = None
-      records_truncated: bool = False
-
-  @dataclass(slots=True)
-  class WriteResult:
-      rows_written: int = 0
-      record_count: int | None = None
-
-  class DatastoreBackend(ABC):
-      @abstractmethod
-      def initialize(self) -> None: ...
-      @abstractmethod
-      def healthcheck(self) -> bool: ...
-      @abstractmethod
-      def create(self, resource_id, fields, key_fields, records) -> WriteResult: ...
-      @abstractmethod
-      def search(self, *, resource_id, filters, q, distinct, plain, language,
-                 limit, offset, fields, sort, include_total) -> SearchResult: ...
-      @abstractmethod
-      def upsert(self, resource_id, records, method, key_fields,
-                 calculate_record_count) -> WriteResult: ...
-      @abstractmethod
-      def search_sql(self, sql, limit) -> SearchResult: ...
-      @abstractmethod
-      def delete(self, resource_id, filters) -> WriteResult: ...
-      @abstractmethod
-      def info(self, resource_id) -> dict: ...
-      @abstractmethod
-      def get_columns(self, resource_id) -> list[str]: ...
-  ```
-- `app/backends/factory.py` — `get_read_backend()` / `get_write_backend()` read `settings.DATASTORE_BACKEND`. Raise `ValueError` on unknown value.
-- `app/core/lifespan.py` — now calls `read_backend.initialize()` / `write_backend.initialize()` on startup.
-- `app/api/routes/health.py` — `/ready` now calls `read_backend.healthcheck()` + `write_backend.healthcheck()`; returns 503 if either fails.
-
-**Done criteria**
-- Swapping `DATASTORE_BACKEND=duckdb` ↔ `bigquery` switches the implementation; service is unaware.
-- `GET /ready` → 503 when backend credentials are intentionally wrong; 200 when healthy.
-- Unknown `DATASTORE_BACKEND` value → clear error on startup, not at request time.
-
-**Tests**
-- `tests/unit/backends/test_factory.py` — correct class returned per env var; unknown value raises.
-
-**Git**
-```
-feat: implement pluggable DatastoreBackend ABC and factory
-```
-
----
-
-### Phase 7 — DuckDB Backend (Local Execution)
-
-**Goal:** Fully working local system. `DATASTORE_BACKEND=duckdb` passes the complete CKAN flow.
-
-**Files to create** (`app/backends/duckdb/`)
-
-- `backend.py` — `DuckDBBackend` implementing all ABC methods.
-  - `initialize()` — writer connection (`threading.Lock` guarded) + separate read-only connection. DuckLake if `DUCKLAKE_CATALOG` set; plain file at `DUCKDB_PATH` otherwise.
-  - Type mapping: `integer→BIGINT`, `number→DOUBLE`, `string→VARCHAR`, `boolean→BOOLEAN`, `date→DATE`, `datetime→TIMESTAMP`, `time→TIME`, `object→JSON`, `array→JSON`.
-  - `create()` — `CREATE TABLE IF NOT EXISTS`; `ALTER TABLE ADD COLUMN` for new columns; bulk-insert via multi-VALUES prepared statement.
-  - `search()` — parameterized SELECT; full-text `q` as `LIKE` across VARCHAR columns; separate `COUNT(*)` if `include_total`; `cursor.fetchmany(BATCH_SIZE)` generator.
-  - `upsert()` — `insert`: multi-VALUES INSERT. `update`: parameterized UPDATE per batch. `upsert`: `INSERT … ON CONFLICT DO UPDATE` (DuckDB ≥ 0.10).
-  - `search_sql()` — `SELECT * FROM (<sql>) AS _q LIMIT ?`. Read-only connection; rejects any non-SELECT.
-  - `delete()` — filtered `DELETE`; empty filters → `DROP TABLE IF EXISTS`.
-  - `info()` — `INFORMATION_SCHEMA.COLUMNS`; `SELECT COUNT(*)` for record count.
-  - `healthcheck()` — `SELECT 1`.
-- `query_builder.py` — `build_where_clause(filters)`, `build_sort_clause(sort)`, `build_fts_clause(q, columns)`, type-mapping dict.
-
-**Done criteria**
-- Full CKAN flow end-to-end: `create → upsert → search → search_sql → delete → info`.
-- Records round-trip exactly (type preservation).
-- `search_sql()` rejects DML statements.
-
-**Tests** (`tests/integration/backends/`)
-- `test_duckdb.py` — full flow against an in-memory DuckDB (`:memory:`); no files written during CI.
-- `tests/unit/backends/test_duckdb_query_builder.py` — SQL generation unit tests (no DB connection).
-
-**Git**
-```
-feat: implement DuckDB backend (full local execution)
-```
-
----
-
-### Phase 8 — BigQuery Backend (Production)
-
-**Goal:** Same CKAN flow works on BigQuery. `DATASTORE_BACKEND=bigquery` is the production path.
-
-**Files to create** (`app/backends/bigquery/`)
-
-- `backend.py` — `BigQueryBackend` implementing all ABC methods.
-  - `initialize()` — `bigquery.Client(project=BQ_PROJECT)` once; credentials from `BQ_CREDENTIALS_JSON` env or ADC. Table names: `` `{BQ_PROJECT}.{BQ_DATASET}.{resource_id}` ``.
-  - Type mapping: `integer→INT64`, `number→FLOAT64`, `string→STRING`, `boolean→BOOL`, `date→DATE`, `datetime→TIMESTAMP`, `time→TIME`, `object→JSON`.
-  - `create()` — `CREATE TABLE IF NOT EXISTS`. Stores `unique_key` + per-field `info` dicts in the table description as JSON (`{"unique_key":[...],"field_info":{"col":{...}}}`); 16 KB cap — reject oversized payloads. Also writes `info.description` to BQ native column descriptions (≤ 1024 chars). Seed records via `insert_rows_json` (<500 rows) or DML `INSERT`.
-  - `search()` — parameterised SQL (`@param`). Native BQ query cache on by default (do not set `use_query_cache=False`). Separate `COUNT(*)` if `include_total`. `query_job.result()` paged iterator → yield tuples.
-  - `upsert()` — `insert`: `insert_rows_json` or DML `INSERT` for >500. `update`: DML `UPDATE WHERE key IN @keys`. `upsert`: `MERGE` with `UNNEST(@records)` source.
-  - `search_sql()` — `SELECT * FROM (<user_sql>) AS _q LIMIT @limit`; parameterised `@limit`.
-  - `delete()` — DML `DELETE WHERE …`; empty filters → `DROP TABLE IF EXISTS`.
-  - `info()` — `INFORMATION_SCHEMA.COLUMNS`; record count from `__TABLES__` (no full scan) or `COUNT(*)`.
-  - `healthcheck()` — `client.query("SELECT 1").result()`.
-- `query_builder.py` — BigQuery-dialect WHERE/SORT/FTS clauses, `MERGE` template, type-mapping dict.
-
-**Done criteria**
-- Same integration flow as Phase 7 passes against a sandbox BigQuery dataset.
-- Second identical `search` call shows `cache_hit=true` in BQ job metadata.
-- `MERGE` upsert of 1 000 rows completes in a single BQ job.
-
-**Tests** (`tests/integration/backends/`)
-- `test_bigquery.py` — same parametrised suite as DuckDB; **skipped** when `BQ_CREDENTIALS_JSON` is absent.
-- `tests/unit/backends/test_bigquery_query_builder.py` — SQL generation unit tests (no BQ connection).
-
-**Git**
-```
-feat: implement BigQuery backend (production storage)
-```
-
----
-
-### Phase 9 — Streaming Engine
-
-**Goal:** Search responses stream one row at a time. Peak memory ≈ 1 row regardless of result size. All output formats (JSON objects, lists, CSV, TSV) supported.
-
-**Files to create / update**
-
-- `app/responses/stream.py`
-  - `stream_search(result, include_total, resource_id, limit, offset, help_text, records_format)` — yields bytes:
-    1. Open envelope + `fields` array.
-    2. For each tuple in `result.row_iterator`: `orjson.dumps(dict(zip(columns, row)))` — create dict inline, serialize, discard.
-    3. `total` (if `include_total`).
-    4. `_links` via `pagination.build_links(...)`.
-    5. Close envelope.
-  - `stream_search_sql(result)` — JSON only; includes `records_truncated`.
-  - `stream_csv(result)` / `stream_tsv(result)` — header row first; each data row as CSV/TSV bytes.
-- `app/responses/serialization.py` — `orjson` custom default handler for `datetime`, `Decimal`, `UUID`.
-- `app/api/routes/datastore.py` — `datastore_search` and `datastore_search_sql` return `StreamingResponse`; `media_type` switches on `records_format`.
-- `terminationGracePeriodSeconds: 30` in k8s Deployment spec (allows in-flight streams to drain).
-
-**Done criteria**
-- `datastore_search` on 1M rows peaks under 200 MB RSS (verify with `memory_profiler` or `tracemalloc`).
-- `records_format=csv` output parses cleanly with Python's `csv.reader`.
-- `records_format=lists` output is a valid JSON array of arrays.
-- JSON output is valid end-to-end (open envelope + records + close without buffering).
-
-**Tests**
-- `tests/unit/responses/test_stream.py` — streaming serializer unit tests with a 100-row fake iterator: check envelope shape, row count, `_links` values, CSV header row.
-- `tests/integration/api/test_streaming.py` — full HTTP streaming test via `httpx` streaming client; assert no full-body buffering.
-
-**Git**
-```
-feat: add streaming query engine (orjson, CSV/TSV, 1-row memory footprint)
-```
-
----
-
-### Phase 10 — Redis Caching Layer
-
-**Goal:** Repeated auth decisions hit Redis instead of CKAN. Optional lightweight query-result cache for small hot queries.
-
-**Files to create / update**
-
-- `app/cache/cache.py`
-  - Auth cache: `auth:{api_key}:{resource_id}` → `allow` / `deny`, TTL = `AUTH_CACHE_TTL`.
-  - Query cache (opt-in): `query:{resource_id}:{generation}:{sha256(params)}` → serialised result bytes. TTL = `QUERY_CACHE_TTL`. Only caches results < `QUERY_CACHE_MAX_BYTES` (default 50 KB) — BigQuery native cache covers large results.
-  - Generation counter: `gen:{resource_id}` — `INCR` on every write. Cache keys embed generation so stale entries expire without explicit deletion.
-- `app/core/config.py` — add `QUERY_CACHE_ENABLED` (default `false`), `QUERY_CACHE_TTL` (default 300), `QUERY_CACHE_MAX_BYTES` (default 51200).
-
-**Done criteria**
-- Two identical `datastore_search` calls (with `QUERY_CACHE_ENABLED=true`): second call shows Redis HIT in logs.
-- `datastore_upsert` increments `gen:{resource_id}` → next search misses cache → fresh query.
-- Redis failure → fail-open: request succeeds, cache skipped.
-
-**Tests**
-- `tests/unit/cache/test_cache.py` — cache hit/miss/invalidation logic; generation counter increment; size threshold.
-
-**Git**
-```
-feat: add Redis query cache with generation-based invalidation
-```
-
----
-
-### Phase 11 — Observability & Production Hardening
-
-**Goal:** Structured logs, request tracing, and all production k8s probes wired correctly.
-
-**Files to create / update**
-
-- `app/core/logging.py` — JSON structured logs; inject `request_id` (UUID per request) into every log line.
-- `app/middleware/logging.py` — per-request log: `method`, `path`, `status`, `duration_ms`, `request_id`.
-- `app/api/routes/health.py` — `/ready` exercises both backend `healthcheck()` methods; returns 503 when either fails.
-- `k8s/deployment.yaml` (or Helm values) — `livenessProbe` → `/health`, `readinessProbe` → `/ready`, `terminationGracePeriodSeconds: 30`.
-
-**Done criteria**
-- Every request log line contains `request_id`, `method`, `path`, `status`, `duration_ms`.
-- `/ready` → 503 when `BQ_CREDENTIALS_JSON` is intentionally wrong.
-- `/ready` → 200 after credentials are corrected without restarting the app.
-
-**Git**
-```
-chore: add structured logging, request tracing, and production probes
-```
-
----
-
-### Final State
-
-After Phase 11 the system has:
-
-| Capability | Delivered in |
-|---|---|
-| CKAN-compatible 6-endpoint API | Phase 1 |
-| Strict validation + Frictionless schema | Phase 2 |
-| CKAN error envelopes | Phase 3 |
-| Redis-cached CKAN auth gate | Phase 4 |
-| Testable service layer | Phase 5 |
-| Pluggable backend (env-var switch) | Phase 6 |
-| DuckDB backend (local / DuckLake) | Phase 7 |
-| BigQuery backend (production) | Phase 8 |
-| 1-row memory streaming + CSV/TSV | Phase 9 |
-| Redis query cache | Phase 10 |
-| Structured logs + k8s probes | Phase 11 |
+| Tests stay green | `pytest` passes |
+| Layer arrow holds | `rg "from (fastapi\|starlette)" datastore/services datastore/infrastructure datastore/core` returns nothing |
+
+Hard rules from §3 (recap):
+
+- Only `datastore/api/` and `datastore/main.py` may import from `fastapi` / `starlette`.
+- Only `datastore/schemas/` and `datastore/core/config.py` may import from `pydantic` / `pydantic_settings`.
+- Engines return lazy row iterators of tuples (when streaming lands). Never `list[dict]`.
+- Pydantic validates at the boundary; orjson serialises out via `ckan_success`.
+- No DI container — FastAPI's `Depends` + the engine `registry.py` factory are the only wiring.

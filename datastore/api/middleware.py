@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI
-from fastapi.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
-
-from datastore.api.errors import register_exception_handlers
-from datastore.api.routes import datastore_router, router
-from datastore.config import get_settings
 
 
 class BodySizeLimitMiddleware:
+    """Reject requests whose `Content-Length` exceeds `max_bytes` with 413.
+
+    Streaming bodies that omit `Content-Length` are not inspected here; cap
+    those at the ASGI server (uvicorn `--limit-max-request-size`) or behind
+    an ingress layer.
+    """
+
     def __init__(self, app: ASGIApp, max_bytes: int) -> None:
         self.app = app
         self.max_bytes = max_bytes
@@ -42,27 +40,3 @@ class BodySizeLimitMiddleware:
                         return
                     break
         await self.app(scope, receive, send)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    yield
-
-
-def create_app() -> FastAPI:
-    settings = get_settings()
-    app = FastAPI(title=settings.APP_MESSAGE, lifespan=lifespan)
-
-    app.add_middleware(GZipMiddleware, minimum_size=1024)
-    app.add_middleware(
-        BodySizeLimitMiddleware,
-        max_bytes=settings.MAX_REQUEST_BODY_MB * 1024 * 1024,
-    )
-
-    register_exception_handlers(app)
-    app.include_router(router)
-    app.include_router(datastore_router, prefix="/api/3")
-    return app
-
-
-app = create_app()

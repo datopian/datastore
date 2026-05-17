@@ -1,4 +1,4 @@
-.PHONY: run test lint format install
+.PHONY: run test lint format install check
 
 install:
 	pip install -e ".[dev]"
@@ -10,9 +10,11 @@ test:
 	pytest
 
 lint:
-	ruff check src tests
-	mypy src
+	ruff check datastore tests
+	mypy datastore
 
 format:
-	ruff format src tests
-	ruff check --fix src tests
+	ruff format datastore tests
+	ruff check --fix datastore tests
+
+check: lint test
