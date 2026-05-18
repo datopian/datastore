@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from datastore.api.context import Context
-from datastore.api.responses import ORJSONResponse, _success_response
+from datastore.api.responses import _success_response
 from datastore.schemas.request import (
     DatastoreCreateRequest,
+    DatastoreDeleteRequest,
     DatastoreInfoRequest,
     DatastoreSearchRequest,
     DatastoreSearchSQLRequest,
@@ -17,6 +18,7 @@ from datastore.schemas.request import (
 )
 from datastore.schemas.responses import (
     DatastoreCreateResponse,
+    DatastoreDeleteResponse,
     DatastoreInfoResponse,
     DatastoreSearchResponse,
     DatastoreUpsertResponse,
@@ -26,7 +28,11 @@ from datastore.services.read import (
     search_datastore,
     search_sql_datastore,
 )
-from datastore.services.write import create_datastore, upsert_datastore
+from datastore.services.write import (
+    create_datastore,
+    delete_datastore,
+    upsert_datastore,
+)
 
 router = APIRouter(tags=["datastore"])
 
@@ -155,6 +161,26 @@ async def datastore_info(
     return _success_response(request, result)
 
 
-@router.post("/datastore_delete")
-def datastore_delete() -> ORJSONResponse:
-    raise HTTPException(status_code=501, detail="datastore_delete is not implemented")
+@router.post("/datastore_delete", response_model=DatastoreDeleteResponse)
+async def datastore_delete(
+    request: Request,
+    payload: DatastoreDeleteRequest,
+    context: Context,
+):
+    """`POST /api/3/datastore_delete` — delete rows or drop the table.
+
+    Body:
+      `resource_id` / `id` (one required) — table to delete from.
+      `filters` (optional dict) — only rows matching every key/value
+         pair are deleted. Omit → whole table is dropped.
+      `force` (optional bool) — required to delete from a CKAN
+         read-only resource.
+
+    Returns the original `filters` echoed back (CKAN convention) so the
+    caller can confirm what the server actually applied.
+    """
+    await context.auth.authorize(
+        resource_id=payload.resource_id, permission="delete"
+    )
+    result = await delete_datastore(context, payload.model_dump())
+    return _success_response(request, result)

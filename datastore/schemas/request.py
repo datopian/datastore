@@ -226,3 +226,32 @@ class DatastoreInfoRequest(BaseModel):
         if self.resource_id is None:
             self.resource_id = self.id
         return self
+
+
+class DatastoreDeleteRequest(BaseModel):
+    """Request body for `POST /api/3/datastore_delete`.
+
+    Deletes rows matching `filters`, or drops the whole table when
+    `filters` is omitted. Accepts either `resource_id` or `id` (same
+    aliasing as `datastore_info`); model_validator normalises `id` →
+    `resource_id`.
+
+    `force=True` is required to delete from a CKAN resource marked
+    read-only — the engine layer enforces this; the schema just carries
+    the flag.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str | None = None
+    id: str | None = None
+    filters: dict[str, Any] | None = None
+    force: bool = False
+
+    @model_validator(mode="after")
+    def _require_resource_id_or_id(self) -> DatastoreDeleteRequest:
+        if self.resource_id is None and self.id is None:
+            raise ValueError("either 'resource_id' or 'id' is required")
+        if self.resource_id is None:
+            self.resource_id = self.id
+        return self

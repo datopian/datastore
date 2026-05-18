@@ -118,8 +118,13 @@ class BigQueryBackend(DatastoreBackend):
         )
 
     def delete(self, resource_id: str, filters: dict | None) -> WriteResult:
-        """Delete records (filtered) or drop table (no filters)."""
-        {}
+        """Delete records (filtered) or drop table (no filters).
+
+        Placeholder: returns an empty WriteResult. Real impl will issue
+        `DELETE FROM <resource> WHERE …` (parameterised) for `filters`,
+        or `DROP TABLE IF EXISTS <resource>` when filters is None.
+        """
+        return WriteResult()
 
     def info(self, resource_id: str) -> InfoResult:
         """Return table metadata: column schema + free-form `meta` dict.

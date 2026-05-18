@@ -76,6 +76,17 @@ class DatastoreUpsertResponse(ResponseModel):
     result: Result
 
 
+class DatastoreDeleteResponse(ResponseModel):
+    """Response for `POST /api/3/datastore_delete`.
+    """
+
+    class Result(BaseModel):
+        resource_id: str
+        filters: dict[str, Any] | None = None
+
+    result: Result
+
+
 class DatastoreSearchResponse(ResponseModel):
     """Response for `GET /api/3/datastore_search`."""
 

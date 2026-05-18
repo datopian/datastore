@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.responses import (
     DatastoreCreateResponse,
+    DatastoreDeleteResponse,
     DatastoreUpsertResponse,
 )
 
@@ -74,4 +75,21 @@ async def upsert_datastore(
         method=method,
         records=records if include_records else None,
         total=write_result.get("total") if include_total else None,
+    )
+
+
+async def delete_datastore(
+    context: RequestContext, data_dict: dict[str, Any]
+) -> DatastoreDeleteResponse.Result:
+    """Delete rows matching `filters`, or drop the whole table.
+    """
+    resource_id = data_dict["resource_id"]
+    filters = data_dict.get("filters") or None
+
+    engine = get_datastore_engine(context, mode="rw")
+    engine.delete(resource_id=resource_id, filters=filters)
+
+    return DatastoreDeleteResponse.Result(
+        resource_id=resource_id,
+        filters=filters,
     )
