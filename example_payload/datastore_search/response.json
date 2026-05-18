@@ -19,8 +19,8 @@
     "offset": 0,
     "total": 3,
     "_links": {
-      "start": "/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&fields=auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh&sort=delivery_start+desc,+clearing_price_gbp_per_mwh+asc&limit=100&include_total=true",
-      "next":  "/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&fields=auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh&sort=delivery_start+desc,+clearing_price_gbp_per_mwh+asc&limit=100&include_total=true&offset=100"
+      "start": "http://localhost:8000/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&fields=auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh&sort=delivery_start+desc,+clearing_price_gbp_per_mwh+asc&limit=100&include_total=true",
+      "next":  "http://localhost:8000/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&fields=auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh&sort=delivery_start+desc,+clearing_price_gbp_per_mwh+asc&limit=100&include_total=true&offset=100"
     }
   }
 }

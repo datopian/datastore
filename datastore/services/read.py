@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qsl, urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.validators import (
@@ -88,14 +88,17 @@ async def search_datastore(
 def _build_pagination_links(
     url: str, *, limit: int, offset: int
 ) -> dict[str, str]:
-    """CKAN-style pagination links — relative path + query.
+    """CKAN-style pagination links.
 
     `start` strips `offset` (it defaults to 0). `next` appends
     `offset = offset + limit`. All other params ride along on both
     links so the caller can paginate without re-assembling the URL.
 
-    `urllib.parse` is used instead of Starlette's `URL` helpers because
-    services don't import Starlette (CLAUDE.md §3 layer rule).
+    Scheme + host are preserved from the input URL when present, so
+    `http://host/path?x=1` produces `http://host/path?...` links and
+    a bare `/path?x=1` produces bare-path links. `urllib.parse` is
+    used instead of Starlette's `URL` helpers because services don't
+    import Starlette (CLAUDE.md §3 layer rule).
     """
     parsed = urlparse(url)
     pairs = parse_qsl(parsed.query, keep_blank_values=True)
@@ -103,6 +106,9 @@ def _build_pagination_links(
     next_pairs = start_pairs + [("offset", str(offset + limit))]
 
     def _qs(pairs: list[tuple[str, str]]) -> str:
-        return f"{parsed.path}?{urlencode(pairs)}" if pairs else parsed.path
+        return urlunparse((
+            parsed.scheme, parsed.netloc, parsed.path,
+            "", urlencode(pairs), "",
+        ))
 
     return {"start": _qs(start_pairs), "next": _qs(next_pairs)}

@@ -256,7 +256,8 @@ def test_records_format_lists_returns_json_envelope(client: TestClient) -> None:
 def test_records_format_csv_returns_json_envelope(client: TestClient) -> None:
     """`records_format=csv` returns the CKAN JSON envelope with `records`
     as a CSV-encoded string. Content-Type is application/json — clients
-    parse the envelope, then read the records string as CSV."""
+    parse the envelope, then read the records string as CSV. Column names
+    live on `result.fields`, not in the records string."""
     response = client.get(SEARCH_URL, params=_params(
         fields=["auction_id", "product_code"],
         records_format="csv",
@@ -266,8 +267,8 @@ def test_records_format_csv_returns_json_envelope(client: TestClient) -> None:
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
     assert body["success"] is True
-    # Header row from `fields`; placeholder engine yields no data rows.
-    assert body["result"]["records"] == "auction_id,product_code\n"
+    # Placeholder engine yields no rows → empty records string.
+    assert body["result"]["records"] == ""
 
 
 def test_records_format_tsv_returns_json_envelope(client: TestClient) -> None:
@@ -280,7 +281,8 @@ def test_records_format_tsv_returns_json_envelope(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
-    assert body["result"]["records"] == "auction_id\tproduct_code\n"
+    # Placeholder engine yields no rows → empty records string.
+    assert body["result"]["records"] == ""
 
 
 def test_invalid_records_format_returns_validation_error(client: TestClient) -> None:
@@ -379,10 +381,12 @@ def test_lists_format_streams_positional_arrays(
     ]
 
 
-def test_csv_format_streams_header_and_rows(
+def test_csv_format_streams_data_rows(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`records_format=csv` — JSON envelope, `records` is one CSV string."""
+    """`records_format=csv` — JSON envelope, `records` is one CSV string of
+    data rows only. Column names live on `result.fields` (no header in the
+    records string)."""
     _install_mock_search(monkeypatch)
 
     response = client.get(SEARCH_URL, params=_params(records_format="csv"))
@@ -391,17 +395,17 @@ def test_csv_format_streams_header_and_rows(
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
     assert body["result"]["records"] == (
-        "auction_id,product_code,clearing_price_gbp_per_mwh\n"
         "144,DCL,47.82\n"
         "145,DCH,51.1\n"
         "146,FFR,32.4\n"
     )
 
 
-def test_tsv_format_streams_tab_separated_rows(
+def test_tsv_format_streams_data_rows(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`records_format=tsv` — JSON envelope, `records` is one TSV string."""
+    """`records_format=tsv` — JSON envelope, `records` is one TSV string of
+    data rows only."""
     _install_mock_search(monkeypatch)
 
     response = client.get(SEARCH_URL, params=_params(records_format="tsv"))
@@ -410,7 +414,6 @@ def test_tsv_format_streams_tab_separated_rows(
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
     assert body["result"]["records"] == (
-        "auction_id\tproduct_code\tclearing_price_gbp_per_mwh\n"
         "144\tDCL\t47.82\n"
         "145\tDCH\t51.1\n"
         "146\tFFR\t32.4\n"
@@ -444,7 +447,6 @@ def test_csv_quotes_values_with_special_chars(
     assert response.status_code == 200
     body = response.json()
     assert body["result"]["records"] == (
-        "name,note\n"
         "plain,ordinary value\n"
         '"with,comma","with""quote"\n'
         '"with\nnewline",tab\there\n'
@@ -452,18 +454,19 @@ def test_csv_quotes_values_with_special_chars(
 
 
 def test_search_objects_response_includes_links(client: TestClient) -> None:
-    """Default request emits `_links.start` (no offset) and `_links.next` (offset=limit)."""
+    """`_links.start` (no offset) and `_links.next` (offset=limit) come back
+    with the same scheme + host as the request — TestClient uses
+    `http://testserver`."""
     response = client.get(SEARCH_URL, params=_params())
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
     assert set(links) == {"start", "next"}
-    assert links["start"].startswith("/api/3/action/datastore_search?")
-    assert links["next"].startswith("/api/3/action/datastore_search?")
+    assert links["start"].startswith("http://testserver/api/3/action/datastore_search")
+    assert links["next"].startswith("http://testserver/api/3/action/datastore_search")
     # start: no offset (defaults to 0); next: offset = 0 + default limit (100)
     assert "offset" not in links["start"]
     assert "offset=100" in links["next"]
-    # resource_id is preserved on both links
     assert f"resource_id={_RESOURCE_ID}" in links["start"]
     assert f"resource_id={_RESOURCE_ID}" in links["next"]
 

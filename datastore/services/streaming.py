@@ -220,7 +220,6 @@ def _records_delimited_string(
       4. `"`            — closing quote
     """
     yield b'"'
-    yield _json_string_inner(_delimited_row(columns, delimiter=delimiter))
     for row in records:
         yield _json_string_inner(_delimited_row(row, delimiter=delimiter))
     yield b'"'

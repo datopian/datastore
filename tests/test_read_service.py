@@ -124,22 +124,29 @@ def test_tsv_format_records_is_string() -> None:
     assert isinstance(body["result"]["records"], str)
 
 
-def test_csv_records_string_contains_header_from_fields() -> None:
-    """With `fields=a,b` the placeholder engine echoes those columns; the
-    CSV records string must begin with the header row, comma-separated."""
+def test_csv_records_string_is_empty_when_engine_yields_no_rows() -> None:
+    """No header row in CSV records — column names live on `result.fields`.
+    Placeholder engine yields nothing, so the records string is empty."""
     body = _call(data_dict_overrides={
         "records_format": "csv",
         "fields": "auction_id,product_code",
     })
-    assert body["result"]["records"] == "auction_id,product_code\n"
+    assert body["result"]["records"] == ""
+    # But the column metadata is echoed on `result.fields`.
+    assert [f["id"] for f in body["result"]["fields"]] == [
+        "auction_id", "product_code",
+    ]
 
 
-def test_tsv_records_string_contains_tab_separated_header() -> None:
+def test_tsv_records_string_is_empty_when_engine_yields_no_rows() -> None:
     body = _call(data_dict_overrides={
         "records_format": "tsv",
         "fields": "auction_id,product_code",
     })
-    assert body["result"]["records"] == "auction_id\tproduct_code\n"
+    assert body["result"]["records"] == ""
+    assert [f["id"] for f in body["result"]["fields"]] == [
+        "auction_id", "product_code",
+    ]
 
 
 # --- search_datastore: pagination links ------------------------------------
@@ -164,8 +171,8 @@ def test_next_link_advances_offset_by_limit() -> None:
 # --- _build_pagination_links: URL surgery ----------------------------------
 
 
-def test_links_bare_url() -> None:
-    """No query params except offset: start is just the path, next gets offset."""
+def test_links_bare_path_url() -> None:
+    """Bare path input → bare path output (no scheme/host to preserve)."""
     links = _build_pagination_links(
         "/api/3/action/datastore_search", limit=100, offset=0
     )
@@ -198,13 +205,12 @@ def test_links_preserve_other_query_params() -> None:
         assert "resource_id=res-1" in link
 
 
-def test_links_strip_scheme_and_host_from_full_url() -> None:
-    """`urlparse` keeps only path + query — relative URL on both sides."""
+def test_links_preserve_scheme_and_host_from_full_url() -> None:
+    """Full URL input → full URL output (scheme + host carried through)."""
     links = _build_pagination_links(
         "http://example.com/api/3/action/datastore_search?limit=100",
         limit=100, offset=0,
     )
-    assert links["start"].startswith("/api/3/action/datastore_search")
-    assert links["next"].startswith("/api/3/action/datastore_search")
-    assert "http" not in links["start"]
-    assert "http" not in links["next"]
+    assert links["start"].startswith("http://example.com/api/3/action/datastore_search")
+    assert links["next"].startswith("http://example.com/api/3/action/datastore_search")
+    assert "offset=100" in links["next"]

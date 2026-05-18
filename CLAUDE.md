@@ -561,16 +561,16 @@ GET /api/3/datastore_search
     ],
     "total": 2,
     "_links": {
-      "start": "/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100",
-      "next":  "/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=100"
+      "start": "https://example.com/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100",
+      "next":  "https://example.com/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=100"
     }
   }
 }
 ```
 
-`_links` follows CKAN convention: relative path + query, all non-`offset`
-params from the request preserved. `start` omits `offset` (it defaults to
-0); `next` advances `offset` by `limit`. Clients detect end-of-data by an
+`_links` carries the same scheme + host as the request URL, with all
+non-`offset` params preserved. `start` omits `offset` (it defaults to 0);
+`next` advances `offset` by `limit`. Clients detect end-of-data by an
 empty `records` array on the next page — there's no `prev` field today.
 
 `records_format=lists` returns each record as a positional array (column order matches `fields`).
