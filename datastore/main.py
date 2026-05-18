@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 
@@ -14,6 +15,8 @@ from datastore.api.routes import api_router
 from datastore.core.config import get_config
 from datastore.infrastructure.cache import InMemoryCache, RedisCache
 from datastore.infrastructure.ckan_client import CKANClient
+
+log = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
@@ -33,6 +36,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if hasattr(cache, "close"):
             stack.push_async_callback(cache.close)
         app.state.cache = cache
+
+        # One-line startup summary so operators can see the active engine
+        # and the related toggles at a glance. Goes through Python's
+        # `logging`, inheriting uvicorn's INFO-level root config.
+        log.info(
+            "datastore ready: engine=%r auth=%s cache=%s sql_allow_file=%s",
+            config.DATASTORE_ENGINE,
+            "on" if config.AUTH_ENABLED else "off",
+            "redis" if config.REDIS_URL else "memory",
+            config.SQL_FUNCTIONS_ALLOW_FILE or "default",
+        )
 
         yield
 

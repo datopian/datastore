@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from datastore.schemas.validators import (
     FieldSpec,
     StringOrList,
+    parse_sql_references,
     to_json_object,
     to_str_or_json_object,
 )
@@ -100,4 +109,97 @@ class DatastoreSearchRequest(BaseModel):
         if v:
             to_str_or_json_object(v)  # raises if it looks like JSON but isn't
         return v
+
+
+# Strip leading SQL comments (line `-- ...` and block `/* ... */`) before
+# checking the first keyword. The check is coarse — real safety comes from
+# the engine running under read-only credentials (e.g. BigQuery IAM).
+_SQL_COMMENT_RE = re.compile(r"^\s*(--[^\n]*\n|/\*.*?\*/)+", re.DOTALL)
+_SQL_LEAD_RE = re.compile(r"^(select|with)\b", re.IGNORECASE)
+
+
+class DatastoreSearchSQLRequest(BaseModel):
+    """Query parameters for `GET /api/3/datastore_search_sql`.
+
+    The caller supplies a raw SQL string and only that. Pagination /
+    row-limit are the caller's responsibility (put `LIMIT` / `OFFSET` /
+    a `WHERE` cursor in the SQL itself); the response shape matches
+    `datastore_search` so existing clients can reuse the same parser.
+
+    Validation also extracts table names and function names from the SQL
+    (via sqlglot) and exposes them as `resource_ids` / `function_names`
+    so the endpoint can authorize per-resource and gate functions against
+    the allow-list — both without re-parsing. Table names in CKAN's
+    datastore map 1:1 to resource_ids, hence the field name.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sql: str
+
+    # Set by `_extract_sql_references` after sql validates. Private so
+    # they're not user-settable from the URL and don't show in OpenAPI;
+    # the read-only properties below give callers a clean attribute.
+    _resource_ids: list[str] = PrivateAttr(default_factory=list)
+    _function_names: list[str] = PrivateAttr(default_factory=list)
+
+    @property
+    def resource_ids(self) -> list[str]:
+        """Table names referenced by the SQL — each authorized as a
+        CKAN resource_id."""
+        return self._resource_ids
+
+    @property
+    def function_names(self) -> list[str]:
+        """SQL function calls in the query, lowercased — checked
+        against `core.constants.ALLOWED_SQL_FUNCTIONS`."""
+        return self._function_names
+
+    @field_validator("sql")
+    @classmethod
+    def _check_sql_is_select(cls, v: str) -> str:
+        """Reject anything that isn't a single SELECT / WITH statement
+        AND fails to parse as valid SQL.
+
+        Two checks, both client-side fail-fast:
+          - regex SELECT / WITH lead + no semicolons (cheap, friendly errors)
+          - sqlglot parse (catches malformed SQL — `SELECT FROM`, stray
+            tokens, etc.). `_extract_sql_references` re-parses to extract
+            tables + functions; the doubled parse cost is negligible
+            (microseconds) and keeps the error attached to the `sql`
+            field instead of `(root)`.
+
+        Real safety still lives at the engine layer — `mode="ro"` selects
+        credentials with only SELECT privileges, so even if this check is
+        bypassed the database refuses the write.
+        """
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("sql must not be empty")
+
+        head = _SQL_COMMENT_RE.sub("", stripped).strip()
+        if not _SQL_LEAD_RE.match(head):
+            raise ValueError(
+                "only SELECT / WITH statements are allowed"
+            )
+
+        cleaned = stripped.rstrip(";").rstrip()
+        if ";" in cleaned:
+            raise ValueError(
+                "multiple statements are not allowed "
+                "(strip all `;` except an optional trailing one)"
+            )
+        parse_sql_references(v)
+        return v
+
+    @model_validator(mode="after")
+    def _extract_sql_references(self) -> DatastoreSearchSQLRequest:
+        """Parse `sql` via sqlglot and stash table + function names.
+
+        Runs after `_check_sql_is_select`, so we know we have a single
+        SELECT / WITH. CTE aliases are excluded from `_resource_ids`
+        (they're defined inline, not external tables).
+        """
+        self._resource_ids, self._function_names = parse_sql_references(self.sql)
+        return self
 

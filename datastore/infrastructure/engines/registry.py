@@ -7,6 +7,9 @@ lifecycle, this module just decides which class to construct.
 
 from __future__ import annotations
 
+import functools
+import importlib
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from datastore.infrastructure.engines.base import DatastoreBackend
@@ -15,6 +18,47 @@ if TYPE_CHECKING:  # type-only — no runtime import from api/
     from datastore.api.context import RequestContext
 
 Mode = Literal["rw", "ro"]
+
+_ENGINES_DIR = Path(__file__).parent
+
+
+@functools.lru_cache(maxsize=8)
+def get_allowed_sql_functions(
+    engine: str, *, override_path: str | None = None
+) -> frozenset[str]:
+    """Per-engine `datastore_search_sql` function allow-list.
+
+    Default path: `<engine>/allowed_functions.txt` inside this directory
+    (each engine ships its own list). `override_path` (typically from
+    `Config.SQL_FUNCTIONS_ALLOW_FILE`) replaces that — useful for ops to
+    tighten or loosen the list per deployment without code changes.
+
+    `override_path` is `str` so pydantic-settings can deserialize the
+    env var without forward-ref issues across pydantic versions; we
+    convert to `Path` here.
+
+    File format: one function name per line; lines starting with `#` and
+    blank lines are ignored. Names are lower-cased to match the output
+    of `parse_sql_references`.
+
+    Returns an empty frozenset if no file exists at the resolved path —
+    callers should still rely on per-table auth + read-only credentials
+    as the load-bearing safety layer.
+
+    Cached per (engine, override_path) pair so file I/O happens once.
+    """
+    path = Path(override_path) if override_path else (
+        _ENGINES_DIR / engine / "allowed_functions.txt"
+    )
+    if not path.exists():
+        return frozenset()
+
+    names: set[str] = set()
+    for raw in path.read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            names.add(line.lower())
+    return frozenset(names)
 
 
 def get_datastore_engine(
@@ -38,12 +82,26 @@ def get_datastore_engine(
     can reach the per-request handles (config, the bound CKAN client)
     without re-resolving them. The factory itself only reads
     `context.config.DATASTORE_ENGINE` to pick a class.
+
+    Dispatch is dynamic: it imports `datastore.infrastructure.engines.<name>`
+    and uses the package's exported `BigQueryBackend` (legacy name kept
+    across engines for convention). Adding a new engine = drop in a new
+    package; no edit here required. Engines that exist locally but are
+    gitignored (e.g. a test variant) work the same way.
     """
     engine = context.config.DATASTORE_ENGINE
+    try:
+        module = importlib.import_module(
+            f"datastore.infrastructure.engines.{engine}"
+        )
+    except ImportError as e:
+        raise NotImplementedError(
+            f"engine package not available: {engine!r}"
+        ) from e
 
-    if engine == "bigquery":
-        from datastore.infrastructure.engines.bigquery import BigQueryBackend
-        return BigQueryBackend(context=context, mode=mode)
-    if engine == "ducklake":
-        raise NotImplementedError("DuckLake backend is not implemented yet")
-    raise ValueError(f"Unknown DATASTORE_ENGINE: {engine!r}")
+    backend_cls = getattr(module, "BigQueryBackend", None)
+    if backend_cls is None:
+        raise NotImplementedError(
+            f"engine {engine!r} has no `BigQueryBackend` export"
+        )
+    return backend_cls(context=context, mode=mode)

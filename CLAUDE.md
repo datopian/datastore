@@ -165,15 +165,21 @@ datastore-api/
 │       │                             # RedisCache (TTL-based)
 │       ├── ckan_client.py            # CKANClient — httpx async wrapper around
 │       │                             # CKAN /api/3/action; bind(api_key) per request
-│       └── engines/
+│       └── engines/                  # One subpackage per backend.
 │           ├── __init__.py           # Re-exports get_datastore_engine, Mode
 │           ├── base.py               # DatastoreBackend ABC +
 │           │                         # SearchResult / WriteResult dataclasses
-│           ├── registry.py           # get_datastore_engine(context, *, mode)
-│           │                         # factory; reads context.config.DATASTORE_ENGINE
-│           ├── bigquery.py           # google-cloud-bigquery adapter (placeholder)
-│           └── ducklake.py           # DuckLake adapter (planned, not yet implemented)
-│
+│           ├── registry.py           # get_datastore_engine + get_allowed_sql_functions;
+│           │                         # dynamic `importlib` dispatch keyed on
+│           │                         # context.config.DATASTORE_ENGINE
+│           ├──bigquery/             # Engine package (one folder per backend).
+│           |    ├── __init__.py       # Re-exports `BigQueryBackend`
+│           |    ├── backend.py        # google-cloud-bigquery adapter (placeholder)
+│           |    ├── lib.py            # Backend-specific helpers (optional)
+│           |    └── allowed_functions.txt   # Per-engine datastore_search_sql
+│           |                                  # function allow-list — one name per
+│           |                                  # line, `#` comments allowed.
+│           └── ducklake/             # Future planned engine
 └── tests/
     ├── __init__.py
     ├── conftest.py                   # FakeCKAN, InMemoryCache, TestClient fixture;
@@ -181,6 +187,16 @@ datastore-api/
     ├── test_datastore_create.py      # End-to-end HTTP suite (TestClient)
     └── test_write_service.py         # Service-level units with a fake context
 ```
+
+**Adding a new engine** — drop a sibling folder with the same four files
+(`__init__.py` re-exports `BigQueryBackend`; `backend.py` is the
+`DatastoreBackend` subclass; `lib.py` is optional helpers;
+`allowed_functions.txt` lists allowed SQL functions). No edit to
+`registry.py` or `config.py` is required — `DATASTORE_ENGINE` validates
+against the set of engine subdirectories that exist at startup, and the
+factory dispatches via `importlib.import_module`. The `ducklake.py`
+adapter from the original plan will live at
+`infrastructure/engines/ducklake/` when it lands.
 
 `scripts/` and `docs/` are intentionally absent today. Add them when there's a concrete need
 (seed scripts, operational runbooks). Until then the README + this file are the docs.
@@ -277,7 +293,7 @@ flowchart LR
     Auth -->|cache miss| CKANSvc["CKAN\n/api/3/action/datastore_authorize"]
     Routes --> Svc["services/\nwrite.py (read.py pending)"]
     Svc --> Eng["infrastructure/engines/\nregistry.get_datastore_engine"]
-    Eng --> BQ["bigquery.py (placeholder)"]
+    Eng --> BQ["bigquery/backend.py (placeholder)"]
     Eng --> DL[("ducklake.py (planned)")]
     Routes --> Resp["api/responses.py\n_success_response / _error_response"]
     Resp --> Schema["schemas/responses.py\nResponseModel + Result"]
@@ -790,7 +806,7 @@ The original phase plan that used to live here has mostly shipped. This section 
 - [x] **Auth gate** — `context.auth.authorize(resource_id=…, package_id=…)` in [datastore/api/auth.py](datastore/api/auth.py); calls CKAN `datastore_authorize` on cache miss. Cache uses the `CachePort` Protocol so `InMemoryCache` and `RedisCache` are interchangeable based on `REDIS_URL`. TTL is `AUTH_CACHE_TTL`. The raw api_key never reaches the cache — it's hashed via `_key_id` (JWT `jti` or sha256 prefix).
 - [x] **Request context** — `RequestContext` + `AuthContext` + `ContextDep` in [datastore/api/context.py](datastore/api/context.py). The CKAN client is bound to the caller's `api_key` once per request via `ckan.bind(api_key)`.
 - [x] **Service layer** — [datastore/services/write.py](datastore/services/write.py)'s `create_datastore` orchestrates the new-vs-existing-resource flow, calls CKAN `resource_create` when the resource has no `id`, and hands off to the storage engine.
-- [x] **Engine abstraction** — `DatastoreBackend` ABC + `SearchResult` / `WriteResult` dataclasses in [base.py](datastore/infrastructure/engines/base.py). Factory in [registry.py](datastore/infrastructure/engines/registry.py) reads `context.config.DATASTORE_ENGINE`. `BigQueryBackend` placeholder in [bigquery.py](datastore/infrastructure/engines/bigquery.py).
+- [x] **Engine abstraction** — `DatastoreBackend` ABC + `SearchResult` / `WriteResult` dataclasses in [base.py](datastore/infrastructure/engines/base.py). Factory in [registry.py](datastore/infrastructure/engines/registry.py) dispatches dynamically via `importlib`; valid `DATASTORE_ENGINE` values are auto-discovered from `infrastructure/engines/*/` directories at process start. `BigQueryBackend` placeholder in [bigquery/backend.py](datastore/infrastructure/engines/bigquery/backend.py).
 - [x] **Tests** — end-to-end TestClient suite in [tests/test_datastore_create.py](tests/test_datastore_create.py); service-level units with a fake context in [tests/test_write_service.py](tests/test_write_service.py). CKAN pytest plugin disabled via `addopts = "-p no:ckan -p no:ckan_fixtures"` in `pyproject.toml`.
 
 ### Next
@@ -802,7 +818,7 @@ Rough priority order. Tick each box as the change set lands.
   - [ ] Add the response envelope to `schemas/responses.py` (subclass `ResponseModel`, define inner `Result`).
   - [ ] Add the service function in `services/{read,write}.py` returning the inner `Result` model.
   - [ ] Replace the `HTTPException(501)` in `endpoints/datastore.py` with the real handler + `response_model=...`.
-- [ ] **Real BigQuery backend.** Replace the stub in `infrastructure/engines/bigquery.py`. Initialise `bigquery.Client(project=BQ_PROJECT)` once in the lifespan; store `unique_key` + per-field `info` in the table description (JSON, 16 KB cap); implement parameterised `search` / `upsert` (MERGE) / `delete` (DML) / `search_sql` / `info` / `healthcheck`. Type map per §6.1.
+- [ ] **Real BigQuery backend.** Replace the stub in `infrastructure/engines/bigquery/backend.py`. Initialise `bigquery.Client(project=BQ_PROJECT)` once in the lifespan; store `unique_key` + per-field `info` in the table description (JSON, 16 KB cap); implement parameterised `search` / `upsert` (MERGE) / `delete` (DML) / `search_sql` / `info` / `healthcheck`. Type map per §6.1.
 - [ ] **Streaming search.** Once `datastore_search` is wired, add `stream_search` / `stream_csv` / `stream_tsv` helpers in `api/responses.py`. Engines must return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`. The route returns `StreamingResponse` with `media_type` chosen by `records_format`. Target: peak memory ≈ 1 row regardless of result size.
 - [ ] **Real `/ready` healthcheck.** Construct read/write engine instances in the lifespan (the current placeholder doesn't open a connection). Stash on `app.state`. `/ready` calls `engine.healthcheck()` for both and returns 503 if either fails. `terminationGracePeriodSeconds: 30` in the k8s manifest so streams drain.
 - [ ] **DuckLake backend.** Second concrete engine implementing the same ABC. Single-replica `StatefulSet` + `PersistentVolumeClaim` in k8s. Local mode reads `DUCKDB_PATH`; DuckLake mode reads a catalog URL.

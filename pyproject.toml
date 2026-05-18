@@ -19,6 +19,7 @@ dependencies = [
     "frictionless>=5.18",
     "uvloop>=0.21",
     "httptools>=0.6",
+    "sqlglot>=25.0",
 ]
 
 [project.optional-dependencies]

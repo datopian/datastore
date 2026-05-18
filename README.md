@@ -39,19 +39,34 @@ datastore/
 │   ├── responses.py              # Outbound CKAN envelopes (ResponseModel + per-endpoint)
 │   └── validators.py             # Reusable Annotated types + field validators
 │
-├── services/                     # Business logic 
+├── services/                     # Business logic
 │   ├── write.py                  # create / upsert / delete orchestration
-│   └── read.py                   # placeholder for search / search_sql / info
+│   ├── read.py                   # search / search_sql orchestration (engine call,
+│   │                             # format dispatch, pagination links)
+│   └── streaming.py              # per-format byte-yielding writers used by read.py
 │
 └── infrastructure/               # Adapters to outside systems
     ├── cache.py                  # InMemoryCache + RedisCache (CachePort protocol)
     ├── ckan_client.py            # CKAN action API client (httpx-backed)
-    └── engines/                  # Storage backends
+    └── engines/                  # Storage backends — one subpackage per engine
         ├── base.py               # DatastoreBackend ABC + result dataclasses
-        ├── registry.py           # get_datastore_engine factory (picks backend by config)
-        ├── bigquery.py           # BigQuery adapter
-        └── ducklake.py           # DuckLake adapter (planned, not yet implemented)
+        ├── registry.py           # get_datastore_engine + get_allowed_sql_functions;
+        │                         # dynamic importlib dispatch keyed on
+        │                         # context.config.DATASTORE_ENGINE
+        ├──bigquery/             # Engine package (one folder per backend).
+        |    ├── __init__.py       # Re-exports `BigQueryBackend`
+        |    ├── backend.py        # google-cloud-bigquery adapter (placeholder)
+        |    ├── lib.py            # Backend-specific helpers (optional)
+        |    └── allowed_functions.txt   # Per-engine datastore_search_sql
+        |                                  # function allow-list — one name per
+        |                                  # line, `#` comments allowed.
+        └── ducklake/             # Future planned engine
 ```
+
+To add a new engine (e.g. `ducklake`), drop a sibling folder with the
+same four files. `DATASTORE_ENGINE` is validated against the set of
+engine subdirectories that exist at process start, and the factory
+dispatches via `importlib` — no `registry.py` / `config.py` edits.
 
 ## Roadmap
 
@@ -74,7 +89,7 @@ What's shipped and what's next. Tick each box as the change set lands.
 ### Next
 
 - [ ] Wire the remaining datastore endpoints (`upsert`, `delete`, `search`, `search_sql`, `info`)
-- [ ] Real BigQuery backend (replace the placeholder in `infrastructure/engines/bigquery.py`)
+- [ ] Real BigQuery backend (replace the placeholder in `infrastructure/engines/bigquery/backend.py`)
 - [ ] Streaming search responses (JSON / CSV / TSV; ≈ 1-row peak memory)
 - [ ] Real `/ready` healthcheck — wire engine instances through the lifespan
 - [ ] DuckLake backend (second concrete engine implementing the same ABC)
@@ -136,7 +151,8 @@ Every entry below maps 1:1 to a field on `datastore.core.config.Config`. See [.e
 |---|---|---|
 | `APP_MESSAGE` | `"Datastore API"` | Banner returned by `GET /` |
 | `MAX_REQUEST_BODY_MB` | `50` | Reject request bodies larger than this (MB) |
-| `DATASTORE_ENGINE` | `bigquery` | Storage backend: `bigquery` or `ducklake` |
+| `DATASTORE_ENGINE` | `bigquery` | Storage backend — must match a folder under `infrastructure/engines/`; validated at startup |
+| `SQL_FUNCTIONS_ALLOW_FILE` | _(empty)_ | Override path to the `datastore_search_sql` function allow-list; defaults to `<engine>/allowed_functions.txt` |
 | `BQ_PROJECT` | _(empty)_ | Google Cloud project ID for the BigQuery backend |
 | `REDIS_URL` | _(empty)_ | Redis URL for cache; empty → in-process `InMemoryCache` |
 | `CKAN_URL` | _(empty)_ | Base URL of the CKAN instance (required when `AUTH_ENABLED=true`) |

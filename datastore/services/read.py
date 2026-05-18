@@ -4,7 +4,9 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from datastore.core.exceptions import ValidationError
 from datastore.infrastructure.engines import get_datastore_engine
+from datastore.infrastructure.engines.registry import get_allowed_sql_functions
 from datastore.schemas.validators import (
     to_csv_list,
     to_json_object,
@@ -83,6 +85,59 @@ async def search_datastore(
     )
 
     return _WRITERS[data_dict["records_format"]](**envelope_kwargs)
+
+
+_SQL_DEFAULT_LIMIT = 32000
+
+
+async def search_sql_datastore(
+    context: RequestContext,
+    data_dict: dict[str, Any],
+    *,
+    request_url: str,
+) -> Iterator[bytes]:
+    """Run a raw SQL SELECT and stream the result.
+
+    Reuses the `datastore_search` writer + envelope so the response shape
+    is identical to `datastore_search`. Pagination is the caller's job
+    (edit the SQL); the envelope's `_links` / `limit` / `offset` /
+    `resource_id` fields are kept for shape parity, with no-op defaults.
+
+    `data_dict` carries `{"sql": ..., "function_names": [...]}`. The
+    endpoint already handles per-table CKAN authorize (using the schema's
+    `resource_ids`); this layer handles the engine-specific function
+    allow-list — `mode="ro"` selects read-only credentials so writes
+    can't happen even if a function slips through.
+    """
+    allowed = get_allowed_sql_functions(
+        context.config.DATASTORE_ENGINE,
+        override_path=context.config.SQL_FUNCTIONS_ALLOW_FILE,
+    )
+    disallowed = sorted(set(data_dict.get("function_names", [])) - allowed)
+    
+    if disallowed:
+        raise ValidationError(
+            f"sql uses disallowed function(s): {', '.join(disallowed)}",
+            fields={"sql": [f"disallowed: {', '.join(disallowed)}"]},
+        )
+
+    engine = get_datastore_engine(context, mode="ro")
+    result = engine.search_sql(
+        sql=data_dict["sql"], limit=_SQL_DEFAULT_LIMIT
+    )
+    return stream_objects(
+        help_url=request_url,
+        resource_id="",
+        fields=result.fields,
+        records=result.records,
+        limit=_SQL_DEFAULT_LIMIT,
+        offset=0,
+        total=None,
+        include_total=False,
+        links=_build_pagination_links(
+            request_url, limit=_SQL_DEFAULT_LIMIT, offset=0
+        ),
+    )
 
 
 def _build_pagination_links(

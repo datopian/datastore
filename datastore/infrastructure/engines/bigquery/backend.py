@@ -103,8 +103,18 @@ class BigQueryBackend(DatastoreBackend):
         )
 
     def search_sql(self, sql: str, limit: int) -> SearchResult:
-        """Execute raw SQL SELECT. Returns SearchResult with lazy row iterator."""
-        {}
+        """Execute raw SQL SELECT. Returns SearchResult with lazy row iterator.
+
+        Placeholder: returns an empty result set. Real impl will call
+        `client.query(sql, job_config=…)` and yield tuples from
+        `query_job.result()` page-by-page, setting `records_truncated=True`
+        if the iterator hit `limit`.
+        """
+        return SearchResult(
+            fields=[],
+            records=iter([]),
+            records_truncated=False,
+        )
 
     def delete(self, resource_id: str, filters: dict | None) -> WriteResult:
         """Delete records (filtered) or drop table (no filters)."""

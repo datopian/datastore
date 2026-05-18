@@ -1,0 +1,122 @@
+# Functions callable from `GET /api/3/datastore_search_sql` when
+# DATASTORE_ENGINE=bigquery. One function name per line; lines starting
+# with `#` and blank lines are ignored. Names are lower-cased to match
+# `parse_sql_references` output.
+#
+# Real safety still belongs at the engine credential layer — `mode="ro"`
+# selects read-only BigQuery credentials, so even a bypass can't write.
+
+# aggregates
+count
+sum
+avg
+min
+max
+stddev
+stddev_pop
+stddev_samp
+variance
+var_pop
+var_samp
+array_agg
+string_agg
+group_concat
+
+# string
+upper
+lower
+trim
+ltrim
+rtrim
+length
+char_length
+octet_length
+substring
+substr
+left
+right
+concat
+concat_ws
+replace
+split
+split_part
+starts_with
+ends_with
+contains
+regexp_replace
+regexp_extract
+regexp_contains
+lpad
+rpad
+reverse
+initcap
+to_char
+
+# conditional / comparison
+coalesce
+nullif
+greatest
+least
+ifnull
+if
+
+# math
+abs
+round
+ceil
+ceiling
+floor
+mod
+sign
+sqrt
+power
+pow
+ln
+log
+log10
+exp
+trunc
+div
+
+# date / time
+now
+current_date
+current_timestamp
+current_datetime
+current_time
+date
+datetime
+timestamp
+time
+extract
+date_part
+date_trunc
+timestamp_trunc
+datetime_trunc
+date_add
+date_sub
+date_diff
+timestamp_add
+timestamp_sub
+timestamp_diff
+format_date
+format_timestamp
+format_datetime
+parse_date
+parse_timestamp
+parse_datetime
+age
+
+# type
+cast
+safe_cast
+to_timestamp
+to_date
+to_number
+
+# json
+format
+to_json
+from_json
+json_extract
+json_value

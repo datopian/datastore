@@ -89,6 +89,66 @@ def to_csv_list(value: Any) -> list[str] | None:
     raise ValueError("must be a comma-separated string or list of strings")
 
 
+def parse_sql_references(
+    sql: str, *, dialect: str = "postgres"
+) -> tuple[list[str], list[str]]:
+    """Parse `sql` and return (table_names, function_names).
+
+    Used by `datastore_search_sql` to:
+      - authorize every referenced table (each table name maps to a CKAN
+        resource_id),
+      - check every called function against the allow-list in
+        `core.constants.ALLOWED_SQL_FUNCTIONS`.
+
+    Names are deduplicated, lower-cased, and sorted. Function names are
+    taken from the dialect-rendered form so that, e.g., `DATE_TRUNC` stays
+    `date_trunc` (sqlglot's internal AST key would normalise it to
+    `timestamptrunc`, which wouldn't match a human-readable allow-list).
+    `CASE WHEN` / `CAST` / similar syntactic constructs are filtered out:
+    they parse as `exp.Func` subclasses but their rendered head contains
+    whitespace, not a function identifier.
+
+    Raises `ValueError` if sqlglot can't parse the SQL — the schema's
+    SELECT-only regex check runs first, so we should only reach here with
+    a parseable statement.
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    try:
+        tree = sqlglot.parse_one(sql, dialect=dialect)
+    except Exception as e:
+        raise ValueError(f"could not parse SQL: {e}") from e
+
+    # CTE aliases (e.g. `WITH t AS (...) SELECT * FROM t`) parse as
+    # `exp.Table` nodes even though they're defined inline — exclude them
+    # so auth isn't called for non-external table refs.
+    cte_aliases = {
+        cte.alias_or_name
+        for cte in tree.find_all(exp.CTE)
+        if cte.alias_or_name
+    }
+    tables = {
+        t.name for t in tree.find_all(exp.Table)
+        if t.name and t.name not in cte_aliases
+    }
+
+    functions: set[str] = set()
+    for f in tree.find_all(exp.Func):
+        if isinstance(f, exp.Anonymous):
+            if f.name:
+                functions.add(f.name.lower())
+            continue
+        head = f.sql(dialect=dialect).split("(", 1)[0].strip()
+        # Skip syntactic constructs (`CASE WHEN ... END`, etc.) — they
+        # parse as Func subclasses but the head isn't a function name.
+        if not head or " " in head:
+            continue
+        functions.add(head.lower())
+
+    return sorted(tables), sorted(functions)
+
+
 # --- reusable Annotated types ------------------------------------------------
 # The parser functions above (`to_json_object`, `to_str_or_json_object`,
 # `to_csv_list`) are invoked directly at the service boundary; they don't

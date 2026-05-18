@@ -11,6 +11,7 @@ from datastore.api.responses import ORJSONResponse, _success_response
 from datastore.schemas.request import (
     DatastoreCreateRequest,
     DatastoreSearchRequest,
+    DatastoreSearchSQLRequest,
     DatastoreUpsertRequest,
 )
 from datastore.schemas.responses import (
@@ -18,7 +19,7 @@ from datastore.schemas.responses import (
     DatastoreSearchResponse,
     DatastoreUpsertResponse,
 )
-from datastore.services.read import search_datastore
+from datastore.services.read import search_datastore, search_sql_datastore
 from datastore.services.write import create_datastore, upsert_datastore
 
 router = APIRouter(tags=["datastore"])
@@ -105,9 +106,28 @@ async def datastore_search(
     return StreamingResponse(body_iter, media_type="application/json")
 
 
-@router.get("/datastore_search_sql")
-def datastore_search_sql() -> ORJSONResponse:
-    raise HTTPException(status_code=501, detail="datastore_search_sql is not implemented")
+@router.get("/datastore_search_sql", response_model=DatastoreSearchResponse)
+async def datastore_search_sql(
+    request: Request,
+    context: Context,
+    params: Annotated[DatastoreSearchSQLRequest, Query()],
+):
+    """`GET /api/3/datastore_search_sql` — execute a raw SQL SELECT and stream.
+    Accepts a single `sql` query parameter; 
+    """
+    for resource_id in params.resource_ids:
+        await context.auth.authorize(
+            resource_id=resource_id, permission="read"
+        )
+
+    data_dict = params.model_dump() | {
+        "function_names": params.function_names,
+    }
+    
+    body_iter = await search_sql_datastore(
+        context, data_dict, request_url=str(request.url)
+    )
+    return StreamingResponse(body_iter, media_type="application/json")
 
 
 @router.get("/datastore_info")
