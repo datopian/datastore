@@ -75,26 +75,25 @@ What's shipped and what's next. Tick each box as the change set lands.
 ### Done
 
 - [x] Foundation (app factory, lifespan, middleware, Dockerfile, Makefile, env config)
-- [x] CKAN API surface mounted at `/api/3/action/datastore_*` (`datastore_create` live; 5 others return 501)
+- [x] All six `datastore_*` actions wired end-to-end:
+  - `datastore_create`, `datastore_upsert`, `datastore_delete`
+  - `datastore_search` (streaming JSON / CSV / TSV; CKAN `_links` pagination)
+  - `datastore_search_sql` (sqlglot parses tables + functions; per-table
+    CKAN authorize; per-engine function allow-list)
+  - `datastore_info` (column schema + free-form `meta` dict)
 - [x] Health endpoints `/`, `/health`, `/ready` returning the CKAN envelope shape
-- [x] Strict request validation (`DatastoreCreateRequest` + `FieldSpec`)
-- [x] CKAN error envelope mapping (`APIError` taxonomy + handlers)
+- [x] Strict request validation (Pydantic) + structured error envelopes
 - [x] CKAN auth gate with TTL cache (InMemory by default; Redis when `REDIS_URL` is set)
 - [x] Request context bundle (`RequestContext` / `ContextDep` / bound `CKANClient`)
-- [x] Service-layer separation (`create_datastore`)
-- [x] Engine abstraction + factory (`DatastoreBackend` ABC + `registry.py`)
-- [x] Pydantic response models with nested `Result` per endpoint
-- [x] End-to-end TestClient suite + service-level unit tests
+- [x] Service / engine / streaming layer separation
 
 ### Next
 
-- [ ] Wire the remaining datastore endpoints (`upsert`, `delete`, `search`, `search_sql`, `info`)
 - [ ] Real BigQuery backend (replace the placeholder in `infrastructure/engines/bigquery/backend.py`)
-- [ ] Streaming search responses (JSON / CSV / TSV; ≈ 1-row peak memory)
-- [ ] Real `/ready` healthcheck — wire engine instances through the lifespan
-- [ ] DuckLake backend (second concrete engine implementing the same ABC)
+- [ ] Real `/ready` healthcheck — call each engine's `healthcheck()` through the lifespan
+- [ ] DuckLake backend (second concrete engine — same ABC, drop-in folder)
 - [ ] Observability — JSON structured logs + request-id middleware
-- [ ] Opt-in query-result cache (deferred until BigQuery + streaming land)
+- [ ] Opt-in query-result cache (deferred until BigQuery lands)
 
 
 ## CKAN-side requirement

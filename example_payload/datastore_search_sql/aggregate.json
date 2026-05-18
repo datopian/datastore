@@ -1,0 +1,3 @@
+{
+  "sql": "SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price, SUM(volume_mwh) AS total_volume FROM \"424ff992-17ff-4900-9ba4-c9450fff95ca\" WHERE accepted = true GROUP BY product_code ORDER BY product_code"
+}

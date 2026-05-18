@@ -118,8 +118,7 @@ datastore-api/
 │   │   └── endpoints/                # One module per resource group
 │   │       ├── __init__.py
 │   │       ├── health.py             # /, /health, /ready (CKAN-shaped envelopes)
-│   │       └── datastore.py          # /api/3/action/datastore_* (6 routes;
-│   │                                 # 1 implemented, 5 return HTTP 501)
+│   │       └── datastore.py          # /api/3/action/datastore_*
 │   │
 │   │ ── 2. CORE (cross-cutting, framework-agnostic) ──────
 │   ├── core/
@@ -153,10 +152,13 @@ datastore-api/
 │   │   ├── __init__.py               # shape result. Inputs: plain types or
 │   │   ├── write.py                  # validated schemas. Outputs: typed response
 │   │   │                             # models. No FastAPI, no raw SQL.
-│   │   │                             #   write.py – create_datastore (real;
-│   │   │                             #              upsert/delete pending)
-│   │   └── read.py                   #   read.py  – placeholder (search /
-│   │                                 #              search_sql / info pending)
+│   │   │                             #   write.py     – create / upsert / delete
+│   │   ├── read.py                   #   read.py      – search / search_sql / info
+│   │   │                             #                  (engine call, format
+│   │   │                             #                  dispatch, pagination links,
+│   │   │                             #                  function allow-list)
+│   │   └── streaming.py              #   streaming.py – byte-yielding writers
+│   │                                 #                  (objects/lists/csv/tsv)
 │   │
 │   │ ── 5. INFRASTRUCTURE (adapters to the outside world) ─
 │   └── infrastructure/
@@ -291,7 +293,7 @@ flowchart LR
     Routes --> Auth["api/auth.py\nauthorize (TTL cache)"]
     Auth -->|cache hit/miss| Cache[("infrastructure/cache.py\nInMemory or Redis")]
     Auth -->|cache miss| CKANSvc["CKAN\n/api/3/action/datastore_authorize"]
-    Routes --> Svc["services/\nwrite.py (read.py pending)"]
+    Routes --> Svc["services/\nwrite.py + read.py + streaming.py"]
     Svc --> Eng["infrastructure/engines/\nregistry.get_datastore_engine"]
     Eng --> BQ["bigquery/backend.py (placeholder)"]
     Eng --> DL[("ducklake.py (planned)")]
@@ -364,13 +366,13 @@ Each endpoint takes a single `ContextDep`. The handler calls `context.auth.autho
 | Method | Path | Status | Body / Params | Response model |
 |---|---|---|---|---|
 | POST | `/api/3/action/datastore_create` | **implemented** | `DatastoreCreateRequest` | `DatastoreCreateResponse` |
-| POST | `/api/3/action/datastore_upsert` | _501 stub_ | `DatastoreUpsertRequest` (TBD) | `DatastoreUpsertResponse` (TBD) |
-| POST | `/api/3/action/datastore_delete` | _501 stub_ | `DatastoreDeleteRequest` (TBD) | `DatastoreDeleteResponse` (TBD) |
-| GET | `/api/3/action/datastore_search` | _501 stub_ | query params | streaming JSON / CSV / TSV (planned) |
-| GET | `/api/3/action/datastore_search_sql` | _501 stub_ | `sql`, `limit` | streaming JSON (planned) |
-| GET | `/api/3/action/datastore_info` | _501 stub_ | `resource_id` | `DatastoreInfoResponse` (TBD) |
+| POST | `/api/3/action/datastore_upsert` | **implemented** | `DatastoreUpsertRequest` | `DatastoreUpsertResponse` |
+| POST | `/api/3/action/datastore_delete` | **implemented** | `DatastoreDeleteRequest` | `DatastoreDeleteResponse` |
+| GET  | `/api/3/action/datastore_search` | **implemented** (streaming) | `DatastoreSearchRequest` | `DatastoreSearchResponse` |
+| GET  | `/api/3/action/datastore_search_sql` | **implemented** (streaming) | `DatastoreSearchSQLRequest` | `DatastoreSearchResponse` |
+| GET  | `/api/3/action/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
 
-Stub endpoints raise `HTTPException(status_code=501, …)`; the error handler in `api/error_handlers.py` converts that to a CKAN envelope with `__type: "Not Implemented"`.
+Engine business logic is still placeholder (returns empty results / echoes inputs); the call path, validation, auth, streaming and per-engine `datastore_search_sql` function allow-list are all live. The real BigQuery adapter is the remaining piece — see §7.
 
 ---
 
@@ -798,32 +800,28 @@ The original phase plan that used to live here has mostly shipped. This section 
 
 ### Done
 
-- [x] **Foundation** — `pyproject.toml`, `Dockerfile`, `Makefile`, `.env.example`, `docker-compose.yml`. App factory + lifespan in [datastore/main.py](datastore/main.py). Body-size middleware in [datastore/api/middleware.py](datastore/api/middleware.py).
-- [x] **CKAN API surface** — `/api/3/action/datastore_*` mounted via [datastore/api/routes.py](datastore/api/routes.py). `datastore_create` implemented end-to-end; the other five datastore actions return `HTTP 501` (mapped to CKAN envelope `__type: "Not Implemented"`). Health endpoints (`/`, `/health`, `/ready`) return the CKAN envelope shape.
-- [x] **Request validation** — `DatastoreCreateRequest` in [datastore/schemas/request.py](datastore/schemas/request.py) with strict `extra="forbid"`, exactly-one `resource_id` / `resource` invariant, and `FieldSpec` validators in [validators.py](datastore/schemas/validators.py). Pydantic errors → `RequestValidationError` → CKAN error envelope with a `fields` map.
-- [x] **Response models** — [datastore/schemas/responses.py](datastore/schemas/responses.py) defines `ResponseModel` (`help` + `success`) and per-endpoint envelopes with a nested `Result` class. Routes declare `response_model=...` for OpenAPI; services return the typed inner `Result`.
-- [x] **Error envelope** — handlers in [datastore/api/error_handlers.py](datastore/api/error_handlers.py); taxonomy in [datastore/core/exceptions.py](datastore/core/exceptions.py) (`ValidationError`, `AuthorizationError`, `NotFoundError`, `ConflictError`, `ServerError` + `HTTP_STATUS_TO_TYPE_LABEL`).
-- [x] **Auth gate** — `context.auth.authorize(resource_id=…, package_id=…)` in [datastore/api/auth.py](datastore/api/auth.py); calls CKAN `datastore_authorize` on cache miss. Cache uses the `CachePort` Protocol so `InMemoryCache` and `RedisCache` are interchangeable based on `REDIS_URL`. TTL is `AUTH_CACHE_TTL`. The raw api_key never reaches the cache — it's hashed via `_key_id` (JWT `jti` or sha256 prefix).
-- [x] **Request context** — `RequestContext` + `AuthContext` + `ContextDep` in [datastore/api/context.py](datastore/api/context.py). The CKAN client is bound to the caller's `api_key` once per request via `ckan.bind(api_key)`.
-- [x] **Service layer** — [datastore/services/write.py](datastore/services/write.py)'s `create_datastore` orchestrates the new-vs-existing-resource flow, calls CKAN `resource_create` when the resource has no `id`, and hands off to the storage engine.
-- [x] **Engine abstraction** — `DatastoreBackend` ABC + `SearchResult` / `WriteResult` dataclasses in [base.py](datastore/infrastructure/engines/base.py). Factory in [registry.py](datastore/infrastructure/engines/registry.py) dispatches dynamically via `importlib`; valid `DATASTORE_ENGINE` values are auto-discovered from `infrastructure/engines/*/` directories at process start. `BigQueryBackend` placeholder in [bigquery/backend.py](datastore/infrastructure/engines/bigquery/backend.py).
-- [x] **Tests** — end-to-end TestClient suite in [tests/test_datastore_create.py](tests/test_datastore_create.py); service-level units with a fake context in [tests/test_write_service.py](tests/test_write_service.py). CKAN pytest plugin disabled via `addopts = "-p no:ckan -p no:ckan_fixtures"` in `pyproject.toml`.
+- [x] **Foundation** — `pyproject.toml`, `Dockerfile`, `Makefile`, `.env.example`, `docker-compose.yml`. App factory + lifespan in [datastore/main.py](datastore/main.py); body-size middleware in [datastore/api/middleware.py](datastore/api/middleware.py); startup log line via `uvicorn.error` showing the active engine + auth/cache/allow-file toggles.
+- [x] **All six `datastore_*` actions wired** — `create`, `upsert`, `delete`, `search`, `search_sql`, `info` mounted via [datastore/api/routes.py](datastore/api/routes.py). Every endpoint authorizes via CKAN `datastore_authorize` and delegates to a service. Engine business logic is still placeholder; the call path, validation, auth, streaming and per-engine `datastore_search_sql` allow-list are all live. Health endpoints (`/`, `/health`, `/ready`) return the CKAN envelope shape.
+- [x] **Streaming search** — [datastore/services/streaming.py](datastore/services/streaming.py) yields the CKAN envelope chunk-by-chunk for all four `records_format` values (`objects`, `lists`, `csv`, `tsv`); CSV/TSV ride the same JSON envelope (records is a multi-line string). Peak memory ≈ 1 row regardless of N. `_links.start` / `_links.next` carry full scheme + host with all non-`offset` params preserved.
+- [x] **`datastore_search_sql` SQL safety** — schema rejects non-SELECT / multi-statement / unparseable SQL (sqlglot). [datastore/schemas/validators.py](datastore/schemas/validators.py)'s `parse_sql_references` pulls table + function names; endpoint authorizes each table as a CKAN `resource_id`; service rejects functions outside the engine's allow-list at `engines/<name>/allowed_functions.txt` (overridable via `SQL_FUNCTIONS_ALLOW_FILE`).
+- [x] **Request validation** — Pydantic models in [datastore/schemas/request.py](datastore/schemas/request.py) with `extra="forbid"`. `datastore_info` / `datastore_delete` accept `resource_id` or `id` (normalised). Pydantic errors → CKAN error envelope with a `fields` map.
+- [x] **Response models** — [datastore/schemas/responses.py](datastore/schemas/responses.py) — one envelope per endpoint with a nested `Result` class. Routes declare `response_model=...` for OpenAPI; services return the typed inner `Result`.
+- [x] **Error envelope** — handlers in [datastore/api/error_handlers.py](datastore/api/error_handlers.py); taxonomy in [datastore/core/exceptions.py](datastore/core/exceptions.py).
+- [x] **Auth gate** — `context.auth.authorize(...)` in [datastore/api/auth.py](datastore/api/auth.py); TTL-cached via `CachePort` (`InMemoryCache` or `RedisCache`). Raw `api_key` never enters the cache — hashed via `_key_id`.
+- [x] **Request context** — `RequestContext` + `AuthContext` + `ContextDep` in [datastore/api/context.py](datastore/api/context.py); CKAN client bound to the caller's `api_key` per request.
+- [x] **Engine packages** — `DatastoreBackend` ABC + `SearchResult` / `WriteResult` / `InfoResult` in [base.py](datastore/infrastructure/engines/base.py). Each engine is a subpackage at `engines/<name>/` containing `__init__.py`, `backend.py`, optional `lib.py`, and `allowed_functions.txt`. `DATASTORE_ENGINE` is validated against the set of engine directories on disk at startup; [registry.py](datastore/infrastructure/engines/registry.py) dispatches via `importlib`. Adding a new engine = drop a folder; no registry / config edit.
+- [x] **Tests** — ~125 tests across endpoint-level (TestClient) and service-level (direct, no HTTP). CKAN pytest plugin disabled via `addopts` in `pyproject.toml`.
 
 ### Next
 
 Rough priority order. Tick each box as the change set lands.
 
-- [ ] **Wire the remaining datastore endpoints.** For each of `datastore_upsert`, `datastore_delete`, `datastore_search`, `datastore_search_sql`, `datastore_info`:
-  - [ ] Add the request schema to `schemas/request.py` (or a query-param dataclass for GETs).
-  - [ ] Add the response envelope to `schemas/responses.py` (subclass `ResponseModel`, define inner `Result`).
-  - [ ] Add the service function in `services/{read,write}.py` returning the inner `Result` model.
-  - [ ] Replace the `HTTPException(501)` in `endpoints/datastore.py` with the real handler + `response_model=...`.
 - [ ] **Real BigQuery backend.** Replace the stub in `infrastructure/engines/bigquery/backend.py`. Initialise `bigquery.Client(project=BQ_PROJECT)` once in the lifespan; store `unique_key` + per-field `info` in the table description (JSON, 16 KB cap); implement parameterised `search` / `upsert` (MERGE) / `delete` (DML) / `search_sql` / `info` / `healthcheck`. Type map per §6.1.
-- [ ] **Streaming search.** Once `datastore_search` is wired, add `stream_search` / `stream_csv` / `stream_tsv` helpers in `api/responses.py`. Engines must return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`. The route returns `StreamingResponse` with `media_type` chosen by `records_format`. Target: peak memory ≈ 1 row regardless of result size.
 - [ ] **Real `/ready` healthcheck.** Construct read/write engine instances in the lifespan (the current placeholder doesn't open a connection). Stash on `app.state`. `/ready` calls `engine.healthcheck()` for both and returns 503 if either fails. `terminationGracePeriodSeconds: 30` in the k8s manifest so streams drain.
 - [ ] **DuckLake backend.** Second concrete engine implementing the same ABC. Single-replica `StatefulSet` + `PersistentVolumeClaim` in k8s. Local mode reads `DUCKDB_PATH`; DuckLake mode reads a catalog URL.
 - [ ] **Observability.** JSON structured logger in `core/logging.py`; per-request middleware in `api/middleware.py` injects a `request_id` and logs `method`, `path`, `status`, `duration_ms`. The `log.debug` lines already in `auth.py` and `error_handlers.py` light up under `LOG_LEVEL=DEBUG`.
-- [ ] **Opt-in query cache.** Auth decisions already cache via the existing `CachePort`. A separate query-result cache (small/hot SELECTs) was in the old plan but isn't on the critical path — defer until BigQuery + streaming land.
+- [ ] **Per-table SQL auth for `datastore_search_sql`** — today the endpoint authorizes table refs the schema extracts, but CKAN's `datastore_search_sql_authorize` is a separate action that takes the SQL string. Wire it through `context.ckan` when the real BigQuery adapter lands.
+- [ ] **Opt-in query cache.** Auth decisions already cache via the existing `CachePort`. A separate query-result cache (small/hot SELECTs) was in the old plan but isn't on the critical path — defer until BigQuery lands.
 
 ### Guardrails
 

@@ -16,6 +16,14 @@ example_payload/
 ├── datastore_create/
 │   ├── with_resource_id.json     # existing-resource flow
 │   └── with_resource.json        # new-resource flow (resource dict with package_id)
+├── datastore_upsert/
+│   ├── upsert.json               # default — corrects one row + adds a new one
+│   ├── insert.json               # method=insert; new rows only
+│   └── update.json               # method=update; patches existing rows by unique_key
+├── datastore_delete/
+│   ├── with_filters.json         # narrow delete by column values
+│   ├── whole_table.json          # no filters → drop the entire table
+│   └── force_readonly.json       # force=true to delete from a read-only resource
 ├── datastore_search/
 │   ├── basic.json                # minimal — just resource_id
 │   ├── with_filters.json         # narrow by column values (e.g. product_code, accepted)
@@ -23,10 +31,13 @@ example_payload/
 │   ├── paginated_sorted.json     # fields + sort + limit + offset + include_total
 │   └── response.json             # sample RESPONSE for paginated_sorted.json,
 │                                 # showing the CKAN envelope + `_links`
-└── datastore_upsert/
-    ├── upsert.json               # default — corrects one row + adds a new one
-    ├── insert.json               # method=insert; new rows only
-    └── update.json               # method=update; patches existing rows by unique_key
+├── datastore_search_sql/
+│   ├── basic.json                # SELECT with WHERE + LIMIT
+│   ├── aggregate.json            # GROUP BY + AVG / SUM
+│   └── with_cte.json             # WITH (CTE) + ORDER BY
+└── datastore_info/
+    ├── basic.json                # minimal — just resource_id
+    └── with_id_alias.json        # `id` alias accepted in place of resource_id
 ```
 
 ## How to add a new example
