@@ -4,6 +4,7 @@ from typing import Any
 
 from datastore.infrastructure.engines.base import (
     DatastoreBackend,
+    InfoResult,
     SearchResult,
     WriteResult,
 )
@@ -120,9 +121,19 @@ class BigQueryBackend(DatastoreBackend):
         """Delete records (filtered) or drop table (no filters)."""
         {}
 
-    def info(self, resource_id: str) -> dict:
-        """Return table metadata: fields with types, primary_key, row count."""
-        {}
+    def info(self, resource_id: str) -> InfoResult:
+        """Return table metadata: column schema + free-form `meta` dict.
+
+        Placeholder: empty schema + minimal meta echoing the requested
+        resource_id. Real impl will read BigQuery's `Table` metadata
+        (schema, num_rows, num_bytes, modified, primary_key stored in
+        the table description JSON) and translate into the canonical
+        type set per §6.1.
+        """
+        return InfoResult(
+            fields=[],
+            meta={"resource_id": resource_id, "total": 0},
+        )
 
     def get_columns(self, resource_id: str) -> list[str]:
         """Return column names for a table."""

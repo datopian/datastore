@@ -36,3 +36,8 @@ Thumbs.db
 # Environment files
 .env
 .env.local
+
+# Local-only test engine — synthetic data for local dev; never push.
+# Pair with DATASTORE_ENGINE=bigquery_test (which is NOT in the committed
+# Config Literal, so flip to a non-Literal locally if you need to run it).
+datastore/infrastructure/engines/bigquery_test/

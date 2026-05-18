@@ -29,6 +29,20 @@ class WriteResult:
     total: int | None = None
 
 
+@dataclass
+class InfoResult:
+    """Table metadata returned by `datastore_info`.
+
+    `fields` is the column schema in the same `[{"id", "type", ...}]`
+    shape as `SearchResult.fields`. `meta` is a free-form dict for
+    engine-specific extras (row count, table size, last modified,
+    primary key, indexes, …) — the endpoint pipes it through verbatim,
+    so engines can grow new keys without a schema change.
+    """
+    fields: list[dict]
+    meta: dict
+
+
 class DatastoreBackend(ABC):
 
     @abstractmethod
@@ -75,8 +89,8 @@ class DatastoreBackend(ABC):
         """Delete records (filtered) or drop table (no filters)."""
 
     @abstractmethod
-    def info(self, resource_id: str) -> dict:
-        """Return table metadata: fields with types, primary_key, row count."""
+    def info(self, resource_id: str) -> InfoResult:
+        """Return table metadata: column schema + free-form `meta` dict."""
 
     @abstractmethod
     def get_columns(self, resource_id: str) -> list[str]:

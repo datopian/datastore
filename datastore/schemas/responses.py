@@ -95,3 +95,20 @@ class DatastoreSearchResponse(ResponseModel):
         )
 
     result: Result
+
+
+class DatastoreInfoResponse(ResponseModel):
+    """Response for `GET /api/3/datastore_info`.
+
+    `fields` is the column schema (same shape as elsewhere). `meta` is a
+    free-form dict that engines populate with whatever metadata they
+    expose (total row count, table size, last-modified timestamps, …).
+    The endpoint pipes the engine's `InfoResult.meta` through verbatim
+    so adding a new key doesn't need a schema change.
+    """
+
+    class Result(BaseModel):
+        meta: dict[str, Any]
+        fields: list[dict[str, Any]]
+
+    result: Result

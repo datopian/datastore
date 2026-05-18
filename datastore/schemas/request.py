@@ -203,3 +203,26 @@ class DatastoreSearchSQLRequest(BaseModel):
         self._resource_ids, self._function_names = parse_sql_references(self.sql)
         return self
 
+
+class DatastoreInfoRequest(BaseModel):
+    """Query parameters for `GET /api/3/datastore_info`.
+
+    Accepts either `resource_id` or `id` — they're aliases for the same
+    thing (CKAN's `id` is historical; `resource_id` is what the rest of
+    this API uses). Exactly one must be provided. The model_validator
+    normalises `id` → `resource_id` so downstream code only reads one
+    field. `extra="forbid"` so unknown params surface as 400s.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str | None = None
+    id: str | None = None
+
+    @model_validator(mode="after")
+    def _require_resource_id_or_id(self) -> DatastoreInfoRequest:
+        if self.resource_id is None and self.id is None:
+            raise ValueError("either 'resource_id' or 'id' is required")
+        if self.resource_id is None:
+            self.resource_id = self.id
+        return self

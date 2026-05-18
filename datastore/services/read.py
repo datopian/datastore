@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from datastore.core.exceptions import ValidationError
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.infrastructure.engines.registry import get_allowed_sql_functions
+from datastore.schemas.responses import DatastoreInfoResponse
 from datastore.schemas.validators import (
     to_csv_list,
     to_json_object,
@@ -137,6 +138,25 @@ async def search_sql_datastore(
         links=_build_pagination_links(
             request_url, limit=_SQL_DEFAULT_LIMIT, offset=0
         ),
+    )
+
+
+async def info_datastore(
+    context: RequestContext, data_dict: dict[str, Any]
+) -> DatastoreInfoResponse.Result:
+    """Look up table metadata for a single `resource_id`.
+
+    Endpoint authorizes the caller first (same gate as `search`). This
+    service just asks the read-only engine for its `InfoResult` and
+    re-shapes it as the response's typed `Result`. No streaming —
+    `info` responses are small enough for the standard `_success_response`
+    path.
+    """
+    engine = get_datastore_engine(context, mode="ro")
+    result = engine.info(resource_id=data_dict["resource_id"])
+    return DatastoreInfoResponse.Result(
+        meta=result.meta,
+        fields=result.fields,
     )
 
 

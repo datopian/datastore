@@ -10,16 +10,22 @@ from datastore.api.context import Context
 from datastore.api.responses import ORJSONResponse, _success_response
 from datastore.schemas.request import (
     DatastoreCreateRequest,
+    DatastoreInfoRequest,
     DatastoreSearchRequest,
     DatastoreSearchSQLRequest,
     DatastoreUpsertRequest,
 )
 from datastore.schemas.responses import (
     DatastoreCreateResponse,
+    DatastoreInfoResponse,
     DatastoreSearchResponse,
     DatastoreUpsertResponse,
 )
-from datastore.services.read import search_datastore, search_sql_datastore
+from datastore.services.read import (
+    info_datastore,
+    search_datastore,
+    search_sql_datastore,
+)
 from datastore.services.write import create_datastore, upsert_datastore
 
 router = APIRouter(tags=["datastore"])
@@ -75,11 +81,6 @@ async def datastore_upsert(
     return _success_response(request, result)
 
 
-@router.post("/datastore_delete")
-def datastore_delete() -> ORJSONResponse:
-    raise HTTPException(status_code=501, detail="datastore_delete is not implemented")
-
-
 @router.get("/datastore_search", response_model=DatastoreSearchResponse)
 async def datastore_search(
     request: Request,
@@ -130,6 +131,30 @@ async def datastore_search_sql(
     return StreamingResponse(body_iter, media_type="application/json")
 
 
-@router.get("/datastore_info")
-def datastore_info() -> ORJSONResponse:
-    raise HTTPException(status_code=501, detail="datastore_info is not implemented")
+@router.get("/datastore_info", response_model=DatastoreInfoResponse)
+async def datastore_info(
+    request: Request,
+    context: Context,
+    params: Annotated[DatastoreInfoRequest, Query()],
+):
+    """`GET /api/3/datastore_info` — return table metadata.
+
+    Authorizes the caller on `resource_id` (same gate as `datastore_search`),
+    then asks the read-only engine for its `InfoResult`. The response is
+    small enough to skip streaming; we go through the standard
+    `_success_response` envelope.
+
+    Body shape:
+        result.fields  — column schema, list of {"id", "type", ...}
+        result.meta    — free-form dict (engine-specific extras)
+    """
+    await context.auth.authorize(
+        resource_id=params.resource_id, permission="read"
+    )
+    result = await info_datastore(context, params.model_dump())
+    return _success_response(request, result)
+
+
+@router.post("/datastore_delete")
+def datastore_delete() -> ORJSONResponse:
+    raise HTTPException(status_code=501, detail="datastore_delete is not implemented")
