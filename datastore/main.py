@@ -15,6 +15,10 @@ from datastore.api.routes import api_router
 from datastore.core.config import get_config
 from datastore.infrastructure.cache import InMemoryCache, RedisCache
 from datastore.infrastructure.ckan_client import CKANClient
+from datastore.infrastructure.engines.registry import (
+    reset_engine_cache,
+    warmup_engines,
+)
 
 log = logging.getLogger("uvicorn.error")
 
@@ -37,15 +41,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             stack.push_async_callback(cache.close)
         app.state.cache = cache
 
-        # One-line startup summary so operators can see the active engine
-        # and the related toggles at a glance. Goes through Python's
-        # `logging`, inheriting uvicorn's INFO-level root config.
+        # Build + initialise rw/ro engines once; surface credential
+        # errors at startup, not on the first request.
+        warmup_engines(config)
+        stack.callback(reset_engine_cache)
+        
+
         log.info(
-            "datastore ready: engine=%r auth=%s cache=%s sql_allow_file=%s",
+            "datastore ready: Engine=%r Auth=%s Cache=%s",
             config.DATASTORE_ENGINE,
-            "on" if config.AUTH_ENABLED else "off",
-            "redis" if config.REDIS_URL else "memory",
-            config.SQL_FUNCTIONS_ALLOW_FILE or "default",
+            "enabled" if config.AUTH_ENABLED else "disabled",
+            "redis" if config.REDIS_URL else "memory"
         )
 
         yield

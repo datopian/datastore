@@ -174,13 +174,16 @@ datastore-api/
 │           ├── registry.py           # get_datastore_engine + get_allowed_sql_functions;
 │           │                         # dynamic `importlib` dispatch keyed on
 │           │                         # context.config.DATASTORE_ENGINE
-│           ├──bigquery/             # Engine package (one folder per backend).
-│           |    ├── __init__.py       # Re-exports `BigQueryBackend`
-│           |    ├── backend.py        # google-cloud-bigquery adapter (placeholder)
-│           |    ├── lib.py            # Backend-specific helpers (optional)
-│           |    └── allowed_functions.txt   # Per-engine datastore_search_sql
-│           |                                  # function allow-list — one name per
-│           |                                  # line, `#` comments allowed.
+│           ├── bigquery/            # Engine package (one folder per backend).
+│           |   ├── __init__.py       # Exports `Backend = BigQueryBackend` —
+│           |   |                       # registry imports `Backend`, so the
+│           |   |                       # concrete class name is engine-private.
+│           |   ├── backend.py        # DatastoreBackend subclass (placeholder)
+│           |   ├── client.py         # google-cloud-bigquery `Client` construction
+│           |   ├── lib.py            # Backend-specific helpers (optional)
+│           |   └── allowed_functions.txt  # Per-engine datastore_search_sql
+│           |                               # function allow-list — one name per
+│           |                               # line, `#` comments allowed.
 │           └── ducklake/             # Future planned engine
 └── tests/
     ├── __init__.py
@@ -190,15 +193,15 @@ datastore-api/
     └── test_write_service.py         # Service-level units with a fake context
 ```
 
-**Adding a new engine** — drop a sibling folder with the same four files
-(`__init__.py` re-exports `BigQueryBackend`; `backend.py` is the
-`DatastoreBackend` subclass; `lib.py` is optional helpers;
-`allowed_functions.txt` lists allowed SQL functions). No edit to
-`registry.py` or `config.py` is required — `DATASTORE_ENGINE` validates
-against the set of engine subdirectories that exist at startup, and the
-factory dispatches via `importlib.import_module`. The `ducklake.py`
-adapter from the original plan will live at
-`infrastructure/engines/ducklake/` when it lands.
+**Adding a new engine** — drop a sibling folder with the same layout
+(`__init__.py` exports `Backend = <YourBackend>`; `backend.py` is the
+`DatastoreBackend` subclass; `client.py` / `lib.py` for backend-specific
+construction + helpers, both optional; `allowed_functions.txt` lists
+allowed SQL functions). No edit to `registry.py` or `config.py` is
+required — `DATASTORE_ENGINE` validates against the set of engine
+subdirectories that exist at startup, and the factory dispatches via
+`importlib.import_module` keyed off the `Backend` alias. The `ducklake`
+adapter will live at `infrastructure/engines/ducklake/` when it lands.
 
 `scripts/` and `docs/` are intentionally absent today. Add them when there's a concrete need
 (seed scripts, operational runbooks). Until then the README + this file are the docs.

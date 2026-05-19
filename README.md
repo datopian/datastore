@@ -53,20 +53,25 @@ datastore/
         ├── registry.py           # get_datastore_engine + get_allowed_sql_functions;
         │                         # dynamic importlib dispatch keyed on
         │                         # context.config.DATASTORE_ENGINE
-        ├──bigquery/             # Engine package (one folder per backend).
-        |    ├── __init__.py       # Re-exports `BigQueryBackend`
-        |    ├── backend.py        # google-cloud-bigquery adapter (placeholder)
-        |    ├── lib.py            # Backend-specific helpers (optional)
-        |    └── allowed_functions.txt   # Per-engine datastore_search_sql
-        |                                  # function allow-list — one name per
-        |                                  # line, `#` comments allowed.
-        └── ducklake/             # Future planned engine
+        ├── bigquery/             # Engine package (one folder per backend).
+        |   ├── __init__.py        # Exports `Backend = BigQueryBackend` —
+        |   |                        # the registry imports `Backend`, so the
+        |   |                        # concrete class name is engine-private.
+        |   ├── backend.py         # DatastoreBackend subclass (placeholder)
+        |   ├── client.py          # google-cloud-bigquery `Client` construction
+        |   ├── lib.py             # Backend-specific helpers (optional)
+        |   └── allowed_functions.txt  # Per-engine datastore_search_sql
+        |                                # function allow-list — one name per
+        |                                # line, `#` comments allowed.
+        └── ducklake/              # Future planned engine
 ```
 
-To add a new engine (e.g. `ducklake`), drop a sibling folder with the
-same four files. `DATASTORE_ENGINE` is validated against the set of
-engine subdirectories that exist at process start, and the factory
-dispatches via `importlib` — no `registry.py` / `config.py` edits.
+To add a new engine (e.g. `ducklake`), drop a sibling folder following
+the same layout (`__init__.py` exports `Backend = <YourBackend>`,
+`backend.py` subclasses `DatastoreBackend`, plus an `allowed_functions.txt`).
+`DATASTORE_ENGINE` is validated against the set of engine subdirectories
+that exist at process start, and the factory imports each engine's
+`Backend` via `importlib` — no `registry.py` / `config.py` edits.
 
 ## Roadmap
 
@@ -81,16 +86,21 @@ What's shipped and what's next. Tick each box as the change set lands.
   - `datastore_search_sql` (sqlglot parses tables + functions; per-table
     CKAN authorize; per-engine function allow-list)
   - `datastore_info` (column schema + free-form `meta` dict)
-- [x] Health endpoints `/`, `/health`, `/ready` returning the CKAN envelope shape
+- [x] Health endpoints `/`, `/health`, `/ready` returning the CKAN envelope shape.
+  `/ready` builds the rw + ro engine instances during lifespan and probes
+  `engine.healthcheck()` on each — 503 with a `Service Unavailable` envelope
+  if either fails (so k8s pulls the pod from the Service).
 - [x] Strict request validation (Pydantic) + structured error envelopes
 - [x] CKAN auth gate with TTL cache (InMemory by default; Redis when `REDIS_URL` is set)
 - [x] Request context bundle (`RequestContext` / `ContextDep` / bound `CKANClient`)
 - [x] Service / engine / streaming layer separation
+- [x] Engine-agnostic registry — drop a folder under `infrastructure/engines/<name>/`
+  exporting `Backend`; `DATASTORE_ENGINE` is validated against engine directories
+  on disk, no registry / config edit required.
 
 ### Next
 
 - [ ] Real BigQuery backend (replace the placeholder in `infrastructure/engines/bigquery/backend.py`)
-- [ ] Real `/ready` healthcheck — call each engine's `healthcheck()` through the lifespan
 - [ ] DuckLake backend (second concrete engine — same ABC, drop-in folder)
 - [ ] Observability — JSON structured logs + request-id middleware
 - [ ] Opt-in query-result cache (deferred until BigQuery lands)
@@ -152,7 +162,9 @@ Every entry below maps 1:1 to a field on `datastore.core.config.Config`. See [.e
 | `MAX_REQUEST_BODY_MB` | `50` | Reject request bodies larger than this (MB) |
 | `DATASTORE_ENGINE` | `bigquery` | Storage backend — must match a folder under `infrastructure/engines/`; validated at startup |
 | `SQL_FUNCTIONS_ALLOW_FILE` | _(empty)_ | Override path to the `datastore_search_sql` function allow-list; defaults to `<engine>/allowed_functions.txt` |
-| `BQ_PROJECT` | _(empty)_ | Google Cloud project ID for the BigQuery backend |
+| `BIGQUERY_PROJECT` | _(empty)_ | Google Cloud project ID. Required when `DATASTORE_ENGINE=bigquery`; unset → `/ready` returns 503 with a clear warning. |
+| `BIGQUERY_CREDENTIALS` | _(empty)_ | Read-write service-account creds. Accepts a JSON blob (leading `{`), a path to a service-account JSON file, or empty (→ Application Default Credentials). |
+| `BIGQUERY_CREDENTIALS_RO` | _(empty)_ | Read-only service-account creds (same format). Empty → falls back to `BIGQUERY_CREDENTIALS` so single-credential deployments work. |
 | `REDIS_URL` | _(empty)_ | Redis URL for cache; empty → in-process `InMemoryCache` |
 | `CKAN_URL` | _(empty)_ | Base URL of the CKAN instance (required when `AUTH_ENABLED=true`) |
 | `HTTP_TIMEOUT_SECONDS` | `10` | Timeout for outbound CKAN calls (seconds) |

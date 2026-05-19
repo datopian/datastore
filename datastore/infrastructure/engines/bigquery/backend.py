@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+from datastore.core.config import Config
 from datastore.infrastructure.engines.base import (
     DatastoreBackend,
     InfoResult,
     SearchResult,
     WriteResult,
 )
+
+log = logging.getLogger(__name__)
 
 
 class BigQueryBackend(DatastoreBackend):
@@ -16,15 +20,38 @@ class BigQueryBackend(DatastoreBackend):
         self,
         *,
         context: Any = None,
+        config: Config | None = None,
         mode: str = "rw",
     ) -> None:
         self.mode = mode
         self.context = context
+        self.config = config
         self.client: Any = None
 
     def initialize(self) -> None:
-        """Initialize the BigQuery client."""
-        pass
+        """Build the BigQuery client when configured; no-op otherwise.
+
+        Lenient on missing config: if `BIGQUERY_PROJECT` is unset, log a
+        warning and leave `client=None`. Lets the rest of the app boot
+        without real GCP creds — `/ready` will return 503 (healthcheck
+        returns False with no client) so the misconfiguration is loud
+        enough in production without being fatal at import time.
+        """
+        if self.config is None or not self.config.BIGQUERY_PROJECT.strip():
+            log.warning(
+                "BigQueryBackend: BIGQUERY_PROJECT unset (mode=%s); client "
+                "not built — /ready will return 503 until configured.",
+                self.mode,
+            )
+            return
+        from datastore.infrastructure.engines.bigquery.client import build_client
+
+        self.client = build_client(self.config, self.mode)
+        log.info(
+            "BigQuery client initialised: project=%s mode=%s",
+            self.config.BIGQUERY_PROJECT,
+            self.mode,
+        )
 
     def create(
         self,
@@ -141,11 +168,23 @@ class BigQueryBackend(DatastoreBackend):
         )
 
     def get_columns(self, resource_id: str) -> list[str]:
-        """Return column names for a table."""
-        {}
+        """Return column names for a table.
+
+        Placeholder — replaced when real `search` lands. Empty list keeps
+        callers from crashing on the dead code path.
+        """
+        return []
 
     def healthcheck(self) -> bool:
-        """Return True if backend is reachable. Called by /ready probe."""
-        {
-            "status": "ok",
-        }
+        """Probe the BigQuery client with `SELECT 1`. Returns False on
+        any failure so `/ready` can return 503 instead of crashing."""
+        if self.client is None:
+            return False
+        try:
+            self.client.query("SELECT 1").result()
+            return True
+        except Exception as e:
+            log.warning(
+                "BigQuery healthcheck failed (mode=%s): %s", self.mode, e
+            )
+            return False

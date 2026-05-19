@@ -83,9 +83,23 @@ class Config(BaseSettings):
     )
 
     # BigQuery settings
-    BQ_PROJECT: str = Field(
+    BIGQUERY_PROJECT: str = Field(
         default="",
         description="Google Cloud project ID for BigQuery",
+    )
+    BIGQUERY_CREDENTIALS: str = Field(
+        default="",
+        description=(
+            "Service-account credentials for the read-write engine. "
+            "Either JSON blob or path to a service-account JSON file."
+        ),
+    )
+    BIGQUERY_CREDENTIALS_RO: str = Field(
+        default="",
+        description=(
+            "Service-account credentials for the read-only engine. "
+            "Either JSON blob or path to a service-account JSON file."
+        ),
     )
 
     # Redis settings

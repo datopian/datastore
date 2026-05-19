@@ -7,4 +7,6 @@ package — see `infrastructure.engines.registry.get_allowed_sql_functions`.
 
 from datastore.infrastructure.engines.bigquery.backend import BigQueryBackend
 
-__all__ = ["BigQueryBackend"]
+Backend = BigQueryBackend
+
+__all__ = ["Backend", "BigQueryBackend"]
