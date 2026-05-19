@@ -73,6 +73,19 @@ the same layout (`__init__.py` exports `Backend = <YourBackend>`,
 that exist at process start, and the factory imports each engine's
 `Backend` via `importlib` — no `registry.py` / `config.py` edits.
 
+## Column definitions
+
+**Goal:** make Frictionless schema the native column shape while staying
+drop-in compatible with existing CKAN clients during migration.
+
+`datastore_create` accepts one of two input shapes:
+
+| Shape | Keys | Status |
+|---|---|---|
+| Frictionless `schema` | `schema` — [Frictionless Table Schema](https://specs.frictionlessdata.io/table-schema/) | Recommended |
+| Legacy CKAN `fields` | `fields`, `primary_key` | Deprecated; emits a `warnings` entry |
+
+
 ## Roadmap
 
 What's shipped and what's next. Tick each box as the change set lands.
@@ -224,8 +237,17 @@ class DatastoreCreateResponse(ResponseModel):
     class Result(BaseModel):
         resource_id: str
         package_id: str | None = None
-        fields: list[FieldSpec]
-        primary_key: list[str] = Field(default_factory=list)
+        # Canonical Frictionless Table Schema (carries `primaryKey` inside).
+        schema: dict[str, Any]
+        # Legacy mirror — marked deprecated in OpenAPI / IDE tooltips.
+        fields: Annotated[
+            list[FieldSpec],
+            Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+        ]
+        primary_key: Annotated[
+            list[str],
+            Field(deprecated="use 'schema.primaryKey' instead"),
+        ]
         records: list[dict[str, Any]] | None = None   # when include_records=True
         total: int | None = None                      # when include_total=True
 

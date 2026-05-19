@@ -7,7 +7,7 @@ from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from datastore.api.context import Context
-from datastore.api.responses import _success_response
+from datastore.api.responses import _deprecation_warnings, _success_response
 from datastore.schemas.request import (
     DatastoreCreateRequest,
     DatastoreDeleteRequest,
@@ -55,20 +55,21 @@ async def datastore_create(
             package_id=payload.resource.get("package_id"),
             permission="create",
         )
-        
+
     data_dict.update(
         {
             "resource": payload.resource_id or payload.resource,
-            "fields": payload.fields,
+            "schema": payload.schema,
             "records": payload.records,
-            "primary_key": payload.primary_key,
             "include_records": payload.include_records,
             "include_total": payload.include_total,
         }
     )
 
     result = await create_datastore(context, data_dict)
-    return _success_response(request, result)
+    warnings = _deprecation_warnings(payload)
+
+    return _success_response(request, result, warnings=warnings or None)
 
 
 @router.post("/datastore_upsert", response_model=DatastoreUpsertResponse)
@@ -107,9 +108,7 @@ async def datastore_search(
         permission="read",
     )
     data_dict.update(params.model_dump())
-    body_iter = await search_datastore(
-        context, data_dict, request_url=str(request.url)
-    )
+    body_iter = await search_datastore(context, data_dict, request_url=str(request.url))
     return StreamingResponse(body_iter, media_type="application/json")
 
 
@@ -120,20 +119,16 @@ async def datastore_search_sql(
     params: Annotated[DatastoreSearchSQLRequest, Query()],
 ):
     """`GET /api/3/datastore_search_sql` — execute a raw SQL SELECT and stream.
-    Accepts a single `sql` query parameter; 
+    Accepts a single `sql` query parameter;
     """
     for resource_id in params.resource_ids:
-        await context.auth.authorize(
-            resource_id=resource_id, permission="read"
-        )
+        await context.auth.authorize(resource_id=resource_id, permission="read")
 
     data_dict = params.model_dump() | {
         "function_names": params.function_names,
     }
-    
-    body_iter = await search_sql_datastore(
-        context, data_dict, request_url=str(request.url)
-    )
+
+    body_iter = await search_sql_datastore(context, data_dict, request_url=str(request.url))
     return StreamingResponse(body_iter, media_type="application/json")
 
 
@@ -154,9 +149,7 @@ async def datastore_info(
         result.fields  — column schema, list of {"id", "type", ...}
         result.meta    — free-form dict (engine-specific extras)
     """
-    await context.auth.authorize(
-        resource_id=params.resource_id, permission="read"
-    )
+    await context.auth.authorize(resource_id=params.resource_id, permission="read")
     result = await info_datastore(context, params.model_dump())
     return _success_response(request, result)
 
@@ -179,8 +172,6 @@ async def datastore_delete(
     Returns the original `filters` echoed back (CKAN convention) so the
     caller can confirm what the server actually applied.
     """
-    await context.auth.authorize(
-        resource_id=payload.resource_id, permission="delete"
-    )
+    await context.auth.authorize(resource_id=payload.resource_id, permission="delete")
     result = await delete_datastore(context, payload.model_dump())
     return _success_response(request, result)

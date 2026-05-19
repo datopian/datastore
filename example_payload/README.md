@@ -14,8 +14,9 @@ field combination — keep it useful, not exhaustive).
 ```
 example_payload/
 ├── datastore_create/
-│   ├── with_resource_id.json     # existing-resource flow
-│   └── with_resource.json        # new-resource flow (resource dict with package_id)
+│   ├── with_resource_id.json     # legacy `fields` + `primary_key` — existing-resource flow
+│   ├── with_resource.json        # legacy `fields` + `primary_key` — new-resource flow
+│   └── with_schema.json          # frictionless `schema` (recommended) — canonical input
 ├── datastore_upsert/
 │   ├── upsert.json               # default — corrects one row + adds a new one
 │   ├── insert.json               # method=insert; new rows only

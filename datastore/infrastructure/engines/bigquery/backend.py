@@ -15,7 +15,6 @@ log = logging.getLogger(__name__)
 
 
 class BigQueryBackend(DatastoreBackend):
-
     def __init__(
         self,
         *,
@@ -56,8 +55,7 @@ class BigQueryBackend(DatastoreBackend):
     def create(
         self,
         resource_id: str,
-        fields: list,
-        unique_keys: list,
+        schema: dict,
         records: list | None,
         include_total: bool,
     ) -> WriteResult:
@@ -68,13 +66,11 @@ class BigQueryBackend(DatastoreBackend):
         `COUNT(*)` when `include_total=True`.
         """
         return {
-            "fields": fields,
+            "schema": schema,
             "records": records,
-            "unique_keys": unique_keys,
             "include_total": include_total,
-            "total": len(records) if include_total else None,
+            "total": len(records or []) if include_total else None,
         }
-
 
     def upsert(
         self,
@@ -95,7 +91,7 @@ class BigQueryBackend(DatastoreBackend):
             "records": records,
             "method": method,
             "include_total": include_total,
-            "total": len(records)
+            "total": len(records),
         }
 
     def search(
@@ -120,9 +116,7 @@ class BigQueryBackend(DatastoreBackend):
         runs `COUNT(*)` when `include_total=True`, and yields tuples
         page-by-page from `query_job.result()`.
         """
-        column_metadata: list[dict] = (
-            [{"id": c, "type": "any"} for c in fields] if fields else []
-        )
+        column_metadata: list[dict] = [{"id": c, "type": "any"} for c in fields] if fields else []
         return SearchResult(
             fields=column_metadata,
             records=iter([]),
@@ -184,7 +178,5 @@ class BigQueryBackend(DatastoreBackend):
             self.client.query("SELECT 1").result()
             return True
         except Exception as e:
-            log.warning(
-                "BigQuery healthcheck failed (mode=%s): %s", self.mode, e
-            )
+            log.warning("BigQuery healthcheck failed (mode=%s): %s", self.mode, e)
             return False

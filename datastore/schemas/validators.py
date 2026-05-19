@@ -1,5 +1,4 @@
-"""Reusable Pydantic validators and schema parts.
-"""
+"""Reusable Pydantic validators and schema parts."""
 
 from __future__ import annotations
 
@@ -8,7 +7,11 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict
 
-from datastore.core.constants import POSTGRES_TYPES
+from datastore.core.constants import (
+    FRICTIONLESS_TO_POSTGRES,
+    POSTGRES_TO_FRICTIONLESS,
+    POSTGRES_TYPES,
+)
 
 # --- validator functions -----------------------------------------------------
 
@@ -41,8 +44,7 @@ def check_postgres_type(value: Any) -> str | None:
     if canonical is None:
         canonicals = sorted(set(POSTGRES_TYPES.values()))
         raise ValueError(
-            f"unknown field type '{value}'; "
-            f"expected one of {canonicals} or a PostgreSQL alias"
+            f"unknown field type '{value}'; expected one of {canonicals} or a PostgreSQL alias"
         )
     return canonical
 
@@ -89,9 +91,123 @@ def to_csv_list(value: Any) -> list[str] | None:
     raise ValueError("must be a comma-separated string or list of strings")
 
 
-def parse_sql_references(
-    sql: str, *, dialect: str = "postgres"
-) -> tuple[list[str], list[str]]:
+def fields_to_frictionless_schema(
+    fields: list[Any], primary_key: list[str] | None = None
+) -> dict[str, Any]:
+    """Convert the legacy `fields` + `primary_key` shape into a Frictionless
+    Table Schema descriptor.
+
+    Each `FieldSpec` becomes a Frictionless field:
+      - `id`   → `name`
+      - `type` (Postgres canonical) → `type` (Frictionless), via
+        `POSTGRES_TO_FRICTIONLESS`. Unknown types fall through to `string`.
+      - `info` is unpacked: recognised keys (`title`, `description`) move to
+        top-level Frictionless properties; the rest is preserved verbatim
+        under a custom `info` key so the data dictionary round-trips.
+
+    `primary_key` becomes the schema's `primaryKey` (Frictionless naming).
+    """
+    fr_fields: list[dict[str, Any]] = []
+    for f in fields:
+        spec = f.model_dump(exclude_none=True) if hasattr(f, "model_dump") else dict(f)
+        fr: dict[str, Any] = {"name": spec["id"]}
+        pg_type = spec.get("type")
+        if pg_type:
+            fr["type"] = POSTGRES_TO_FRICTIONLESS.get(pg_type, "string")
+        info = spec.get("info") or {}
+        extra: dict[str, Any] = {}
+        for k, v in info.items():
+            # `info.type` is treated as a hint and dropped — the outer
+            # canonical type already lives on `fr["type"]`, and letting an
+            # info-side `type` ride along would either shadow or conflict
+            # with it after the merge below.
+            if k == "type":
+                continue
+            if k in ("title", "description") and isinstance(v, str):
+                fr[k] = v
+            else:
+                extra[k] = v
+        if extra:
+            fr = {**fr, **extra}
+        fr_fields.append(fr)
+
+    schema: dict[str, Any] = {"fields": fr_fields}
+    if primary_key:
+        schema["primaryKey"] = list(primary_key)
+    return schema
+
+
+def frictionless_schema_to_fields(
+    schema: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Inverse of `fields_to_frictionless_schema`.
+
+    Returns `(fields, primary_key)` where `fields` matches the legacy
+    `{id, type, info}` shape. Frictionless `name` → `id`; the field's
+    Frictionless type is mapped back to Postgres via
+    `FRICTIONLESS_TO_POSTGRES` (defaults to `text`). `title` /
+    `description` on the field move into `info`; any extras saved
+    under `info` are merged back in.
+
+    `primaryKey` may be a string or list of strings in Frictionless;
+    normalised to `list[str]`.
+    """
+    fields_out: list[dict[str, Any]] = []
+    for fr in schema.get("fields", []):
+        name = fr.get("name")
+        if not name:
+            continue
+        out: dict[str, Any] = {"id": name}
+        fr_type = fr.get("type")
+        if fr_type:
+            out["type"] = FRICTIONLESS_TO_POSTGRES.get(fr_type, "text")
+        info: dict[str, Any] = {}
+        for k in ("title", "description"):
+            v = fr.get(k)
+            if isinstance(v, str):
+                info[k] = v
+        extra = fr.get("info")
+        if isinstance(extra, dict):
+            info.update(extra)
+        if info:
+            out["info"] = info
+        fields_out.append(out)
+
+    pk = schema.get("primaryKey")
+    if isinstance(pk, str):
+        primary_key = [pk]
+    elif isinstance(pk, list):
+        primary_key = [str(x) for x in pk]
+    else:
+        primary_key = []
+    return fields_out, primary_key
+
+
+def validate_frictionless_schema(value: Any) -> dict[str, Any] | None:
+    """Validate a frictionless Table Schema descriptor.
+
+    Pass-through `None`. Otherwise the dict is fed to
+    `frictionless.Schema.from_descriptor`, which raises if `fields` is
+    missing, a field type is unknown, or any other descriptor rule is
+    violated. We re-raise as `ValueError` so Pydantic surfaces it through
+    the standard CKAN error envelope.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("schema must be a JSON object")
+
+    from frictionless import Schema
+    from frictionless.exception import FrictionlessException
+
+    try:
+        Schema.from_descriptor(value)
+    except FrictionlessException as exc:
+        raise ValueError(str(exc)) from exc
+    return value
+
+
+def parse_sql_references(sql: str, *, dialect: str = "postgres") -> tuple[list[str], list[str]]:
     """Parse `sql` and return (table_names, function_names).
 
     Used by `datastore_search_sql` to:
@@ -123,15 +239,8 @@ def parse_sql_references(
     # CTE aliases (e.g. `WITH t AS (...) SELECT * FROM t`) parse as
     # `exp.Table` nodes even though they're defined inline — exclude them
     # so auth isn't called for non-external table refs.
-    cte_aliases = {
-        cte.alias_or_name
-        for cte in tree.find_all(exp.CTE)
-        if cte.alias_or_name
-    }
-    tables = {
-        t.name for t in tree.find_all(exp.Table)
-        if t.name and t.name not in cte_aliases
-    }
+    cte_aliases = {cte.alias_or_name for cte in tree.find_all(exp.CTE) if cte.alias_or_name}
+    tables = {t.name for t in tree.find_all(exp.Table) if t.name and t.name not in cte_aliases}
 
     functions: set[str] = set()
     for f in tree.find_all(exp.Func):

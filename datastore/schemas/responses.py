@@ -11,7 +11,7 @@ it and adds an inner `Result` class plus a `result: Result` field.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,14 +48,32 @@ class StatusResponse(ResponseModel):
 
 # --- datastore --------------------------------------------------------------
 
+
 class DatastoreCreateResponse(ResponseModel):
-    """Response for `POST /api/3/datastore_create`."""
+    """Response for `POST /api/3/datastore_create`.
+
+    Returns both column shapes so clients on either side of the migration
+    see the form they expect:
+      - `fields` is the legacy `{id, type, info}` shape.
+      - `schema` is the  Frictionless Table Schema (`{fields,
+        primaryKey, ...}`).
+    Both describe the same columns; they're derived from whichever the
+    caller supplied. Legacy `fields` will be removed once callers move
+    over to `schema`.
+    """
 
     class Result(BaseModel):
         resource_id: str
         package_id: str | None = None
-        fields: list[FieldSpec]
-        primary_key: list[str] = Field(default_factory=list)
+        fields: Annotated[
+            list[FieldSpec],
+            Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+        ]
+        schema: dict[str, Any]
+        primary_key: Annotated[
+            list[str],
+            Field(deprecated="use 'schema.primaryKey' (Frictionless Table Schema) instead"),
+        ]
         # Echoed input rows when the request set `include_records=True`.
         records: list[dict[str, Any]] | None = None
         # Total row count after the write — set only when `include_total=True`.
@@ -77,8 +95,7 @@ class DatastoreUpsertResponse(ResponseModel):
 
 
 class DatastoreDeleteResponse(ResponseModel):
-    """Response for `POST /api/3/datastore_delete`.
-    """
+    """Response for `POST /api/3/datastore_delete`."""
 
     class Result(BaseModel):
         resource_id: str
@@ -101,9 +118,7 @@ class DatastoreSearchResponse(ResponseModel):
         limit: int
         offset: int
         total: int | None = None
-        links: dict[str, str] = Field(
-            alias="_links", default_factory=dict
-        )
+        links: dict[str, str] = Field(alias="_links", default_factory=dict)
 
     result: Result
 

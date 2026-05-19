@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -15,9 +15,11 @@ from pydantic import (
 from datastore.schemas.validators import (
     FieldSpec,
     StringOrList,
+    fields_to_frictionless_schema,
     parse_sql_references,
     to_json_object,
     to_str_or_json_object,
+    validate_frictionless_schema,
 )
 
 UpsertMethod = Literal["upsert", "insert", "update"]
@@ -26,18 +28,38 @@ RecordsFormat = Literal["objects", "lists", "csv", "tsv"]
 
 class DatastoreCreateRequest(BaseModel):
     """Request body for `POST /api/3/datastore_create`.
+
+    Column definitions: provide either the legacy `fields` shape (a list of
+    `FieldSpec` objects) **or** a Frictionless Table Schema via `schema`,
+    never both. The Frictionless form is the native shape; `fields` is kept
+    as a back-compat input and will be deprecated.
+
+    When `schema` is supplied, `primary_key` must not be — the schema's
+    `primaryKey` is the single source of truth for the unique key.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     resource_id: str | None = None
     resource: dict[str, Any] | None = None
-    fields: list[FieldSpec] = Field(min_length=1)
-    primary_key: StringOrList = None
+    # `deprecated=` must ride on `Annotated` metadata, not as a `Field()`
+    # default — Pydantic silently drops it on union- / Annotated-aliased
+    # fields when supplied via `Field(default=..., deprecated=...)`.
+    fields: Annotated[
+        list[FieldSpec] | None,
+        Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+    ] = None
+    schema: dict[str, Any] | None = None
+    primary_key: Annotated[
+        StringOrList,
+        Field(deprecated="use 'schema.primaryKey' instead"),
+    ] = None
     records: list[dict[str, Any]] | None = None
     include_records: bool = False
     include_total: bool = False
     force: bool | None = None
+
+    _check_schema = field_validator("schema")(validate_frictionless_schema)
 
     @model_validator(mode="after")
     def _require_resource_id_or_resource(self) -> DatastoreCreateRequest:
@@ -47,10 +69,48 @@ class DatastoreCreateRequest(BaseModel):
             raise ValueError("provide either 'resource_id' or 'resource', not both")
         return self
 
+    @model_validator(mode="after")
+    def _require_fields_or_schema(self) -> DatastoreCreateRequest:
+        # Read deprecated fields via __dict__ so we don't trip our own
+        # `Field(deprecated=...)` DeprecationWarning during validation.
+        fields_val = self.__dict__.get("fields")
+        primary_key_val = self.__dict__.get("primary_key")
+        has_fields = fields_val is not None
+        has_schema = self.schema is not None
+        if has_fields and has_schema:
+            raise ValueError(
+                "provide either 'fields' (legacy) or 'schema' (frictionless), not both"
+            )
+        if not has_fields and not has_schema:
+            raise ValueError("either 'fields' or 'schema' is required")
+        if has_fields and len(fields_val or []) == 0:
+            raise ValueError("'fields' must not be empty")
+        if has_schema and primary_key_val:
+            raise ValueError(
+                "'primary_key' is not allowed with 'schema'; use the schema's 'primaryKey' instead"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _build_canonical_schema(self) -> DatastoreCreateRequest:
+        """Fold legacy `fields` + `primary_key` into the canonical `schema`.
+
+        After this validator `self.schema` is always populated, so the
+        endpoint / service only ever read the Frictionless shape — the
+        legacy inputs exist purely as a boundary back-compat surface.
+        Runs after `_require_fields_or_schema`, so we know exactly one
+        of {fields, schema} is set.
+        """
+        if self.schema is not None:
+            return self
+        fields_val = self.__dict__.get("fields") or []
+        primary_key_val = self.__dict__.get("primary_key") or []
+        self.__dict__["schema"] = fields_to_frictionless_schema(fields_val, primary_key_val)
+        return self
+
 
 class DatastoreUpsertRequest(BaseModel):
-    """Request body for `POST /api/3/datastore_upsert`.
-    """
+    """Request body for `POST /api/3/datastore_upsert`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -179,9 +239,7 @@ class DatastoreSearchSQLRequest(BaseModel):
 
         head = _SQL_COMMENT_RE.sub("", stripped).strip()
         if not _SQL_LEAD_RE.match(head):
-            raise ValueError(
-                "only SELECT / WITH statements are allowed"
-            )
+            raise ValueError("only SELECT / WITH statements are allowed")
 
         cleaned = stripped.rstrip(";").rstrip()
         if ";" in cleaned:
