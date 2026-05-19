@@ -156,6 +156,7 @@ async def info_datastore(
     result = engine.info(resource_id=data_dict["resource_id"])
     return DatastoreInfoResponse.Result(
         meta=result.meta,
+        schema=result.schema,
         fields=result.fields,
     )
 

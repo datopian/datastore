@@ -42,13 +42,15 @@ def test_basic_info_succeeds(client: TestClient) -> None:
 
 
 def test_response_shape(client: TestClient) -> None:
-    """`result` keys are exactly `meta` + `fields` (plus the envelope's
-    `help` + `success` at the top level)."""
+    """`result` carries `meta`, `schema` (canonical), and `fields`
+    (deprecated legacy mirror)."""
     response = client.get(INFO_URL, params={"resource_id": _RESOURCE_ID})
 
     body = response.json()
     assert set(body) == {"help", "success", "result"}
-    assert set(body["result"]) == {"meta", "fields"}
+    assert set(body["result"]) == {"meta", "schema", "fields"}
+    assert isinstance(body["result"]["schema"], dict)
+    assert "fields" in body["result"]["schema"]
 
 
 # 2. Validation + aliases ---------------------------------------------------

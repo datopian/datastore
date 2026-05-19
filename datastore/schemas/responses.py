@@ -126,15 +126,22 @@ class DatastoreSearchResponse(ResponseModel):
 class DatastoreInfoResponse(ResponseModel):
     """Response for `GET /api/3/datastore_info`.
 
-    `fields` is the column schema (same shape as elsewhere). `meta` is a
-    free-form dict that engines populate with whatever metadata they
-    expose (total row count, table size, last-modified timestamps, …).
-    The endpoint pipes the engine's `InfoResult.meta` through verbatim
-    so adding a new key doesn't need a schema change.
+    Returns column metadata in both shapes so clients on either side of
+    the migration see what they expect:
+      - `schema` is the canonical Frictionless Table Schema.
+      - `fields` is the legacy `{id, type, info}` list (marked
+        `deprecated`).
+    `meta` is a free-form dict that engines populate with whatever extras
+    they expose (row count, table size, last-modified, …) — piped
+    through verbatim so adding a new key doesn't need a schema change.
     """
 
     class Result(BaseModel):
         meta: dict[str, Any]
-        fields: list[dict[str, Any]]
+        schema: dict[str, Any]
+        fields: Annotated[
+            list[dict[str, Any]],
+            Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+        ]
 
     result: Result

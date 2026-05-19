@@ -158,6 +158,7 @@ class BigQueryBackend(DatastoreBackend):
         """
         return InfoResult(
             fields=[],
+            schema={"fields": []},
             meta={"resource_id": resource_id, "total": 0},
         )
 

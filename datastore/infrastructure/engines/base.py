@@ -34,14 +34,20 @@ class WriteResult:
 class InfoResult:
     """Table metadata returned by `datastore_info`.
 
-    `fields` is the column schema in the same `[{"id", "type", ...}]`
-    shape as `SearchResult.fields`. `meta` is a free-form dict for
-    engine-specific extras (row count, table size, last modified,
-    primary key, indexes, …) — the endpoint pipes it through verbatim,
-    so engines can grow new keys without a schema change.
+    `fields` is the legacy CKAN column shape (`[{"id", "type", ...}]`).
+    `schema` is a Frictionless Table Schema (`{"fields": [...],
+    "primaryKey": [...], ...}`). Engines populate both so callers on
+    either side of the migration see what they expect — the service
+    just passes them through.
+
+    `meta` is a free-form dict for engine-specific extras (row count,
+    table size, last modified, indexes, …) — the endpoint pipes it
+    through verbatim, so engines can grow new keys without a schema
+    change.
     """
 
     fields: list[dict]
+    schema: dict
     meta: dict
 
 
