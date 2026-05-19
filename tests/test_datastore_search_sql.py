@@ -68,8 +68,11 @@ def test_response_shape_matches_datastore_search(client: TestClient) -> None:
     assert response.headers["content-type"].startswith("application/json")
     result = response.json()["result"]
     assert set(result) >= {
-        "resource_id", "fields", "records", "limit", "offset", "_links",
+        "resource_id", "schema", "fields", "records", "limit", "offset", "_links",
     }
+    # Both column shapes are present: canonical `schema` + legacy `fields`.
+    assert isinstance(result["schema"], dict)
+    assert "fields" in result["schema"]
     # Defaults for fields that don't apply to raw SQL.
     assert result["resource_id"] == ""
     assert result["offset"] == 0

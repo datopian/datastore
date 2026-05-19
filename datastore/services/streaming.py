@@ -41,6 +41,7 @@ def stream_objects(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records: Iterator[tuple],
     limit: int,
@@ -54,6 +55,7 @@ def stream_objects(
     return _stream_envelope(
         help_url=help_url,
         resource_id=resource_id,
+        schema=schema,
         fields=fields,
         records_chunks=_records_object_array(columns, records),
         limit=limit,
@@ -68,6 +70,7 @@ def stream_lists(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records: Iterator[tuple],
     limit: int,
@@ -80,6 +83,7 @@ def stream_lists(
     return _stream_envelope(
         help_url=help_url,
         resource_id=resource_id,
+        schema=schema,
         fields=fields,
         records_chunks=_records_array_array(records),
         limit=limit,
@@ -94,6 +98,7 @@ def stream_csv(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records: Iterator[tuple],
     limit: int,
@@ -107,6 +112,7 @@ def stream_csv(
     return _stream_envelope(
         help_url=help_url,
         resource_id=resource_id,
+        schema=schema,
         fields=fields,
         records_chunks=_records_delimited_string(columns, records, delimiter=","),
         limit=limit,
@@ -121,6 +127,7 @@ def stream_tsv(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records: Iterator[tuple],
     limit: int,
@@ -134,6 +141,7 @@ def stream_tsv(
     return _stream_envelope(
         help_url=help_url,
         resource_id=resource_id,
+        schema=schema,
         fields=fields,
         records_chunks=_records_delimited_string(columns, records, delimiter="\t"),
         limit=limit,
@@ -148,6 +156,7 @@ def _stream_envelope(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records_chunks: Iterator[bytes],
     limit: int,
@@ -159,11 +168,16 @@ def _stream_envelope(
     """CKAN envelope skeleton. Each format passes its own `records_chunks`
     iterator that emits the JSON value for the `records` field — either
     a JSON array (objects / lists) or a JSON string (csv / tsv).
+
+    Column metadata is emitted in both shapes: `schema` (canonical
+    Frictionless) and `fields` (legacy `{id, type}` list, deprecated).
     """
     yield b'{"help":'
     yield orjson.dumps(help_url)
     yield b',"success":true,"result":{"resource_id":'
     yield orjson.dumps(resource_id)
+    yield b',"schema":'
+    yield orjson.dumps(schema)
     yield b',"fields":'
     yield orjson.dumps(fields)
     yield b',"records":'

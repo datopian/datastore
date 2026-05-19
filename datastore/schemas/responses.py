@@ -105,7 +105,8 @@ class DatastoreDeleteResponse(ResponseModel):
 
 
 class DatastoreSearchResponse(ResponseModel):
-    """Response for `GET /api/3/datastore_search`."""
+    """Response for `GET /api/3/datastore_search` 
+    """
 
     class Result(BaseModel):
         # `_links` starts with an underscore, which pydantic treats as a
@@ -113,7 +114,11 @@ class DatastoreSearchResponse(ResponseModel):
         model_config = ConfigDict(populate_by_name=True)
 
         resource_id: str
-        fields: list[dict[str, Any]]
+        schema: dict[str, Any]
+        fields: Annotated[
+            list[dict[str, Any]],
+            Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+        ]
         records: list[dict[str, Any]]
         limit: int
         offset: int

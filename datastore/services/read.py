@@ -9,6 +9,7 @@ from datastore.infrastructure.engines import get_datastore_engine
 from datastore.infrastructure.engines.registry import get_allowed_sql_functions
 from datastore.schemas.responses import DatastoreInfoResponse
 from datastore.schemas.validators import (
+    frictionless_schema_to_fields,
     to_csv_list,
     to_json_object,
     to_str_or_json_object,
@@ -69,10 +70,13 @@ async def search_datastore(
         include_total=data_dict["include_total"],
     )
 
+    fields, _ = frictionless_schema_to_fields(result.schema)
+    
     envelope_kwargs = dict(
         help_url=request_url,
         resource_id=data_dict["resource_id"],
-        fields=result.fields,
+        schema=result.schema,
+        fields=fields,
         records=result.records,
         limit=data_dict["limit"],
         offset=data_dict["offset"],
@@ -126,10 +130,12 @@ async def search_sql_datastore(
     result = engine.search_sql(
         sql=data_dict["sql"], limit=_SQL_DEFAULT_LIMIT
     )
+    fields, _ = frictionless_schema_to_fields(result.schema)
     return stream_objects(
         help_url=request_url,
         resource_id="",
-        fields=result.fields,
+        schema=result.schema,
+        fields=fields,
         records=result.records,
         limit=_SQL_DEFAULT_LIMIT,
         offset=0,

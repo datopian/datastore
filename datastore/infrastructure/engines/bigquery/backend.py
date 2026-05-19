@@ -116,9 +116,12 @@ class BigQueryBackend(DatastoreBackend):
         runs `COUNT(*)` when `include_total=True`, and yields tuples
         page-by-page from `query_job.result()`.
         """
-        column_metadata: list[dict] = [{"id": c, "type": "any"} for c in fields] if fields else []
+        schema: dict = {
+            "fields": [{"name": c, "type": "any"} for c in fields]
+            if fields else []
+        }
         return SearchResult(
-            fields=column_metadata,
+            schema=schema,
             records=iter([]),
             total=0 if include_total else None,
             records_truncated=False,
@@ -133,7 +136,7 @@ class BigQueryBackend(DatastoreBackend):
         if the iterator hit `limit`.
         """
         return SearchResult(
-            fields=[],
+            schema={"fields": []},
             records=iter([]),
             records_truncated=False,
         )

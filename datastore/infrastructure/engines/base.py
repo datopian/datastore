@@ -14,14 +14,14 @@ class SearchResult:
     the streaming serialiser.
     """
 
-    fields: list[dict]  # [{"id": "col_name", "type": "text"}, ...]
+    schema: dict  # {"fields": [{"name": "col", "type": "string"}, ...]}
     records: Iterator[tuple]
     total: int | None = None
     records_truncated: bool = False
 
     @property
     def columns(self) -> list[str]:
-        return [f["id"] for f in self.fields]
+        return [f["name"] for f in self.schema.get("fields", [])]
 
 
 @dataclass(slots=True)
