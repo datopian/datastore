@@ -119,6 +119,15 @@ class BigQueryBackend(DatastoreBackend):
 
     # ----- table refs + low-level client wrappers ------------------------
 
+    @property
+    def _include_updated_at(self) -> bool:
+        """Read the `_updated_at` system-column toggle from config.
+
+        Defaults to `True` when no config is attached (test scaffolds
+        that build the backend directly without `initialize()`).
+        """
+        return getattr(self.config, "INCLUDE_UPDATED_AT", True)
+
     def _data_table_ref(self, resource_id: str) -> str:
         """Backtick-quoted `project.dataset.<resource_id>` for SQL.
 
@@ -167,7 +176,7 @@ class BigQueryBackend(DatastoreBackend):
         """`CREATE TABLE IF NOT EXISTS` with columns derived from the
         Frictionless schema. Idempotent — a second call on the same
         resource is a no-op DDL on the BigQuery side."""
-        cols = column_defs(schema)
+        cols = column_defs(schema, include_updated_at=self._include_updated_at)
         if not cols:
             log.warning(
                 "BigQueryBackend.create: schema for %r has no fields; "
@@ -249,12 +258,19 @@ class BigQueryBackend(DatastoreBackend):
         if not records:
             return
         try:
-            sql = insert_sql(self._data_table_ref(resource_id), schema)
+            sql = insert_sql(
+                self._data_table_ref(resource_id),
+                schema,
+                include_updated_at=self._include_updated_at,
+            )
         except ValueError as e:
             raise ValidationError(str(e)) from e
 
         from google.cloud import bigquery
 
+        # `MAX(_id)` is computed inline in the INSERT SQL — saves a
+        # separate round-trip per call (the older two-statement form
+        # cost ~1s of BigQuery job overhead for nothing).
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter(
@@ -296,12 +312,18 @@ class BigQueryBackend(DatastoreBackend):
         if not records:
             return
         try:
-            sql = merge_sql(self._data_table_ref(resource_id), schema)
+            sql = merge_sql(
+                self._data_table_ref(resource_id),
+                schema,
+                include_updated_at=self._include_updated_at,
+            )
         except ValueError as e:
             raise ValidationError(str(e)) from e
 
         from google.cloud import bigquery
 
+        # `MAX(_id)` is inlined in the MERGE's WHEN NOT MATCHED clause
+        # so the upsert is a single round-trip.
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter(
@@ -343,7 +365,11 @@ class BigQueryBackend(DatastoreBackend):
         if not records:
             return
         try:
-            sql = update_sql(self._data_table_ref(resource_id), schema)
+            sql = update_sql(
+                self._data_table_ref(resource_id),
+                schema,
+                include_updated_at=self._include_updated_at,
+            )
         except ValueError as e:
             raise ValidationError(str(e)) from e
 

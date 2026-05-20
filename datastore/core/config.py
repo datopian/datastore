@@ -110,6 +110,14 @@ class Config(BaseSettings):
         ),
     )
 
+    # Per-row system columns
+    INCLUDE_UPDATED_AT: bool = Field(
+        default=True,
+        description=(
+            "Add a `_updated_at` TIMESTAMP system column on each resource tables. "
+        ),
+    )
+
     # Redis settings
     REDIS_URL: str = Field(
         default="",

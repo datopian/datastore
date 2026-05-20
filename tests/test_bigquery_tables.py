@@ -38,6 +38,7 @@ from datastore.infrastructure.engines.bigquery.types import (
 @pytest.fixture
 def mock_client() -> MagicMock:
     client = MagicMock()
+    # Default: every `client.query(...).result()` yields no rows.
     client.query.return_value.result.return_value = []
     return client
 
@@ -94,8 +95,12 @@ def test_create_data_table_emits_create_table_if_not_exists(
     )
     sql = mock_client.query.call_args[0][0]
     assert "CREATE TABLE IF NOT EXISTS `proj-1.ds-1.res-1`" in sql
+    # User columns.
     assert "`id` INT64" in sql
     assert "`label` STRING" in sql
+    # System columns auto-prepended.
+    assert "`_id` INT64" in sql
+    assert "`_updated_at` TIMESTAMP" in sql
 
 
 def test_alter_adds_new_columns_and_widens_supported_types(
@@ -155,15 +160,26 @@ def test_insert_records_issues_dml_insert_with_rows_param(
 
     # No streaming insert.
     mock_client.insert_rows_json.assert_not_called()
-    # One DML statement.
+    # Single DML statement — `MAX(_id)` is inlined as a scalar
+    # subquery, so we don't pay a separate round-trip for the probe.
+    assert mock_client.query.call_count == 1
     sql_arg, kwargs = mock_client.query.call_args
     sql = sql_arg[0]
     assert sql.startswith("INSERT INTO `proj-1.ds-1.res-1` ")
     assert "FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r" in sql
-    # JSON columns extracted via PARSE_JSON inside SQL, no Python
-    # pre-serialisation pass.
+    # JSON columns extracted via PARSE_JSON inside SQL.
     assert "PARSE_JSON(JSON_QUERY(r, '$.bidder_metadata'))" in sql
+    # System columns auto-injected — `_id` from the inlined MAX subquery
+    # + ROW_NUMBER(), `_updated_at` from CURRENT_TIMESTAMP().
+    assert "`_id`, `_updated_at`" in sql
+    assert (
+        "(SELECT IFNULL(MAX(`_id`), 0) FROM `proj-1.ds-1.res-1`) "
+        "+ ROW_NUMBER() OVER ()"
+    ) in sql
+    assert "CURRENT_TIMESTAMP()" in sql
+    # Only `@rows` is passed as a parameter now — no separate probe.
     params = {p.name: p.value for p in kwargs["job_config"].query_parameters}
+    assert list(params.keys()) == ["rows"]
     assert json.loads(params["rows"]) == records
 
 
@@ -194,9 +210,9 @@ def test_create_new_resource_runs_ddl_records_then_metadata_in_order(
     mock_client: MagicMock,
 ) -> None:
     """New resource path: CREATE TABLE → INSERT INTO → metadata.insert.
-    Metadata is the last write so any failure earlier leaves it
-    untouched. CREATE + INSERT both go through `client.query` (DDL +
-    DML respectively); ordering is asserted on the SQL prefixes."""
+    Two BigQuery round-trips (`MAX(_id)` is inlined into the INSERT
+    statement). Metadata is the last write so any failure earlier
+    leaves it untouched."""
     backend = _backend(mock_client)
     backend.metadata = MagicMock()
     backend.metadata.get.return_value = None
@@ -212,11 +228,12 @@ def test_create_new_resource_runs_ddl_records_then_metadata_in_order(
         include_total=False,
     )
 
-    # Two `query` calls landed (CREATE TABLE, INSERT INTO) before the
-    # metadata write.
     sql_calls = [c for c in parent.mock_calls if c[0] == "query"]
+    assert len(sql_calls) == 2  # no separate MAX(_id) probe
     assert sql_calls[0].args[0].startswith("CREATE TABLE IF NOT EXISTS")
     assert sql_calls[1].args[0].startswith("INSERT INTO ")
+    # The inlined MAX(_id) subquery rides inside the INSERT itself.
+    assert "SELECT IFNULL(MAX(`_id`), 0)" in sql_calls[1].args[0]
     # metadata.insert came last.
     assert parent.mock_calls[-1][0] == "metadata_insert"
 
@@ -226,20 +243,18 @@ def test_create_skips_metadata_when_records_insert_fails(
 ) -> None:
     """Atomicity: a DML INSERT failure leaves metadata untouched.
 
-    Simulate the failure on the second `client.query` call (the INSERT)
-    so the first (CREATE TABLE) still succeeds.
+    Create flow: CREATE TABLE → INSERT. Fail the second query (the
+    INSERT); the first (CREATE TABLE) succeeds.
     """
     backend = _backend(mock_client)
     backend.metadata = MagicMock()
     backend.metadata.get.return_value = None
 
-    # First call (CREATE TABLE) succeeds; second (INSERT) raises.
-    create_job = MagicMock()
-    create_job.result.return_value = []
-    mock_client.query.side_effect = [
-        create_job,
-        RuntimeError("insert failed"),
-    ]
+    success_job = MagicMock()
+    success_job.result.return_value = []
+    fail_job = MagicMock()
+    fail_job.result.side_effect = RuntimeError("insert failed")
+    mock_client.query.side_effect = [success_job, fail_job]
 
     with pytest.raises(ServerError):
         backend.create(
@@ -288,9 +303,31 @@ def test_merge_sql_renders_typed_extractors_on_match_update_no_match_insert() ->
     assert "CAST(JSON_VALUE(r, '$.id') AS INT64) AS `id`" in sql
     assert "JSON_VALUE(r, '$.label') AS `label`" in sql
     assert "PARSE_JSON(JSON_QUERY(r, '$.meta')) AS `meta`" in sql
+    # USING attaches ROW_NUMBER() as _rn for auto-`_id` on NOT MATCHED.
+    assert "ROW_NUMBER() OVER () AS _rn" in sql
     assert "ON T.`id` = S.`id`" in sql
-    assert "WHEN MATCHED THEN UPDATE SET T.`label` = S.`label`" in sql
-    assert "WHEN NOT MATCHED THEN INSERT (`id`, `label`, `meta`)" in sql
+    # WHEN MATCHED only fires when some non-PK column actually differs
+    # — `_updated_at` advances on real changes, not on no-op upserts.
+    # Diff predicate uses IS DISTINCT FROM (NULL-safe) for scalars and
+    # TO_JSON_STRING(...) wrap for JSON columns.
+    assert (
+        "WHEN MATCHED AND ("
+        "T.`label` IS DISTINCT FROM S.`label` OR "
+        "TO_JSON_STRING(T.`meta`) IS DISTINCT FROM TO_JSON_STRING(S.`meta`)"
+        ")"
+    ) in sql
+    assert "T.`label` = S.`label`" in sql
+    assert "T.`_updated_at` = CURRENT_TIMESTAMP()" in sql
+    # NOT MATCHED inserts system columns + user columns. `_id` is
+    # `(SELECT MAX(_id) FROM tbl) + S._rn` — inlined to avoid a
+    # separate probe round-trip.
+    assert (
+        "WHEN NOT MATCHED THEN INSERT (`_id`, `_updated_at`, "
+        "`id`, `label`, `meta`)"
+    ) in sql
+    assert (
+        "(SELECT IFNULL(MAX(`_id`), 0) FROM `p.d.r`) + S._rn"
+    ) in sql
 
 
 def test_update_sql_renders_dml_update_keyed_on_primary_key() -> None:
@@ -305,7 +342,9 @@ def test_update_sql_renders_dml_update_keyed_on_primary_key() -> None:
         },
     )
     assert sql.startswith("UPDATE `p.d.r` T ")
-    assert "SET T.`label` = S.`label`" in sql
+    assert "T.`label` = S.`label`" in sql
+    # `_updated_at` is always bumped, even when there are non-PK fields.
+    assert "T.`_updated_at` = CURRENT_TIMESTAMP()" in sql
     assert "WHERE T.`id` = S.`id`" in sql
     assert "MERGE" not in sql  # plain DML, not MERGE
 
@@ -542,18 +581,16 @@ def test_insert_translates_bigquery_bad_double_value_to_type_mismatch(
     a non-numeric string for a `number` column) is translated to a
     clear ValidationError naming the bad value and the expected type.
 
-    The create-flow runs CREATE TABLE first then INSERT — only the
-    INSERT call should fail. Use `side_effect` as a list so the first
-    `client.query` (DDL) succeeds and the second (DML INSERT) raises.
+    The create-flow runs CREATE TABLE → INSERT INTO — only the INSERT
+    (2nd call) should fail. The first (CREATE TABLE) succeeds.
     """
-    create_job = MagicMock()
-    create_job.result.return_value = []
-    mock_client.query.side_effect = [
-        create_job,
-        RuntimeError(
-            "400 Bad double value: jk; reason: invalidQuery, location: query"
-        ),
-    ]
+    success_job = MagicMock()
+    success_job.result.return_value = []
+    fail_job = MagicMock()
+    fail_job.result.side_effect = RuntimeError(
+        "400 Bad double value: jk; reason: invalidQuery, location: query"
+    )
+    mock_client.query.side_effect = [success_job, fail_job]
     backend = _backend(mock_client)
     backend.metadata = MagicMock()
     backend.metadata.get.return_value = None
@@ -709,3 +746,82 @@ def test_translate_bad_numeric_value(mock_client: MagicMock) -> None:
         )
     assert "'not-a-num'" in str(exc.value)
     assert "number" in str(exc.value)
+
+
+# --- _updated_at toggle ---------------------------------------------------
+
+
+def test_sql_helpers_omit_updated_at_when_flag_disabled() -> None:
+    """`Config.INCLUDE_UPDATED_AT=False` drops `_updated_at` from every
+    write path: CREATE TABLE, INSERT, MERGE (both branches), UPDATE."""
+    schema = {
+        "fields": [
+            {"name": "id", "type": "integer"},
+            {"name": "label", "type": "string"},
+        ],
+        "primaryKey": ["id"],
+    }
+    from datastore.infrastructure.engines.bigquery.lib import (
+        column_defs,
+        insert_sql,
+        merge_sql,
+        update_sql,
+    )
+
+    # CREATE TABLE
+    cols = column_defs(schema, include_updated_at=False)
+    assert "`_id` INT64" in cols
+    assert not any("_updated_at" in c for c in cols)
+
+    # INSERT
+    ins = insert_sql("`p.d.r`", schema, include_updated_at=False)
+    assert "`_id`, `id`, `label`" in ins  # no _updated_at in col list
+    assert "CURRENT_TIMESTAMP()" not in ins
+    assert "_updated_at" not in ins
+
+    # MERGE — neither MATCHED nor NOT MATCHED touches `_updated_at`.
+    mer = merge_sql("`p.d.r`", schema, include_updated_at=False)
+    assert "_updated_at" not in mer
+    assert "CURRENT_TIMESTAMP()" not in mer
+    # The MATCHED branch still fires on real diffs, just without the
+    # timestamp bump.
+    assert "WHEN MATCHED AND (T.`label` IS DISTINCT FROM S.`label`)" in mer
+
+    # UPDATE — SET only carries the user column edit.
+    upd = update_sql("`p.d.r`", schema, include_updated_at=False)
+    assert "_updated_at" not in upd
+    assert "SET T.`label` = S.`label`" in upd
+
+
+def test_update_sql_rejects_all_pk_schema_when_timestamp_disabled() -> None:
+    """With `_updated_at` disabled, an all-PK schema has nothing to
+    SET — raise so the backend can surface a clear ValidationError."""
+    from datastore.infrastructure.engines.bigquery.lib import update_sql
+
+    schema = {
+        "fields": [
+            {"name": "a", "type": "integer"},
+            {"name": "b", "type": "string"},
+        ],
+        "primaryKey": ["a", "b"],
+    }
+    with pytest.raises(ValueError, match="nothing to SET"):
+        update_sql("`p.d.r`", schema, include_updated_at=False)
+
+
+def test_backend_propagates_config_flag_into_ddl(
+    mock_client: MagicMock,
+) -> None:
+    """`BigQueryBackend._include_updated_at` reads `INCLUDE_UPDATED_AT`
+    off the attached config; `_create_data_table` honours it."""
+    backend = _backend(mock_client)
+    backend.config.INCLUDE_UPDATED_AT = False
+
+    backend._create_data_table(
+        "res-1",
+        {"fields": [{"name": "id", "type": "integer"}]},
+    )
+
+    sql = mock_client.query.call_args[0][0]
+    assert "`_id` INT64" in sql
+    assert "_updated_at" not in sql

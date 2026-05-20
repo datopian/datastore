@@ -1,19 +1,7 @@
-"""Pure helpers used by the BigQuery backend.
-
-Everything in here is side-effect free — schema diffs, DDL clause
-rendering, JSON-column serialisation, error formatting. The backend
-class in `backend.py` orchestrates I/O; these helpers handle the
-data-shape massaging so the orchestration stays focused on the
-sequence of side effects.
-
-Kept separate from `backend.py` so the helpers are trivially unit
-testable, and so a future engine can copy the file (or import from
-it) when it needs the same Frictionless-schema reasoning.
-"""
+"""Side-effect-free helpers for the BigQuery backend: schema diffs,
+DDL clause rendering, DML statement builders, JSON extractors."""
 
 from __future__ import annotations
-
-from typing import Any
 
 from datastore.core.exceptions import ConflictError
 from datastore.infrastructure.engines.bigquery.types import (
@@ -21,32 +9,43 @@ from datastore.infrastructure.engines.bigquery.types import (
     can_widen,
 )
 
-# Frictionless types whose BigQuery column type is `JSON`.
-# `insert_rows_json` requires JSON-typed values to arrive as JSON
-# strings, not native dicts / lists.
+# Frictionless types that map to BigQuery `JSON`.
 JSON_FRICTIONLESS_TYPES = frozenset({"object", "array", "geojson"})
 
+# Engine-managed columns. `_id` always present; `_updated_at` opt-in
+# via `Config.INCLUDE_UPDATED_AT`. Same-named user fields are dropped.
+SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset({"_id", "_updated_at"})
 
-def column_defs(schema: dict) -> list[str]:
-    """Render `schema.fields` as ``\\`name\\` TYPE`` column declarations
-    for a `CREATE TABLE` statement.
-    """
-    return [
-        f"`{f['name']}` {bigquery_type(f.get('type'))}"
-        for f in schema.get("fields", [])
-        if f.get("name")
-    ]
+
+def _system_col_defs(include_updated_at: bool) -> tuple[str, ...]:
+    return (
+        ("`_id` INT64", "`_updated_at` TIMESTAMP")
+        if include_updated_at
+        else ("`_id` INT64",)
+    )
+
+
+def _system_col_insert_list(include_updated_at: bool) -> str:
+    return "`_id`, `_updated_at`" if include_updated_at else "`_id`"
+
+
+def column_defs(schema: dict, *, include_updated_at: bool = True) -> list[str]:
+    """Render `schema.fields` as ``\\`name\\` TYPE`` for `CREATE TABLE`,
+    prepending system columns and skipping any field that collides."""
+    cols: list[str] = list(_system_col_defs(include_updated_at))
+    for f in schema.get("fields", []):
+        name = f.get("name")
+        if not name or name in SYSTEM_COLUMN_NAMES:
+            continue
+        cols.append(f"`{name}` {bigquery_type(f.get('type'))}")
+    return cols
 
 
 def schema_diff(
     old_schema: dict, new_schema: dict
 ) -> tuple[list[str], list[tuple[str, str | None, str | None]], list[str]]:
-    """Compute `(added, type_changes, removed)` between two schemas.
-
-    `type_changes` is `(name, old_type, new_type)` — types are the raw
-    Frictionless values; mapping to BigQuery happens at the call site
-    so the diff stays dialect-agnostic.
-    """
+    """Return `(added, type_changes, removed)` between two schemas.
+    Types are raw Frictionless values; dialect mapping is the caller's job."""
     old_by_name = {
         f["name"]: f for f in old_schema.get("fields", []) if f.get("name")
     }
@@ -68,10 +67,7 @@ def schema_diff(
 def reject_unsupported_type_changes(
     type_changes: list[tuple[str, str | None, str | None]],
 ) -> None:
-    """Raise `ConflictError` if any transition isn't a BigQuery-allowed
-    widening. Validation happens up-front so a single bad column never
-    half-applies the rest of an `ALTER TABLE`.
-    """
+    """Raise `ConflictError` if any transition isn't a BigQuery widening."""
     unsupported = [
         f"'{name}' ({old_t} → {new_t})"
         for name, old_t, new_t in type_changes
@@ -95,7 +91,7 @@ def alter_clauses(
     type_changes: list[tuple[str, str | None, str | None]],
     new_schema: dict,
 ) -> list[str]:
-    """Render the per-column clauses for a single `ALTER TABLE`."""
+    """Per-column clauses for a single `ALTER TABLE`."""
     new_by_name = {
         f["name"]: f for f in new_schema.get("fields", []) if f.get("name")
     }
@@ -112,59 +108,54 @@ def alter_clauses(
     return clauses
 
 
-def insert_sql(table_ref: str, schema: dict) -> str:
-    """Render a DML `INSERT INTO ... SELECT FROM UNNEST(@rows)` statement.
+def insert_sql(
+    table_ref: str, schema: dict, *, include_updated_at: bool = True
+) -> str:
+    """Render `INSERT INTO ... SELECT FROM UNNEST(JSON_QUERY_ARRAY(@rows))`.
 
-    BigQuery's streaming insert (`Client.insert_rows_json`) puts rows
-    into a streaming buffer that DML (`UPDATE` / `DELETE` / `MERGE`)
-    cannot touch for 30–90 minutes until it flushes. That makes
-    `datastore_create` (streaming) + immediate `datastore_upsert`
-    (MERGE) fundamentally broken. DML INSERT writes directly to
-    storage — no streaming buffer, immediate consistency for any
-    follow-up upsert/update on the same primaryKey.
-
-    Source rows arrive as a JSON-array string parameter `@rows`,
-    identical to `merge_sql` / `update_sql`. Each column is extracted
-    with the appropriate typed accessor (`_json_extract`) so the
-    statement is one round-trip regardless of batch size.
-
-    Raises `ValueError` when the schema has no fields; the backend
-    converts that to `ValidationError`.
+    DML (not streaming) so follow-up MERGE/UPDATE stays consistent.
+    `_id` = `(SELECT IFNULL(MAX(_id), 0) FROM tbl) + ROW_NUMBER() OVER ()`
+    — one MAX baseline per batch, ROW_NUMBER per row.
     """
-    fields = [f for f in schema.get("fields", []) if f.get("name")]
+    fields = [
+        f for f in schema.get("fields", [])
+        if f.get("name") and f["name"] not in SYSTEM_COLUMN_NAMES
+    ]
     if not fields:
-        raise ValueError("schema has no fields; cannot INSERT")
+        raise ValueError("schema has no user fields; cannot INSERT")
 
-    insert_cols = ", ".join(f"`{f['name']}`" for f in fields)
-    select_cols = ", ".join(_json_extract(f) for f in fields)
+    data_cols = ", ".join(f"`{f['name']}`" for f in fields)
+    data_extractors = ", ".join(_json_extract(f) for f in fields)
+    sys_cols = _system_col_insert_list(include_updated_at)
+    id_expr = (
+        f"(SELECT IFNULL(MAX(`_id`), 0) FROM {table_ref}) "
+        f"+ ROW_NUMBER() OVER ()"
+    )
+    sys_vals = (
+        f"{id_expr}, CURRENT_TIMESTAMP()"
+        if include_updated_at
+        else id_expr
+    )
     return (
-        f"INSERT INTO {table_ref} ({insert_cols}) "
-        f"SELECT {select_cols} "
+        f"INSERT INTO {table_ref} ({sys_cols}, {data_cols}) "
+        f"SELECT {sys_vals}, {data_extractors} "
         f"FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r"
     )
 
 
-def merge_sql(table_ref: str, schema: dict) -> str:
-    """Render a BigQuery `MERGE` statement for upserting rows keyed by
-    the schema's `primaryKey`.
+def merge_sql(
+    table_ref: str, schema: dict, *, include_updated_at: bool = True
+) -> str:
+    """Render `MERGE` keyed by `schema.primaryKey`.
 
-    Rows arrive as a JSON-array string parameter `@rows`; `JSON_QUERY_ARRAY`
-    splits it into JSON values, then each column is extracted with the
-    right typed accessor:
-
-      - JSON columns (`object` / `array` / `geojson`) → `PARSE_JSON(JSON_QUERY(...))`
-      - `STRING` columns → `JSON_VALUE(...)` (returns the string verbatim)
-      - everything else → `CAST(JSON_VALUE(...) AS <bq-type>)`
-
-    `ON` joins on every primaryKey column. `WHEN MATCHED` updates the
-    non-key columns; `WHEN NOT MATCHED` inserts the full row. If every
-    column is part of the primary key the UPDATE branch is omitted.
-
-    Raises `ValueError` if `schema.primaryKey` is missing or empty —
-    upsert has no meaningful semantics without one; the backend turns
-    that into a `ValidationError` for the caller.
+    Matched rows update only if a non-PK column differs (so
+    `_updated_at` advances only on real changes). Unmatched rows
+    insert with `_id` = `(SELECT MAX(_id) FROM tbl) + _rn`.
     """
-    fields = [f for f in schema.get("fields", []) if f.get("name")]
+    fields = [
+        f for f in schema.get("fields", [])
+        if f.get("name") and f["name"] not in SYSTEM_COLUMN_NAMES
+    ]
     pk_raw = schema.get("primaryKey")
     pk: list[str] = (
         [pk_raw] if isinstance(pk_raw, str) else list(pk_raw or [])
@@ -178,7 +169,6 @@ def merge_sql(table_ref: str, schema: dict) -> str:
     pk_set = set(pk)
     non_pk = [f for f in fields if f["name"] not in pk_set]
 
-    # USING clause — typed extraction from the JSON row variable `r`.
     using_cols = ", ".join(
         f"{_json_extract(f)} AS `{f['name']}`" for f in fields
     )
@@ -188,39 +178,49 @@ def merge_sql(table_ref: str, schema: dict) -> str:
 
     parts = [
         f"MERGE {table_ref} T",
-        f"USING (SELECT {using_cols} "
+        f"USING (SELECT {using_cols}, ROW_NUMBER() OVER () AS _rn "
         f"FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r) S",
         f"ON {on_clause}",
     ]
     if non_pk:
-        update_set = ", ".join(
+        diff_predicate = " OR ".join(_diff_expr(f) for f in non_pk)
+        matched_assignments = [
             f"T.`{f['name']}` = S.`{f['name']}`" for f in non_pk
+        ]
+        if include_updated_at:
+            matched_assignments.append(
+                "T.`_updated_at` = CURRENT_TIMESTAMP()"
+            )
+        parts.append(
+            f"WHEN MATCHED AND ({diff_predicate}) "
+            f"THEN UPDATE SET {', '.join(matched_assignments)}"
         )
-        parts.append(f"WHEN MATCHED THEN UPDATE SET {update_set}")
+
+    sys_cols = _system_col_insert_list(include_updated_at)
+    id_value = f"(SELECT IFNULL(MAX(`_id`), 0) FROM {table_ref}) + S._rn"
+    sys_vals = (
+        f"{id_value}, CURRENT_TIMESTAMP()"
+        if include_updated_at
+        else id_value
+    )
     parts.append(
-        f"WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})"
+        f"WHEN NOT MATCHED THEN INSERT "
+        f"({sys_cols}, {insert_cols}) "
+        f"VALUES ({sys_vals}, {insert_vals})"
     )
     return " ".join(parts)
 
 
-def update_sql(table_ref: str, schema: dict) -> str:
-    """Render a BigQuery DML `UPDATE` statement for updating rows
-    keyed on `schema.primaryKey`.
-
-    Single statement using `UPDATE … FROM (SELECT … FROM UNNEST(...))`
-    syntax. Rows arrive as a JSON-array string parameter `@rows`,
-    identical to `merge_sql`. The caller is expected to check
-    `num_dml_affected_rows` against the input row count and surface a
-    `NotFoundError` when any row's primary key didn't match — DML
-    UPDATE silently does nothing for unmatched rows.
-
-    Raises `ValueError` when:
-      - `schema.primaryKey` is missing or empty (no key → no row to
-        match);
-      - every column is part of the primary key (nothing to SET).
-    The backend converts both to `ValidationError`.
-    """
-    fields = [f for f in schema.get("fields", []) if f.get("name")]
+def update_sql(
+    table_ref: str, schema: dict, *, include_updated_at: bool = True
+) -> str:
+    """Render `UPDATE T SET ... FROM (SELECT ... FROM UNNEST(@rows)) S
+    WHERE <pk match>`. Caller must compare affected rows to input size
+    and raise `NotFoundError` for unmatched keys."""
+    fields = [
+        f for f in schema.get("fields", [])
+        if f.get("name") and f["name"] not in SYSTEM_COLUMN_NAMES
+    ]
     pk_raw = schema.get("primaryKey")
     pk: list[str] = (
         [pk_raw] if isinstance(pk_raw, str) else list(pk_raw or [])
@@ -233,18 +233,21 @@ def update_sql(table_ref: str, schema: dict) -> str:
 
     pk_set = set(pk)
     non_pk = [f for f in fields if f["name"] not in pk_set]
-    if not non_pk:
+    if not non_pk and not include_updated_at:
         raise ValueError(
-            "schema has no non-key columns to update; every field is "
-            "part of 'primaryKey'"
+            "schema has no non-key columns to update and the "
+            "`_updated_at` system column is disabled; nothing to SET"
         )
 
     using_cols = ", ".join(
         f"{_json_extract(f)} AS `{f['name']}`" for f in fields
     )
-    set_clause = ", ".join(
+    set_parts = [
         f"T.`{f['name']}` = S.`{f['name']}`" for f in non_pk
-    )
+    ]
+    if include_updated_at:
+        set_parts.append("T.`_updated_at` = CURRENT_TIMESTAMP()")
+    set_clause = ", ".join(set_parts)
     where_clause = " AND ".join(f"T.`{n}` = S.`{n}`" for n in pk)
 
     return (
@@ -256,9 +259,20 @@ def update_sql(table_ref: str, schema: dict) -> str:
     )
 
 
+def _diff_expr(field: dict) -> str:
+    """NULL-safe inequality between `T.<col>` and `S.<col>`. JSON
+    columns are canonicalised via `TO_JSON_STRING` first."""
+    name = field["name"]
+    if field.get("type") in JSON_FRICTIONLESS_TYPES:
+        return (
+            f"TO_JSON_STRING(T.`{name}`) IS DISTINCT FROM "
+            f"TO_JSON_STRING(S.`{name}`)"
+        )
+    return f"T.`{name}` IS DISTINCT FROM S.`{name}`"
+
+
 def _json_extract(field: dict) -> str:
-    """Build the typed extraction expression for a single schema field
-    against a JSON row variable `r`. See `merge_sql` for the rules."""
+    """Typed extraction of a field from JSON row variable `r`."""
     name = field["name"]
     fr_type = field.get("type")
     bq_type = bigquery_type(fr_type)
@@ -268,5 +282,3 @@ def _json_extract(field: dict) -> str:
     if bq_type == "STRING":
         return f"JSON_VALUE(r, {path})"
     return f"CAST(JSON_VALUE(r, {path}) AS {bq_type})"
-
-
