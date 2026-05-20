@@ -112,34 +112,161 @@ def alter_clauses(
     return clauses
 
 
-def serialise_json_columns(
-    schema: dict, records: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Encode any value bound for a JSON-typed column as a JSON string.
+def insert_sql(table_ref: str, schema: dict) -> str:
+    """Render a DML `INSERT INTO ... SELECT FROM UNNEST(@rows)` statement.
 
-    Reads the column types from the canonical Frictionless schema, finds
-    the ones that map to BigQuery `JSON`, and walks each row encoding
-    just those values via `orjson`. `None` and already-`str` values pass
-    through untouched. Other column values are passed through verbatim —
-    no implicit type coercion.
+    BigQuery's streaming insert (`Client.insert_rows_json`) puts rows
+    into a streaming buffer that DML (`UPDATE` / `DELETE` / `MERGE`)
+    cannot touch for 30–90 minutes until it flushes. That makes
+    `datastore_create` (streaming) + immediate `datastore_upsert`
+    (MERGE) fundamentally broken. DML INSERT writes directly to
+    storage — no streaming buffer, immediate consistency for any
+    follow-up upsert/update on the same primaryKey.
+
+    Source rows arrive as a JSON-array string parameter `@rows`,
+    identical to `merge_sql` / `update_sql`. Each column is extracted
+    with the appropriate typed accessor (`_json_extract`) so the
+    statement is one round-trip regardless of batch size.
+
+    Raises `ValueError` when the schema has no fields; the backend
+    converts that to `ValidationError`.
     """
-    import orjson
+    fields = [f for f in schema.get("fields", []) if f.get("name")]
+    if not fields:
+        raise ValueError("schema has no fields; cannot INSERT")
 
-    json_cols = {
-        f["name"]
-        for f in schema.get("fields", [])
-        if f.get("name") and f.get("type") in JSON_FRICTIONLESS_TYPES
-    }
-    if not json_cols:
-        return records
+    insert_cols = ", ".join(f"`{f['name']}`" for f in fields)
+    select_cols = ", ".join(_json_extract(f) for f in fields)
+    return (
+        f"INSERT INTO {table_ref} ({insert_cols}) "
+        f"SELECT {select_cols} "
+        f"FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r"
+    )
 
-    prepared: list[dict[str, Any]] = []
-    for row in records:
-        out = dict(row)
-        for col in json_cols & out.keys():
-            val = out[col]
-            if val is None or isinstance(val, str):
-                continue
-            out[col] = orjson.dumps(val).decode("utf-8")
-        prepared.append(out)
-    return prepared
+
+def merge_sql(table_ref: str, schema: dict) -> str:
+    """Render a BigQuery `MERGE` statement for upserting rows keyed by
+    the schema's `primaryKey`.
+
+    Rows arrive as a JSON-array string parameter `@rows`; `JSON_QUERY_ARRAY`
+    splits it into JSON values, then each column is extracted with the
+    right typed accessor:
+
+      - JSON columns (`object` / `array` / `geojson`) → `PARSE_JSON(JSON_QUERY(...))`
+      - `STRING` columns → `JSON_VALUE(...)` (returns the string verbatim)
+      - everything else → `CAST(JSON_VALUE(...) AS <bq-type>)`
+
+    `ON` joins on every primaryKey column. `WHEN MATCHED` updates the
+    non-key columns; `WHEN NOT MATCHED` inserts the full row. If every
+    column is part of the primary key the UPDATE branch is omitted.
+
+    Raises `ValueError` if `schema.primaryKey` is missing or empty —
+    upsert has no meaningful semantics without one; the backend turns
+    that into a `ValidationError` for the caller.
+    """
+    fields = [f for f in schema.get("fields", []) if f.get("name")]
+    pk_raw = schema.get("primaryKey")
+    pk: list[str] = (
+        [pk_raw] if isinstance(pk_raw, str) else list(pk_raw or [])
+    )
+    if not pk:
+        raise ValueError(
+            "schema has no 'primaryKey'; upsert requires one to "
+            "match existing rows"
+        )
+
+    pk_set = set(pk)
+    non_pk = [f for f in fields if f["name"] not in pk_set]
+
+    # USING clause — typed extraction from the JSON row variable `r`.
+    using_cols = ", ".join(
+        f"{_json_extract(f)} AS `{f['name']}`" for f in fields
+    )
+    on_clause = " AND ".join(f"T.`{n}` = S.`{n}`" for n in pk)
+    insert_cols = ", ".join(f"`{f['name']}`" for f in fields)
+    insert_vals = ", ".join(f"S.`{f['name']}`" for f in fields)
+
+    parts = [
+        f"MERGE {table_ref} T",
+        f"USING (SELECT {using_cols} "
+        f"FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r) S",
+        f"ON {on_clause}",
+    ]
+    if non_pk:
+        update_set = ", ".join(
+            f"T.`{f['name']}` = S.`{f['name']}`" for f in non_pk
+        )
+        parts.append(f"WHEN MATCHED THEN UPDATE SET {update_set}")
+    parts.append(
+        f"WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})"
+    )
+    return " ".join(parts)
+
+
+def update_sql(table_ref: str, schema: dict) -> str:
+    """Render a BigQuery DML `UPDATE` statement for updating rows
+    keyed on `schema.primaryKey`.
+
+    Single statement using `UPDATE … FROM (SELECT … FROM UNNEST(...))`
+    syntax. Rows arrive as a JSON-array string parameter `@rows`,
+    identical to `merge_sql`. The caller is expected to check
+    `num_dml_affected_rows` against the input row count and surface a
+    `NotFoundError` when any row's primary key didn't match — DML
+    UPDATE silently does nothing for unmatched rows.
+
+    Raises `ValueError` when:
+      - `schema.primaryKey` is missing or empty (no key → no row to
+        match);
+      - every column is part of the primary key (nothing to SET).
+    The backend converts both to `ValidationError`.
+    """
+    fields = [f for f in schema.get("fields", []) if f.get("name")]
+    pk_raw = schema.get("primaryKey")
+    pk: list[str] = (
+        [pk_raw] if isinstance(pk_raw, str) else list(pk_raw or [])
+    )
+    if not pk:
+        raise ValueError(
+            "schema has no 'primaryKey'; update requires one to "
+            "match existing rows"
+        )
+
+    pk_set = set(pk)
+    non_pk = [f for f in fields if f["name"] not in pk_set]
+    if not non_pk:
+        raise ValueError(
+            "schema has no non-key columns to update; every field is "
+            "part of 'primaryKey'"
+        )
+
+    using_cols = ", ".join(
+        f"{_json_extract(f)} AS `{f['name']}`" for f in fields
+    )
+    set_clause = ", ".join(
+        f"T.`{f['name']}` = S.`{f['name']}`" for f in non_pk
+    )
+    where_clause = " AND ".join(f"T.`{n}` = S.`{n}`" for n in pk)
+
+    return (
+        f"UPDATE {table_ref} T "
+        f"SET {set_clause} "
+        f"FROM (SELECT {using_cols} "
+        f"FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r) S "
+        f"WHERE {where_clause}"
+    )
+
+
+def _json_extract(field: dict) -> str:
+    """Build the typed extraction expression for a single schema field
+    against a JSON row variable `r`. See `merge_sql` for the rules."""
+    name = field["name"]
+    fr_type = field.get("type")
+    bq_type = bigquery_type(fr_type)
+    path = f"'$.{name}'"
+    if fr_type in JSON_FRICTIONLESS_TYPES:
+        return f"PARSE_JSON(JSON_QUERY(r, {path}))"
+    if bq_type == "STRING":
+        return f"JSON_VALUE(r, {path})"
+    return f"CAST(JSON_VALUE(r, {path}) AS {bq_type})"
+
+

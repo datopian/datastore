@@ -11,6 +11,36 @@ from datastore.main import create_app
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _isolate_bigquery_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the BigQuery engine into placeholder mode for every test.
+
+    The unit suite isn't allowed to contact real BigQuery — engine tests
+    mock `client.query` / `client.insert_rows_json` directly, and other
+    layers (write service, action endpoints) rely on the backend's
+    placeholder-echo branch (active when project/dataset are unset).
+
+    A developer .env that points at a live BQ project would otherwise
+    flip the engine into real mode, talk to GCP, and either hang the
+    suite on network calls or fail tests that expect echo semantics.
+    Clearing the four BQ envs (and resetting the engine cache so a
+    previously-built live instance doesn't survive between tests) keeps
+    the suite hermetic.
+    """
+    from datastore.core.config import get_config
+    from datastore.infrastructure.engines.registry import reset_engine_cache
+
+    for name in (
+        "BIGQUERY_PROJECT", "BIGQUERY_DATASET",
+        "BIGQUERY_CREDENTIALS", "BIGQUERY_CREDENTIALS_RO",
+    ):
+        monkeypatch.setenv(name, "")
+    # `Config` and engine instances are lru-cached / module-level
+    # singletons; invalidate so the cleared env actually takes effect.
+    get_config.cache_clear()
+    reset_engine_cache()
+
+
 class FakeCKAN:
     """In-memory stand-in matching `CKANClient` shape (api_key bound on instance).
 

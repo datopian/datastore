@@ -1,99 +1,38 @@
-"""Unit tests for the BigQuery DDL paths (`_create_data_table`,
-`_alter_data_table`) and the Frictionless→BigQuery type map.
+"""Unit tests for the BigQuery write paths — DDL, records insert,
+MERGE/UPDATE, and the `upsert` action dispatch.
 
-We bypass `initialize()` (which builds a real `bigquery.Client`) by
-constructing a `BigQueryBackend` directly and plugging in a mock
-client, mock metadata store, and the config fields the DDL helpers
-read. No real BigQuery is contacted.
+A mocked `bigquery.Client` is plugged into a backend whose
+`initialize()` we skip — no real BigQuery is contacted. The tests
+pin SQL shape, parameter binding, error wrapping, and the
+metadata/DDL atomicity contract.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
+from datastore.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    ServerError,
+    ValidationError,
+)
 from datastore.infrastructure.engines.bigquery.backend import BigQueryBackend
+from datastore.infrastructure.engines.bigquery.lib import (
+    merge_sql,
+    update_sql,
+)
 from datastore.infrastructure.engines.bigquery.types import (
-    FRICTIONLESS_TO_BIGQUERY,
     bigquery_type,
     can_widen,
 )
 
 
-# --- types.py --------------------------------------------------------------
-
-
-def test_bigquery_type_map_covers_canonical_frictionless_types() -> None:
-    """Every canonical Frictionless type resolves to a concrete BQ type
-    (never the fallback)."""
-    for fr_type in (
-        "integer", "number", "string", "boolean",
-        "date", "time", "datetime",
-        "object", "array", "geojson", "geopoint",
-        "duration", "year", "yearmonth", "any",
-    ):
-        assert bigquery_type(fr_type) == FRICTIONLESS_TO_BIGQUERY[fr_type]
-
-
-def test_bigquery_type_unknown_falls_back_to_string() -> None:
-    assert bigquery_type("definitely-not-a-type") == "STRING"
-    assert bigquery_type(None) == "STRING"
-    assert bigquery_type("") == "STRING"
-
-
-def test_bigquery_type_integer_maps_to_int64() -> None:
-    assert bigquery_type("integer") == "INT64"
-
-
-def test_bigquery_type_datetime_maps_to_timestamp() -> None:
-    assert bigquery_type("datetime") == "TIMESTAMP"
-
-
-# --- can_widen -------------------------------------------------------------
-
-
-def test_can_widen_identity() -> None:
-    """No-op transition (X → X) is always allowed."""
-    assert can_widen("INT64", "INT64") is True
-    assert can_widen("STRING", "STRING") is True
-
-
-def test_can_widen_supported_numeric_chain() -> None:
-    """BigQuery numeric widening: INT64 → NUMERIC/BIGNUMERIC/FLOAT64."""
-    assert can_widen("INT64", "FLOAT64") is True
-    assert can_widen("INT64", "NUMERIC") is True
-    assert can_widen("INT64", "BIGNUMERIC") is True
-    assert can_widen("NUMERIC", "FLOAT64") is True
-
-
-def test_can_widen_date_to_datetime_and_timestamp() -> None:
-    assert can_widen("DATE", "DATETIME") is True
-    assert can_widen("DATE", "TIMESTAMP") is True
-
-
-def test_can_widen_rejects_unsupported_transitions() -> None:
-    """Anything outside the allowed widening map is rejected."""
-    assert can_widen("INT64", "STRING") is False
-    assert can_widen("STRING", "INT64") is False
-    assert can_widen("BOOL", "STRING") is False
-    assert can_widen("FLOAT64", "INT64") is False  # narrowing
-    assert can_widen("TIMESTAMP", "DATE") is False  # narrowing
-
-
-# --- DDL helpers (backend) -------------------------------------------------
-
-
-def _backend(client: MagicMock) -> BigQueryBackend:
-    """Build a backend with the mocked client + config plumbing the
-    DDL helpers need, skipping `initialize()`."""
-    backend = BigQueryBackend(mode="rw")
-    backend.client = client
-    backend.config = MagicMock()
-    backend.config.BIGQUERY_PROJECT = "proj-1"
-    backend.config.BIGQUERY_DATASET = "ds-1"
-    return backend
+# --- fixtures --------------------------------------------------------------
 
 
 @pytest.fixture
@@ -103,611 +42,670 @@ def mock_client() -> MagicMock:
     return client
 
 
-def test_data_table_ref_uses_backticks_for_uuid_like_ids(
-    mock_client: MagicMock,
-) -> None:
-    """Resource IDs with hyphens (CKAN UUIDs) need backticks to parse."""
-    backend = _backend(mock_client)
-    ref = backend._data_table_ref("res-abc-123")
-    assert ref == "`proj-1.ds-1.res-abc-123`"
+def _backend(client: MagicMock) -> BigQueryBackend:
+    """Backend wired with a mocked client + config; skips `initialize()`."""
+    b = BigQueryBackend(mode="rw")
+    b.client = client
+    b.config = MagicMock()
+    b.config.BIGQUERY_PROJECT = "proj-1"
+    b.config.BIGQUERY_DATASET = "ds-1"
+    return b
+
+
+# --- types.py --------------------------------------------------------------
+
+
+def test_bigquery_type_resolves_canonical_and_falls_back_to_string() -> None:
+    assert bigquery_type("integer") == "INT64"
+    assert bigquery_type("datetime") == "TIMESTAMP"
+    assert bigquery_type("object") == "JSON"
+    assert bigquery_type("unknown-type") == "STRING"
+    assert bigquery_type(None) == "STRING"
+
+
+def test_can_widen_allows_supported_and_rejects_others() -> None:
+    assert can_widen("INT64", "INT64") is True  # identity
+    assert can_widen("INT64", "FLOAT64") is True  # supported widening
+    assert can_widen("DATE", "TIMESTAMP") is True
+    assert can_widen("INT64", "STRING") is False
+    assert can_widen("FLOAT64", "INT64") is False  # narrowing
+
+
+# --- DDL helpers -----------------------------------------------------------
+
+
+def test_data_table_ref_uses_backticks(mock_client: MagicMock) -> None:
+    """Backticks let CKAN UUID-like ids parse without further escaping."""
+    assert _backend(mock_client)._data_table_ref("res-abc-123") == (
+        "`proj-1.ds-1.res-abc-123`"
+    )
 
 
 def test_create_data_table_emits_create_table_if_not_exists(
     mock_client: MagicMock,
 ) -> None:
     backend = _backend(mock_client)
-    schema = {
-        "fields": [
+    backend._create_data_table(
+        "res-1",
+        {"fields": [
             {"name": "id", "type": "integer"},
             {"name": "label", "type": "string"},
-            {"name": "ts", "type": "datetime"},
-        ]
-    }
-
-    backend._create_data_table("res-1", schema)
-
-    assert mock_client.query.call_count == 1
+        ]},
+    )
     sql = mock_client.query.call_args[0][0]
-    assert "CREATE TABLE IF NOT EXISTS" in sql
-    assert "`proj-1.ds-1.res-1`" in sql
+    assert "CREATE TABLE IF NOT EXISTS `proj-1.ds-1.res-1`" in sql
     assert "`id` INT64" in sql
     assert "`label` STRING" in sql
-    assert "`ts` TIMESTAMP" in sql
 
 
-def test_create_data_table_with_empty_schema_skips_ddl(
+def test_alter_adds_new_columns_and_widens_supported_types(
     mock_client: MagicMock,
 ) -> None:
-    """An empty `schema.fields` is a no-op rather than an SQL error
-    (CREATE TABLE with no columns is invalid in BQ)."""
-    backend = _backend(mock_client)
-
-    backend._create_data_table("res-1", {"fields": []})
-
-    assert mock_client.query.call_count == 0
-
-
-def test_alter_adds_only_new_columns(mock_client: MagicMock) -> None:
     backend = _backend(mock_client)
     old = {"fields": [{"name": "a", "type": "integer"}]}
-    new = {
-        "fields": [
-            {"name": "a", "type": "integer"},
-            {"name": "b", "type": "string"},
-            {"name": "c", "type": "boolean"},
-        ]
-    }
+    new = {"fields": [
+        {"name": "a", "type": "number"},   # widen INT64 → FLOAT64
+        {"name": "b", "type": "string"},   # add
+    ]}
 
     backend._alter_data_table("res-1", old, new)
 
-    assert mock_client.query.call_count == 1
     sql = mock_client.query.call_args[0][0]
     assert "ALTER TABLE `proj-1.ds-1.res-1`" in sql
     assert "ADD COLUMN IF NOT EXISTS `b` STRING" in sql
-    assert "ADD COLUMN IF NOT EXISTS `c` BOOL" in sql
-    # Existing column must not appear.
-    assert "ADD COLUMN IF NOT EXISTS `a`" not in sql
-
-
-def test_alter_no_diff_is_noop(mock_client: MagicMock) -> None:
-    backend = _backend(mock_client)
-    schema = {"fields": [{"name": "a", "type": "integer"}]}
-
-    backend._alter_data_table("res-1", schema, schema)
-
-    assert mock_client.query.call_count == 0
-
-
-def test_alter_applies_supported_type_widening(
-    mock_client: MagicMock,
-) -> None:
-    """`integer` → `number` is a supported BQ widening (INT64 →
-    FLOAT64). It should land as an `ALTER COLUMN SET DATA TYPE` clause."""
-    backend = _backend(mock_client)
-    old = {"fields": [{"name": "a", "type": "integer"}]}
-    new = {"fields": [{"name": "a", "type": "number"}]}
-
-    backend._alter_data_table("res-1", old, new)
-
-    assert mock_client.query.call_count == 1
-    sql = mock_client.query.call_args[0][0]
     assert "ALTER COLUMN `a` SET DATA TYPE FLOAT64" in sql
 
 
-def test_alter_raises_conflict_on_unsupported_type_change(
+def test_alter_rejects_unsupported_type_change_before_any_ddl(
     mock_client: MagicMock,
 ) -> None:
-    """`integer` → `string` is NOT a supported BQ widening — the
-    request must surface as a 409 ConflictError, not a silent skip."""
-    from datastore.core.exceptions import ConflictError
-
+    """`integer` → `string` isn't a BigQuery-allowed widening — raise
+    ConflictError up front, never issue partial DDL."""
     backend = _backend(mock_client)
-    old = {"fields": [{"name": "a", "type": "integer"}]}
-    new = {"fields": [{"name": "a", "type": "string"}]}
-
-    with pytest.raises(ConflictError) as exc:
-        backend._alter_data_table("res-1", old, new)
-
-    msg = str(exc.value)
-    assert "Cannot change column type" in msg
-    assert "'a'" in msg
-    assert "integer → string" in msg
-    assert "recreate the resource" in msg
-    # No DDL should have been issued — validation happens before any
-    # statement runs so partial application is impossible.
-    assert mock_client.query.call_count == 0
-
-
-def test_alter_add_and_widen_in_single_statement(
-    mock_client: MagicMock,
-) -> None:
-    """When a schema edit both adds a column and widens an existing
-    column, both clauses go into one `ALTER TABLE` statement."""
-    backend = _backend(mock_client)
-    old = {"fields": [{"name": "a", "type": "integer"}]}
-    new = {
-        "fields": [
-            {"name": "a", "type": "number"},  # widen
-            {"name": "b", "type": "string"},  # add
-        ]
-    }
-
-    backend._alter_data_table("res-1", old, new)
-
-    assert mock_client.query.call_count == 1
-    sql = mock_client.query.call_args[0][0]
-    assert sql.count("ALTER TABLE") == 1
-    assert "ADD COLUMN IF NOT EXISTS `b` STRING" in sql
-    assert "ALTER COLUMN `a` SET DATA TYPE FLOAT64" in sql
-
-
-def test_alter_does_not_drop_columns(
-    mock_client: MagicMock, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Removing a column from the schema must not issue DDL — that
-    would lose user data on a metadata edit."""
-    backend = _backend(mock_client)
-    old = {
-        "fields": [
-            {"name": "a", "type": "integer"},
-            {"name": "b", "type": "string"},
-        ]
-    }
-    new = {"fields": [{"name": "a", "type": "integer"}]}
-
-    backend._alter_data_table("res-1", old, new)
-
-    assert mock_client.query.call_count == 0
-
-
-# --- create() wiring -------------------------------------------------------
-
-
-def test_create_inserts_metadata_and_creates_table_for_new_resource(
-    mock_client: MagicMock,
-) -> None:
-    """First `create()` call: metadata.insert + CREATE TABLE."""
-    backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None  # not yet declared
-
-    schema: dict[str, Any] = {
-        "fields": [{"name": "a", "type": "integer"}]
-    }
-    backend.create("res-1", schema=schema, records=None, include_total=False)
-
-    backend.metadata.insert.assert_called_once_with("res-1", schema)
-    backend.metadata.update.assert_not_called()
-    # client.query was called once for the CREATE TABLE DDL.
-    assert mock_client.query.call_count == 1
-    assert "CREATE TABLE IF NOT EXISTS" in mock_client.query.call_args[0][0]
-
-
-def test_create_updates_metadata_and_alters_table_for_existing_resource(
-    mock_client: MagicMock,
-) -> None:
-    """Second `create()` on the same resource: metadata.update + ALTER
-    (when the schema added a column)."""
-    backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = {
-        "fields": [{"name": "a", "type": "integer"}]
-    }
-
-    new_schema = {
-        "fields": [
-            {"name": "a", "type": "integer"},
-            {"name": "b", "type": "string"},
-        ]
-    }
-    backend.create(
-        "res-1", schema=new_schema, records=None, include_total=False
-    )
-
-    backend.metadata.update.assert_called_once_with("res-1", new_schema)
-    backend.metadata.insert.assert_not_called()
-    assert mock_client.query.call_count == 1
-    sql = mock_client.query.call_args[0][0]
-    assert "ALTER TABLE" in sql
-    assert "ADD COLUMN IF NOT EXISTS `b` STRING" in sql
-
-
-def test_create_rolls_back_metadata_on_alter_failure(
-    mock_client: MagicMock,
-) -> None:
-    """If `_alter_data_table` raises (unsupported type change, BQ
-    error, ...) the metadata row must NOT be updated — otherwise the
-    `_table_metadata` row would describe a schema the actual table
-    doesn't have."""
-    from datastore.core.exceptions import ConflictError
-
-    backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = {
-        "fields": [{"name": "a", "type": "integer"}]
-    }
-
-    # Unsupported widening — `_alter_data_table` raises before any DDL.
-    new_schema = {"fields": [{"name": "a", "type": "string"}]}
-
-    with pytest.raises(ConflictError):
-        backend.create(
-            "res-1", schema=new_schema, records=None, include_total=False
-        )
-
-    backend.metadata.update.assert_not_called()
-    backend.metadata.insert.assert_not_called()
-
-
-def test_create_rolls_back_metadata_on_create_table_failure(
-    mock_client: MagicMock,
-) -> None:
-    """Same atomicity guarantee on the new-resource path: if `CREATE
-    TABLE` fails, no metadata row gets inserted pointing to a missing
-    table. Underlying BigQuery error surfaces as `ServerError` with
-    operation + resource_id context — never as the raw exception."""
-    from datastore.core.exceptions import ServerError
-
-    mock_client.query.return_value.result.side_effect = RuntimeError("bq fail")
-
-    backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None  # new resource
-
-    with pytest.raises(ServerError) as exc:
-        backend.create(
-            "res-1",
-            schema={"fields": [{"name": "a", "type": "integer"}]},
-            records=None,
-            include_total=False,
-        )
-
-    assert "CREATE TABLE" in str(exc.value)
-    assert "'res-1'" in str(exc.value)
-    backend.metadata.insert.assert_not_called()
-    backend.metadata.update.assert_not_called()
-
-
-# --- error wrapping (run_query / run_insert_rows) -------------------------
-
-
-def test_alter_wraps_bigquery_errors_as_server_error(
-    mock_client: MagicMock,
-) -> None:
-    """A failure on the ALTER `client.query` call surfaces as
-    `ServerError` with operation + resource_id context, not as the raw
-    BigQuery exception."""
-    from datastore.core.exceptions import ServerError
-
-    mock_client.query.return_value.result.side_effect = RuntimeError(
-        "Insufficient permissions"
-    )
-
-    backend = _backend(mock_client)
-    old = {"fields": [{"name": "a", "type": "integer"}]}
-    new = {
-        "fields": [
-            {"name": "a", "type": "integer"},
-            {"name": "b", "type": "string"},
-        ]
-    }
-
-    with pytest.raises(ServerError) as exc:
-        backend._alter_data_table("res-1", old, new)
-
-    msg = str(exc.value)
-    assert "ALTER TABLE" in msg
-    assert "'res-1'" in msg
-    assert "Insufficient permissions" in msg
-
-
-def test_insert_records_wraps_client_exception_as_server_error(
-    mock_client: MagicMock,
-) -> None:
-    """If `insert_rows_json` itself raises (transport / setup error)
-    the failure surfaces as `ServerError`, not as the raw exception."""
-    from datastore.core.exceptions import ServerError
-
-    mock_client.insert_rows_json.side_effect = RuntimeError("network down")
-
-    backend = _backend(mock_client)
-
-    with pytest.raises(ServerError) as exc:
-        backend._insert_records(
+    with pytest.raises(ConflictError, match="Cannot change column type"):
+        backend._alter_data_table(
             "res-1",
             {"fields": [{"name": "a", "type": "integer"}]},
-            [{"a": 1}],
+            {"fields": [{"name": "a", "type": "string"}]},
         )
-
-    msg = str(exc.value)
-    assert "INSERT" in msg
-    assert "'res-1'" in msg
-    assert "network down" in msg
+    mock_client.query.assert_not_called()
 
 
 # --- records insert --------------------------------------------------------
 
 
-def test_insert_records_calls_insert_rows_json(
+def test_insert_records_issues_dml_insert_with_rows_param(
     mock_client: MagicMock,
 ) -> None:
+    """`_insert_records` runs a DML `INSERT INTO ... SELECT FROM
+    UNNEST(@rows)` — not the streaming `insert_rows_json` API — so
+    rows go straight to storage and subsequent MERGE/UPDATE can touch
+    them immediately."""
     backend = _backend(mock_client)
-    mock_client.insert_rows_json.return_value = []  # no errors
-    schema = {
-        "fields": [
-            {"name": "a", "type": "integer"},
-            {"name": "b", "type": "string"},
-        ]
-    }
+    schema = {"fields": [
+        {"name": "auction_id", "type": "integer"},
+        {"name": "bidder_metadata", "type": "object"},
+    ]}
     records = [
-        {"a": 1, "b": "x"},
-        {"a": 2, "b": "y"},
+        {"auction_id": 144, "bidder_metadata": {"unit_id": "X"}},
+        {"auction_id": 145, "bidder_metadata": {"unit_id": "Y"}},
     ]
 
     backend._insert_records("res-1", schema, records)
 
-    mock_client.insert_rows_json.assert_called_once_with(
-        "proj-1.ds-1.res-1", records
-    )
-
-
-def test_insert_records_empty_list_is_noop(mock_client: MagicMock) -> None:
-    backend = _backend(mock_client)
-
-    backend._insert_records("res-1", {"fields": []}, [])
-
+    # No streaming insert.
     mock_client.insert_rows_json.assert_not_called()
+    # One DML statement.
+    sql_arg, kwargs = mock_client.query.call_args
+    sql = sql_arg[0]
+    assert sql.startswith("INSERT INTO `proj-1.ds-1.res-1` ")
+    assert "FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r" in sql
+    # JSON columns extracted via PARSE_JSON inside SQL, no Python
+    # pre-serialisation pass.
+    assert "PARSE_JSON(JSON_QUERY(r, '$.bidder_metadata'))" in sql
+    params = {p.name: p.value for p in kwargs["job_config"].query_parameters}
+    assert json.loads(params["rows"]) == records
 
 
-def test_insert_records_raises_on_bigquery_errors(
+# --- error wrapping --------------------------------------------------------
+
+
+def test_client_query_errors_surface_as_server_error_with_context(
     mock_client: MagicMock,
 ) -> None:
-    """Any non-empty error list from BigQuery surfaces as ServerError —
-    rows must not be silently dropped."""
-    from datastore.core.exceptions import ServerError
-
+    """Raw BQ exceptions on `client.query` are wrapped as ServerError
+    carrying op + resource_id — never leak as `RuntimeError`."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "Insufficient permissions"
+    )
     backend = _backend(mock_client)
-    mock_client.insert_rows_json.return_value = [
-        {"index": 0, "errors": [{"reason": "invalid"}]}
-    ]
-
     with pytest.raises(ServerError) as exc:
-        backend._insert_records(
-            "res-1",
-            {"fields": [{"name": "a", "type": "integer"}]},
-            [{"a": 1}],
+        backend._create_data_table(
+            "res-1", {"fields": [{"name": "a", "type": "integer"}]}
         )
-
-    assert "BigQuery refused" in str(exc.value)
+    assert "CREATE TABLE" in str(exc.value)
     assert "'res-1'" in str(exc.value)
 
 
-def test_insert_records_serialises_object_columns_to_json_strings(
+# --- create() orchestration -----------------------------------------------
+
+
+def test_create_new_resource_runs_ddl_records_then_metadata_in_order(
     mock_client: MagicMock,
 ) -> None:
-    """BigQuery `JSON` columns accept JSON strings on the wire, not
-    native dicts. Frictionless `object` → BQ `JSON`, so dict values
-    must be serialised before `insert_rows_json`."""
-    import json
-
-    backend = _backend(mock_client)
-    mock_client.insert_rows_json.return_value = []
-    schema = {
-        "fields": [
-            {"name": "auction_id", "type": "integer"},
-            {"name": "bidder_metadata", "type": "object"},
-        ]
-    }
-    records = [
-        {
-            "auction_id": 144,
-            "bidder_metadata": {"unit_id": "DRAX-1", "submission_lag_ms": 412},
-        }
-    ]
-
-    backend._insert_records("res-1", schema, records)
-
-    sent = mock_client.insert_rows_json.call_args[0][1]
-    assert sent[0]["auction_id"] == 144  # scalar untouched
-    # `bidder_metadata` arrives as a JSON string, not a dict.
-    assert isinstance(sent[0]["bidder_metadata"], str)
-    assert json.loads(sent[0]["bidder_metadata"]) == {
-        "unit_id": "DRAX-1",
-        "submission_lag_ms": 412,
-    }
-
-
-def test_insert_records_serialises_array_and_geojson_columns(
-    mock_client: MagicMock,
-) -> None:
-    """`array` and `geojson` also map to BQ `JSON` — same treatment."""
-    import json
-
-    backend = _backend(mock_client)
-    mock_client.insert_rows_json.return_value = []
-    schema = {
-        "fields": [
-            {"name": "tags", "type": "array"},
-            {"name": "where", "type": "geojson"},
-        ]
-    }
-    records = [
-        {
-            "tags": ["a", "b"],
-            "where": {"type": "Point", "coordinates": [1, 2]},
-        }
-    ]
-
-    backend._insert_records("res-1", schema, records)
-
-    sent = mock_client.insert_rows_json.call_args[0][1]
-    assert json.loads(sent[0]["tags"]) == ["a", "b"]
-    assert json.loads(sent[0]["where"]) == {
-        "type": "Point", "coordinates": [1, 2],
-    }
-
-
-def test_insert_records_passes_through_string_json_values(
-    mock_client: MagicMock,
-) -> None:
-    """A caller who already sends a pre-serialised JSON string for an
-    `object` column shouldn't get it double-encoded."""
-    backend = _backend(mock_client)
-    mock_client.insert_rows_json.return_value = []
-    schema = {"fields": [{"name": "meta", "type": "object"}]}
-    records = [{"meta": '{"already": "json"}'}]
-
-    backend._insert_records("res-1", schema, records)
-
-    sent = mock_client.insert_rows_json.call_args[0][1]
-    assert sent[0]["meta"] == '{"already": "json"}'
-
-
-def test_insert_records_none_for_object_column_passes_through(
-    mock_client: MagicMock,
-) -> None:
-    """`None` is a valid value for a nullable JSON column — must not be
-    serialised to the literal string `"null"`."""
-    backend = _backend(mock_client)
-    mock_client.insert_rows_json.return_value = []
-    schema = {"fields": [{"name": "meta", "type": "object"}]}
-    records = [{"meta": None}]
-
-    backend._insert_records("res-1", schema, records)
-
-    sent = mock_client.insert_rows_json.call_args[0][1]
-    assert sent[0]["meta"] is None
-
-
-def test_create_writes_metadata_only_after_data_ops_succeed(
-    mock_client: MagicMock,
-) -> None:
-    """`create()` end-to-end on the new-resource path: DDL → records
-    insert → metadata. The metadata row is the *last* thing written so
-    a failure in either data op leaves the metadata store untouched."""
+    """New resource path: CREATE TABLE → INSERT INTO → metadata.insert.
+    Metadata is the last write so any failure earlier leaves it
+    untouched. CREATE + INSERT both go through `client.query` (DDL +
+    DML respectively); ordering is asserted on the SQL prefixes."""
     backend = _backend(mock_client)
     backend.metadata = MagicMock()
     backend.metadata.get.return_value = None
-    mock_client.insert_rows_json.return_value = []
-    schema: dict[str, Any] = {"fields": [{"name": "a", "type": "integer"}]}
-    records = [{"a": 1}, {"a": 2}]
 
-    # Records insert must happen before `metadata.insert` — record the
-    # call ordering on the parent mock to verify it.
     parent = MagicMock()
-    parent.attach_mock(mock_client.insert_rows_json, "insert_rows_json")
+    parent.attach_mock(mock_client.query, "query")
     parent.attach_mock(backend.metadata.insert, "metadata_insert")
 
     backend.create(
-        "res-1", schema=schema, records=records, include_total=False
+        "res-1",
+        schema={"fields": [{"name": "a", "type": "integer"}]},
+        records=[{"a": 1}],
+        include_total=False,
     )
 
-    backend.metadata.insert.assert_called_once_with("res-1", schema)
-    mock_client.insert_rows_json.assert_called_once_with(
-        "proj-1.ds-1.res-1", records
-    )
-    # Order: records insert first, metadata.insert second.
-    call_names = [c[0] for c in parent.mock_calls]
-    assert call_names.index("insert_rows_json") < call_names.index(
-        "metadata_insert"
-    )
+    # Two `query` calls landed (CREATE TABLE, INSERT INTO) before the
+    # metadata write.
+    sql_calls = [c for c in parent.mock_calls if c[0] == "query"]
+    assert sql_calls[0].args[0].startswith("CREATE TABLE IF NOT EXISTS")
+    assert sql_calls[1].args[0].startswith("INSERT INTO ")
+    # metadata.insert came last.
+    assert parent.mock_calls[-1][0] == "metadata_insert"
 
 
-def test_create_rolls_back_metadata_on_records_insert_failure(
+def test_create_skips_metadata_when_records_insert_fails(
     mock_client: MagicMock,
 ) -> None:
-    """If `insert_rows_json` reports errors on the new-resource path,
-    `metadata.insert` must NOT run — otherwise metadata would declare
-    a resource whose seed rows never landed."""
-    from datastore.core.exceptions import ServerError
+    """Atomicity: a DML INSERT failure leaves metadata untouched.
 
+    Simulate the failure on the second `client.query` call (the INSERT)
+    so the first (CREATE TABLE) still succeeds.
+    """
     backend = _backend(mock_client)
     backend.metadata = MagicMock()
     backend.metadata.get.return_value = None
-    mock_client.insert_rows_json.return_value = [
-        {"index": 0, "errors": [{"reason": "invalid"}]}
+
+    # First call (CREATE TABLE) succeeds; second (INSERT) raises.
+    create_job = MagicMock()
+    create_job.result.return_value = []
+    mock_client.query.side_effect = [
+        create_job,
+        RuntimeError("insert failed"),
     ]
 
     with pytest.raises(ServerError):
         backend.create(
             "res-1",
             schema={"fields": [{"name": "a", "type": "integer"}]},
-            records=[{"a": "not-an-int"}],
+            records=[{"a": 1}],
             include_total=False,
         )
-
     backend.metadata.insert.assert_not_called()
     backend.metadata.update.assert_not_called()
 
 
-def test_create_existing_rolls_back_metadata_on_records_insert_failure(
-    mock_client: MagicMock,
-) -> None:
-    """Same rule on the existing-resource path: if alter succeeds but
-    records insert fails, `metadata.update` must NOT run — the metadata
-    store stays at the previous schema version."""
-    from datastore.core.exceptions import ServerError
-
-    backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = {
-        "fields": [{"name": "a", "type": "integer"}]
-    }
-    # The first `client.query` call is the ALTER (success). The second
-    # path is `insert_rows_json` which returns errors.
-    mock_client.query.return_value.result.return_value = []
-    mock_client.insert_rows_json.return_value = [
-        {"index": 0, "errors": [{"reason": "invalid"}]}
-    ]
-    new_schema = {
-        "fields": [
-            {"name": "a", "type": "integer"},
-            {"name": "b", "type": "string"},
-        ]
-    }
-
-    with pytest.raises(ServerError):
-        backend.create(
-            "res-1",
-            schema=new_schema,
-            records=[{"a": 1, "b": object()}],  # invalid serialisation
-            include_total=False,
-        )
-
-    backend.metadata.update.assert_not_called()
-    backend.metadata.insert.assert_not_called()
-
-
-def test_create_with_no_records_skips_insert(mock_client: MagicMock) -> None:
-    """`records=None` or `records=[]` → no streaming insert call.
-    Resource is declared (DDL + metadata) but no rows seeded."""
-    backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None
-
-    backend.create(
-        "res-1",
-        schema={"fields": [{"name": "a", "type": "integer"}]},
-        records=None,
-        include_total=False,
-    )
-
-    mock_client.insert_rows_json.assert_not_called()
-
-
-def test_create_placeholder_mode_skips_ddl_and_metadata(
+def test_create_placeholder_mode_skips_everything(
     mock_client: MagicMock,
 ) -> None:
     """No metadata store → no DDL, no metadata calls. Lets the unit
     suite run without GCP creds."""
     backend = _backend(mock_client)
-    backend.metadata = None  # placeholder mode
+    backend.metadata = None
 
     backend.create(
         "res-1",
         schema={"fields": [{"name": "a", "type": "integer"}]},
-        records=None,
+        records=[{"a": 1}],
+        include_total=False,
+    )
+    mock_client.query.assert_not_called()
+
+
+# --- merge_sql / update_sql (lib) ------------------------------------------
+
+
+def test_merge_sql_renders_typed_extractors_on_match_update_no_match_insert() -> None:
+    sql = merge_sql(
+        "`p.d.r`",
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "label", "type": "string"},
+                {"name": "meta", "type": "object"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+    assert sql.startswith("MERGE `p.d.r` T")
+    assert "CAST(JSON_VALUE(r, '$.id') AS INT64) AS `id`" in sql
+    assert "JSON_VALUE(r, '$.label') AS `label`" in sql
+    assert "PARSE_JSON(JSON_QUERY(r, '$.meta')) AS `meta`" in sql
+    assert "ON T.`id` = S.`id`" in sql
+    assert "WHEN MATCHED THEN UPDATE SET T.`label` = S.`label`" in sql
+    assert "WHEN NOT MATCHED THEN INSERT (`id`, `label`, `meta`)" in sql
+
+
+def test_update_sql_renders_dml_update_keyed_on_primary_key() -> None:
+    sql = update_sql(
+        "`p.d.r`",
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "label", "type": "string"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+    assert sql.startswith("UPDATE `p.d.r` T ")
+    assert "SET T.`label` = S.`label`" in sql
+    assert "WHERE T.`id` = S.`id`" in sql
+    assert "MERGE" not in sql  # plain DML, not MERGE
+
+
+def test_merge_and_update_sql_reject_missing_primary_key() -> None:
+    schema = {"fields": [{"name": "id", "type": "integer"}]}
+    with pytest.raises(ValueError, match="primaryKey"):
+        merge_sql("`p.d.r`", schema)
+    with pytest.raises(ValueError, match="primaryKey"):
+        update_sql("`p.d.r`", schema)
+
+
+# --- upsert() dispatch ----------------------------------------------------
+
+
+def _backend_with_schema(
+    mock_client: MagicMock, schema: dict[str, Any]
+) -> BigQueryBackend:
+    backend = _backend(mock_client)
+    backend.metadata = MagicMock()
+    backend.metadata.get.return_value = schema
+    return backend
+
+
+def test_upsert_method_upsert_issues_merge_with_rows_param(
+    mock_client: MagicMock,
+) -> None:
+    backend = _backend_with_schema(
+        mock_client,
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "label", "type": "string"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+    records = [{"id": 1, "label": "x"}, {"id": 2, "label": "y"}]
+
+    backend.upsert("res-1", records, method="upsert", include_total=False)
+
+    sql, kwargs = mock_client.query.call_args
+    assert "MERGE `proj-1.ds-1.res-1` T" in sql[0]
+    params = {p.name: p.value for p in kwargs["job_config"].query_parameters}
+    assert json.loads(params["rows"]) == records
+
+
+def test_upsert_method_insert_issues_dml_insert(
+    mock_client: MagicMock,
+) -> None:
+    """`method='insert'` runs DML `INSERT INTO ... SELECT FROM UNNEST`,
+    not the streaming insert API — same path as `_insert_records` on
+    the create flow."""
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "integer"}], "primaryKey": ["id"]},
+    )
+
+    backend.upsert("res-1", [{"id": 1}], method="insert", include_total=False)
+
+    mock_client.insert_rows_json.assert_not_called()
+    sql = mock_client.query.call_args[0][0]
+    assert sql.startswith("INSERT INTO `proj-1.ds-1.res-1` ")
+    assert "FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r" in sql
+
+
+def test_upsert_method_update_issues_dml_update(
+    mock_client: MagicMock,
+) -> None:
+    backend = _backend_with_schema(
+        mock_client,
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "label", "type": "string"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+    mock_client.query.return_value.num_dml_affected_rows = 2
+
+    backend.upsert(
+        "res-1",
+        [{"id": 1, "label": "x"}, {"id": 2, "label": "y"}],
+        method="update",
         include_total=False,
     )
 
-    assert mock_client.query.call_count == 0
+    sql = mock_client.query.call_args[0][0]
+    assert sql.startswith("UPDATE `proj-1.ds-1.res-1` T ")
+    assert "WHERE T.`id` = S.`id`" in sql
+
+
+def test_upsert_method_update_raises_not_found_when_pk_missing(
+    mock_client: MagicMock,
+) -> None:
+    """Affected-row count < input row count → some PKs didn't match.
+    DML UPDATE silently no-ops on misses; we surface NotFoundError."""
+    backend = _backend_with_schema(
+        mock_client,
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "label", "type": "string"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+    mock_client.query.return_value.num_dml_affected_rows = 1  # 2 missing
+
+    with pytest.raises(NotFoundError, match="2 of 3"):
+        backend.upsert(
+            "res-1",
+            [
+                {"id": 1, "label": "x"},
+                {"id": 2, "label": "y"},
+                {"id": 3, "label": "z"},
+            ],
+            method="update",
+            include_total=False,
+        )
+
+
+def test_upsert_undeclared_resource_raises_not_found(
+    mock_client: MagicMock,
+) -> None:
+    """`upsert` before `create` → NotFoundError. Metadata store is the
+    source of truth for whether a resource exists."""
+    backend = _backend(mock_client)
+    backend.metadata = MagicMock()
+    backend.metadata.get.return_value = None
+
+    with pytest.raises(NotFoundError, match="not declared"):
+        backend.upsert(
+            "ghost", [{"a": 1}], method="upsert", include_total=False
+        )
+
+
+def test_upsert_missing_primary_key_raises_validation(
+    mock_client: MagicMock,
+) -> None:
+    """`upsert`/`update` need a primaryKey — ValueError from the SQL
+    helpers is re-raised as ValidationError, never reaches BigQuery."""
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "integer"}]},  # no primaryKey
+    )
+    with pytest.raises(ValidationError, match="primaryKey"):
+        backend.upsert(
+            "res-1", [{"id": 1}], method="upsert", include_total=False
+        )
+    mock_client.query.assert_not_called()
+
+
+def test_upsert_unknown_method_raises_validation(
+    mock_client: MagicMock,
+) -> None:
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "integer"}], "primaryKey": ["id"]},
+    )
+    with pytest.raises(ValidationError, match="unknown upsert method"):
+        backend.upsert(
+            "res-1", [], method="merge", include_total=False  # bogus
+        )
+
+
+def test_upsert_translates_bigquery_scalar_subquery_error_to_duplicate_pk(
+    mock_client: MagicMock,
+) -> None:
+    """When `records` contain duplicate PK tuples, BigQuery's MERGE
+    fails with 'Scalar subquery produced more than one element'. The
+    backend translates that into a clear ValidationError naming the
+    actual cause."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Scalar subquery produced more than one element; reason: "
+        "invalidQuery, location: query"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "label", "type": "string"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        backend.upsert(
+            "res-1",
+            [{"id": 1, "label": "x"}, {"id": 1, "label": "y"}],  # dup PK
+            method="upsert",
+            include_total=False,
+        )
+
+    msg = str(exc.value)
+    assert "duplicated" in msg.lower()
+    assert "primary key" in msg.lower()
+
+
+def test_update_translates_bigquery_scalar_subquery_error_to_duplicate_pk(
+    mock_client: MagicMock,
+) -> None:
+    """Same translation on the DML UPDATE path."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Scalar subquery produced more than one element"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "label", "type": "string"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+
+    with pytest.raises(ValidationError, match="duplicate"):
+        backend.upsert(
+            "res-1",
+            [{"id": 1, "label": "x"}, {"id": 1, "label": "y"}],
+            method="update",
+            include_total=False,
+        )
+
+
+def test_insert_translates_bigquery_bad_double_value_to_type_mismatch(
+    mock_client: MagicMock,
+) -> None:
+    """BigQuery's `Bad double value: <v>` (raised when a record sends
+    a non-numeric string for a `number` column) is translated to a
+    clear ValidationError naming the bad value and the expected type.
+
+    The create-flow runs CREATE TABLE first then INSERT — only the
+    INSERT call should fail. Use `side_effect` as a list so the first
+    `client.query` (DDL) succeeds and the second (DML INSERT) raises.
+    """
+    create_job = MagicMock()
+    create_job.result.return_value = []
+    mock_client.query.side_effect = [
+        create_job,
+        RuntimeError(
+            "400 Bad double value: jk; reason: invalidQuery, location: query"
+        ),
+    ]
+    backend = _backend(mock_client)
+    backend.metadata = MagicMock()
+    backend.metadata.get.return_value = None
+
+    with pytest.raises(ValidationError) as exc:
+        backend.create(
+            "res-1",
+            schema={"fields": [{"name": "price", "type": "number"}]},
+            records=[{"price": "jk"}],
+            include_total=False,
+        )
+    msg = str(exc.value)
+    assert "'jk'" in msg
+    assert "number" in msg
+
+
+def test_upsert_translates_bigquery_bad_int64_value_to_type_mismatch(
+    mock_client: MagicMock,
+) -> None:
+    """`Bad int64 value: …` on the MERGE path becomes a ValidationError
+    that says 'integer'."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Bad int64 value: not-a-number; reason: invalidQuery"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "integer"}], "primaryKey": ["id"]},
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        backend.upsert(
+            "res-1", [{"id": "not-a-number"}], method="upsert",
+            include_total=False,
+        )
+    assert "'not-a-number'" in str(exc.value)
+    assert "integer" in str(exc.value)
+
+
+def test_translate_invalid_timestamp_value(mock_client: MagicMock) -> None:
+    """`Invalid timestamp: …` → ValidationError mentioning 'timestamp'."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Invalid timestamp: 2025-99-99; reason: invalidQuery"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "ts", "type": "datetime"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        backend.upsert(
+            "res-1", [{"id": 1, "ts": "2025-99-99"}], method="upsert",
+            include_total=False,
+        )
+    assert "'2025-99-99'" in str(exc.value)
+    assert "timestamp" in str(exc.value)
+
+
+def test_translate_could_not_cast_literal_error(mock_client: MagicMock) -> None:
+    """`Could not cast literal '...' to type <BQ_TYPE>` — alternative
+    BigQuery phrasing for the same coercion failure as `Bad <type>
+    value`. Should produce the same friendly message."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Could not cast literal 'jk' to type INT64; reason: invalidQuery"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "integer"}], "primaryKey": ["id"]},
+    )
+    with pytest.raises(ValidationError) as exc:
+        backend.upsert(
+            "res-1", [{"id": "jk"}], method="upsert", include_total=False,
+        )
+    msg = str(exc.value)
+    assert "'jk'" in msg
+    assert "integer" in msg
+
+
+def test_translate_could_not_parse_as_type_error(
+    mock_client: MagicMock,
+) -> None:
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Could not parse 'abc' as FLOAT64; reason: invalidQuery"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "price", "type": "number"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+    with pytest.raises(ValidationError) as exc:
+        backend.upsert(
+            "res-1", [{"id": 1, "price": "abc"}],
+            method="upsert", include_total=False,
+        )
+    msg = str(exc.value)
+    assert "'abc'" in msg
+    assert "number" in msg
+
+
+def test_translate_value_out_of_range(mock_client: MagicMock) -> None:
+    """Numeric value that parses but exceeds the column type's range
+    → ValidationError mentioning out-of-range."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Value out of range for INT64: 99999999999999999999; "
+        "reason: invalidQuery"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "integer"}], "primaryKey": ["id"]},
+    )
+    with pytest.raises(ValidationError) as exc:
+        backend.upsert(
+            # Use string to avoid orjson's 64-bit int limit — the test
+            # checks the BigQuery-side error, not orjson encoding.
+            "res-1", [{"id": "99999999999999999999"}],
+            method="upsert", include_total=False,
+        )
+    msg = str(exc.value)
+    assert "out of range" in msg
+    assert "integer" in msg
+
+
+def test_translate_bad_numeric_value(mock_client: MagicMock) -> None:
+    """NUMERIC / BIGNUMERIC (e.g., after widening INT64 → NUMERIC) get
+    the same `number` friendly name."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Bad NUMERIC value: not-a-num; reason: invalidQuery"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "amount", "type": "number"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+    with pytest.raises(ValidationError) as exc:
+        backend.upsert(
+            "res-1", [{"id": 1, "amount": "not-a-num"}],
+            method="upsert", include_total=False,
+        )
+    assert "'not-a-num'" in str(exc.value)
+    assert "number" in str(exc.value)

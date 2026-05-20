@@ -4,11 +4,10 @@ Public surface is `BigQueryBackend` — the `DatastoreBackend` ABC.
 File layout (top to bottom):
 
   1. Lifecycle (`__init__`, `initialize`).
-  2. Low-level client wrappers (`_data_table_path`, `_data_table_ref`,
-     `_run_query`, `_run_insert_rows`) — every BigQuery call is routed
-     through these so transport / SQL errors surface as `ServerError`
-     with `resource_id` + operation name baked in, never as raw
-     `google.api_core` exceptions.
+  2. Low-level client wrappers (`_data_table_ref`, `_run_query`) —
+     every BigQuery call is routed through `_run_query` so transport /
+     SQL errors surface as `ServerError` with `resource_id` + operation
+     name baked in, never as raw `google.api_core` exceptions.
   3. Create helpers (`_create_data_table`, `_alter_data_table`,
      `_insert_records`, and the branch helpers `_apply_new_resource` /
      `_apply_existing_resource`).
@@ -22,7 +21,11 @@ import logging
 from typing import Any
 
 from datastore.core.config import Config
-from datastore.core.exceptions import ServerError
+from datastore.core.exceptions import (
+    NotFoundError,
+    ServerError,
+    ValidationError,
+)
 from datastore.infrastructure.engines.base import (
     DatastoreBackend,
     InfoResult,
@@ -33,9 +36,11 @@ from datastore.infrastructure.engines.base import (
 from datastore.infrastructure.engines.bigquery.lib import (
     alter_clauses,
     column_defs,
+    insert_sql,
+    merge_sql,
     reject_unsupported_type_changes,
     schema_diff,
-    serialise_json_columns,
+    update_sql,
 )
 
 log = logging.getLogger(__name__)
@@ -114,21 +119,16 @@ class BigQueryBackend(DatastoreBackend):
 
     # ----- table refs + low-level client wrappers ------------------------
 
-    def _data_table_path(self, resource_id: str) -> str:
-        """Plain `project.dataset.<resource_id>` (no backticks) for the
-        Python client API surface (`insert_rows_json`, `get_table`)."""
-        return (
-            f"{self.config.BIGQUERY_PROJECT}"
-            f".{self.config.BIGQUERY_DATASET}.{resource_id}"
-        )
-
     def _data_table_ref(self, resource_id: str) -> str:
         """Backtick-quoted `project.dataset.<resource_id>` for SQL.
 
         Backticks make resource_ids with hyphens (CKAN UUIDs) parse
         without further escaping.
         """
-        return f"`{self._data_table_path(resource_id)}`"
+        return (
+            f"`{self.config.BIGQUERY_PROJECT}"
+            f".{self.config.BIGQUERY_DATASET}.{resource_id}`"
+        )
 
     def _run_query(
         self,
@@ -138,39 +138,25 @@ class BigQueryBackend(DatastoreBackend):
         resource_id: str,
         job_config: Any = None,
     ) -> Any:
-        """Submit `sql` to BigQuery and wait for the job result.
+        """Submit `sql`, wait for completion, and return the QueryJob.
 
         Wraps every `client.query` call so any
         `google.api_core` / transport error becomes a CKAN-shaped
         `ServerError` carrying the action name (`op`) and target
         `resource_id`. Callers never have to know about Google's
         exception hierarchy.
+
+        Returning the `QueryJob` (rather than its `.result()` value)
+        lets callers grab whichever output they need without a second
+        helper: rows from `job.result()`, DML row counts from
+        `job.num_dml_affected_rows`. DDL / MERGE callers simply ignore
+        the return value — the `.result()` call inside has already
+        waited for completion.
         """
         try:
-            return self.client.query(sql, job_config=job_config).result()
-        except Exception as e:
-            raise ServerError(
-                f"BigQuery {op} failed for resource {resource_id!r}: {e}"
-            ) from e
-
-    def _run_insert_rows(
-        self,
-        table: str,
-        rows: list[dict[str, Any]],
-        *,
-        op: str,
-        resource_id: str,
-    ) -> list[dict[str, Any]]:
-        """Submit `rows` via the streaming insert API.
-
-        Returns the per-row error list from `insert_rows_json` (empty
-        on success). Transport / setup failures (table missing,
-        permissions, network) raise `ServerError` here; row-level
-        errors are returned to the caller so it can include row counts
-        in its message.
-        """
-        try:
-            return self.client.insert_rows_json(table, rows)
+            job = self.client.query(sql, job_config=job_config)
+            job.result()
+            return job
         except Exception as e:
             raise ServerError(
                 f"BigQuery {op} failed for resource {resource_id!r}: {e}"
@@ -239,35 +225,154 @@ class BigQueryBackend(DatastoreBackend):
     def _insert_records(
         self, resource_id: str, schema: dict, records: list
     ) -> None:
-        """Stream-insert rows into the resource's data table.
+        """Insert rows via DML `INSERT INTO ... SELECT FROM UNNEST(@rows)`.
 
-        Uses `Client.insert_rows_json` — the standard low-latency path
-        for row-level writes. Empty `records` is a no-op.
+        Why DML rather than `Client.insert_rows_json`: the streaming
+        insert API parks rows in a streaming buffer for 30–90 minutes,
+        and DML statements (UPDATE / DELETE / MERGE) cannot touch rows
+        still in that buffer. That makes `datastore_create` + immediate
+        `datastore_upsert` impossible. DML INSERT writes straight to
+        table storage, so any follow-up upsert/update on the same
+        primaryKey works without delay.
 
-        BigQuery's `JSON` column type expects values on the wire as
-        **JSON strings**, not native dicts / lists, so Frictionless
-        `object` / `array` / `geojson` field values are serialised
-        up-front via `_serialise_json_columns`.
+        Rows ride as a single JSON-array string parameter `@rows`;
+        BigQuery unpacks it inside the SQL — one statement regardless
+        of batch size, no Python-side serialisation pass needed (JSON
+        columns are handled by `PARSE_JSON(JSON_QUERY(...))` inside
+        the SELECT).
 
-        Any per-row errors BigQuery reports raise `ServerError`; the
-        underlying client raising (transport, schema mismatch, etc.)
-        also surfaces as `ServerError` via `_run_insert_rows`.
+        Empty `records` is a no-op. SQL/transport errors propagate as
+        `ServerError` via `_run_query`.
         """
+        import orjson
+
         if not records:
             return
-        table_ref = self._data_table_path(resource_id)
-        prepared = serialise_json_columns(schema, records)
-        errors = self._run_insert_rows(
-            table_ref, prepared, op="INSERT", resource_id=resource_id
+        try:
+            sql = insert_sql(self._data_table_ref(resource_id), schema)
+        except ValueError as e:
+            raise ValidationError(str(e)) from e
+
+        from google.cloud import bigquery
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter(
+                    "rows", "STRING", orjson.dumps(records).decode("utf-8")
+                ),
+            ]
         )
-        if errors:
-            raise ServerError(
-                f"BigQuery refused {len(errors)} of {len(records)} row(s) "
-                f"on insert into {resource_id!r}: {errors}"
+        try:
+            self._run_query(
+                sql, op="INSERT", resource_id=resource_id,
+                job_config=job_config,
             )
+        except ServerError as e:
+            raise _translate_bigquery_error(
+                e, resource_id, "insert"
+            ) from e
         log.info(
             "BigQuery rows inserted: %s (%d row(s))",
             resource_id, len(records),
+        )
+
+    def _merge_records(
+        self, resource_id: str, schema: dict, records: list
+    ) -> None:
+        """Upsert rows via `MERGE` keyed on `schema.primaryKey`.
+
+        Rows whose primary-key columns match an existing row are
+        UPDATEd; others are INSERTed. The full payload travels as a
+        single JSON-array string parameter so we issue one statement
+        regardless of batch size.
+
+        Empty `records` is a no-op. Missing primary key on the stored
+        schema raises `ValidationError` — upsert can't dedup without
+        one; the caller can fall back to `method="insert"` or declare
+        a primaryKey on the resource.
+        """
+        import orjson
+
+        if not records:
+            return
+        try:
+            sql = merge_sql(self._data_table_ref(resource_id), schema)
+        except ValueError as e:
+            raise ValidationError(str(e)) from e
+
+        from google.cloud import bigquery
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter(
+                    "rows", "STRING", orjson.dumps(records).decode("utf-8")
+                ),
+            ]
+        )
+        try:
+            self._run_query(
+                sql, op="MERGE", resource_id=resource_id,
+                job_config=job_config,
+            )
+        except ServerError as e:
+            raise _translate_bigquery_error(e, resource_id, "upsert") from e
+        log.info(
+            "BigQuery rows upserted: %s (%d row(s))",
+            resource_id, len(records),
+        )
+
+    def _update_records(
+        self, resource_id: str, schema: dict, records: list
+    ) -> None:
+        """Update existing rows via DML `UPDATE`, keyed on
+        `schema.primaryKey`.
+
+        Update-only semantics: every row in `records` must match an
+        existing row by primary key. After the statement runs we
+        compare `num_dml_affected_rows` against the row count and
+        raise `NotFoundError` if any row had no matching key — DML
+        UPDATE itself treats misses as a silent no-op, so the count
+        check is what gives the caller a real signal.
+
+        Empty `records` is a no-op. Missing primary key or all-PK
+        schema raises `ValidationError` (via `update_sql`'s
+        `ValueError` re-raise).
+        """
+        import orjson
+
+        if not records:
+            return
+        try:
+            sql = update_sql(self._data_table_ref(resource_id), schema)
+        except ValueError as e:
+            raise ValidationError(str(e)) from e
+
+        from google.cloud import bigquery
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter(
+                    "rows", "STRING", orjson.dumps(records).decode("utf-8")
+                ),
+            ]
+        )
+        try:
+            job = self._run_query(
+                sql, op="UPDATE", resource_id=resource_id,
+                job_config=job_config,
+            )
+        except ServerError as e:
+            raise _translate_bigquery_error(e, resource_id, "update") from e
+        affected = job.num_dml_affected_rows or 0
+        if affected < len(records):
+            missing = len(records) - affected
+            raise NotFoundError(
+                f"datastore_update: {missing} of {len(records)} row(s) "
+                f"had no matching primary key in resource {resource_id!r}; "
+                "use method='upsert' to insert missing rows"
+            )
+        log.info(
+            "BigQuery rows updated: %s (%d row(s))", resource_id, affected,
         )
 
     def _apply_new_resource(
@@ -345,21 +450,64 @@ class BigQueryBackend(DatastoreBackend):
         method: str,
         include_total: bool,
     ) -> WriteResult:
-        """Insert / update / upsert records.
+        """Insert / update / upsert records into an existing resource.
 
-        Placeholder: echoes inputs so the call path is exercised
-        end-to-end. Real impl:
-          - "insert"  → `insert_rows_json` (or DML INSERT for large batches)
-          - "update"  → DML `UPDATE ... WHERE <key_fields> IN @keys`
-          - "upsert"  → `MERGE` with `UNNEST(@records)` as source
-        and runs `COUNT(*)` when `include_total=True`.
+        Method dispatch:
+          - **"upsert"** (default): `MERGE` keyed on `schema.primaryKey`.
+            Rows that match an existing key are UPDATEd; the rest are
+            INSERTed. Requires a `primaryKey` on the stored schema.
+          - **"insert"**: plain streaming insert (no PK check). Faster
+            than upsert; raises if any row collides with an existing
+            primary key (BigQuery row-level errors).
+          - **"update"**: DML `UPDATE` keyed on `schema.primaryKey`.
+            Every row must match an existing row — otherwise
+            `NotFoundError` is raised after the statement runs. Requires
+            a `primaryKey`.
+
+        The resource must have been declared by `datastore_create`
+        first; the schema (column types + primaryKey) is read from the
+        metadata store and used to build the SQL. Calling `upsert` on
+        an undeclared resource raises `NotFoundError`.
+
+        Placeholder mode (no project/dataset) is a no-op echo so the
+        unit suite can exercise the call path without GCP creds.
         """
+        if self.metadata is None:
+            # Placeholder mode — echo (matches the create() pattern).
+            return {
+                "resource_id": resource_id,
+                "records": records,
+                "method": method,
+                "include_total": include_total,
+                "total": len(records or []),
+            }
+
+        schema = self.metadata.get(resource_id)
+        if schema is None:
+            raise NotFoundError(
+                f"resource {resource_id!r} is not declared; call "
+                "datastore_create before upsert"
+            )
+
+        rows = records or []
+        if method == "insert":
+            self._insert_records(resource_id, schema, rows)
+        elif method == "upsert":
+            self._merge_records(resource_id, schema, rows)
+        elif method == "update":
+            self._update_records(resource_id, schema, rows)
+        else:
+            raise ValidationError(
+                f"unknown upsert method {method!r}; expected one of "
+                "'upsert', 'insert', 'update'"
+            )
+
         return {
             "resource_id": resource_id,
             "records": records,
             "method": method,
             "include_total": include_total,
-            "total": len(records),
+            "total": len(rows) if include_total else None,
         }
 
     def search(
@@ -455,4 +603,123 @@ class BigQueryBackend(DatastoreBackend):
                 "BigQuery healthcheck failed (mode=%s): %s", self.mode, e
             )
             return False
+
+
+def _translate_bigquery_error(
+    exc: ServerError, resource_id: str, action: str
+) -> Exception:
+    """Map known BigQuery error signatures (raised on INSERT / MERGE /
+    UPDATE against the JSON-array source) to clear `ValidationError`s.
+
+    BigQuery's raw messages are technically accurate but unhelpful —
+    e.g. *"Scalar subquery produced more than one element"* really
+    means "your records have duplicate primary keys" and *"Bad double
+    value: jk"* means "you sent the string 'jk' for a `number`
+    column". Both surface as 400 ValidationError with a message that
+    names the actual problem.
+
+    Patterns handled:
+      - duplicate primaryKey rows in the batch;
+      - per-column type mismatches (`Bad <type> value: …`,
+        `Could not cast …`, `Could not parse …`);
+      - out-of-range numeric values (`Value out of range …`);
+      - bad date / time / timestamp literals (`Invalid <type>: …`).
+
+    Other errors pass through unchanged so the caller can re-raise as
+    a generic `ServerError`.
+    """
+    import re
+
+    from datastore.core.exceptions import ValidationError
+
+    msg = str(exc)
+
+    if "Scalar subquery produced more than one element" in msg:
+        return ValidationError(
+            "Found duplicated rows with the same primary key. "
+            f"Deduplicate the input batch and retry the {action} operation."
+        )
+
+    # `Bad int64 value: <v>` etc. — type-coercion failure on CAST(JSON_VALUE).
+    m = re.search(
+        r"Bad (int64|double|bool|numeric|bignumeric) value: (.+?)(?:;|\\n|$)",
+        msg,
+        re.IGNORECASE,
+    )
+    if m:
+        bq_type, bad_value = m.group(1).lower(), m.group(2).strip()
+        return ValidationError(
+            f"Value {bad_value!r} is not a valid "
+            f"{_FRIENDLY_BQ_TYPE.get(bq_type, bq_type)}. "
+            "Check that each record's column values match the resource "
+            "schema's declared types."
+        )
+
+    # `Could not cast literal "<v>" to type <BQ_TYPE>` /
+    # `Could not parse '<v>' as <BQ_TYPE>` — alternative phrasings for
+    # the same coercion failure, depending on BigQuery version / path.
+    m = re.search(
+        r"Could not (?:cast literal|parse) ['\"](.+?)['\"] "
+        r"(?:to type|as) (\w+)",
+        msg,
+    )
+    if m:
+        bad_value, bq_type = m.group(1), m.group(2).lower()
+        return ValidationError(
+            f"Value {bad_value!r} is not a valid "
+            f"{_FRIENDLY_BQ_TYPE.get(bq_type, bq_type)}. "
+            "Check that each record's column values match the resource "
+            "schema's declared types."
+        )
+
+    # `Value out of range for INT64: <v>` / `Numeric value … out of range` —
+    # the value parsed but doesn't fit the column type's range.
+    m = re.search(
+        r"(?:Value )?out of range(?: for (\w+))?:? (.+?)(?:;|\\n|$)",
+        msg,
+        re.IGNORECASE,
+    )
+    if m:
+        bq_type = (m.group(1) or "").lower()
+        bad_value = m.group(2).strip()
+        friendly = _FRIENDLY_BQ_TYPE.get(bq_type, bq_type or "the column type")
+        return ValidationError(
+            f"Value {bad_value!r} is out of range for {friendly}. "
+            "Use a wider type or check the input range."
+        )
+
+    # `Invalid date: <v>`, `Invalid timestamp: <v>`, `Invalid time: <v>` —
+    # date/time literal that couldn't be parsed.
+    m = re.search(
+        r"Invalid (date|timestamp|datetime|time)(?: value)?: (.+?)(?:;|\\n|$)",
+        msg,
+        re.IGNORECASE,
+    )
+    if m:
+        friendly, bad_value = m.group(1).lower(), m.group(2).strip()
+        return ValidationError(
+            f"Value {bad_value!r} is not a valid {friendly}. "
+            "Check that each record's column values match the resource "
+            "schema's declared types."
+        )
+
+    return exc
+
+
+# BigQuery column-type name → Frictionless / user-friendly name.
+_FRIENDLY_BQ_TYPE: dict[str, str] = {
+    "int64":      "integer",
+    "double":     "number",
+    "float64":    "number",
+    "numeric":    "number",
+    "bignumeric": "number",
+    "bool":       "boolean",
+    "string":     "string",
+    "date":       "date",
+    "datetime":   "datetime",
+    "timestamp":  "timestamp",
+    "time":       "time",
+    "json":       "object",
+    "bytes":      "string",
+}
 
