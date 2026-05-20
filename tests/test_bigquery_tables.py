@@ -14,7 +14,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-
 from datastore.core.exceptions import (
     ConflictError,
     NotFoundError,
@@ -30,7 +29,6 @@ from datastore.infrastructure.engines.bigquery.types import (
     bigquery_type,
     can_widen,
 )
-
 
 # --- fixtures --------------------------------------------------------------
 

@@ -17,7 +17,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-
 from datastore.infrastructure.engines.bigquery.metadata import (
     METADATA_TABLE_NAME,
     BigQueryMetadataStore,
@@ -65,7 +64,12 @@ def test_initialize_issues_create_table_if_not_exists(
     assert "CREATE TABLE IF NOT EXISTS" in sql
     assert "`proj-1.ds-1._table_metadata`" in sql
     # Schema columns are declared.
-    for col in ("resource_id STRING", "schema      JSON", "created_at  TIMESTAMP", "updated_at  TIMESTAMP"):
+    for col in (
+        "resource_id STRING",
+        "schema      JSON",
+        "created_at  TIMESTAMP",
+        "updated_at  TIMESTAMP",
+    ):
         assert col in sql
 
 
