@@ -594,19 +594,92 @@ class BigQueryBackend(DatastoreBackend):
         return WriteResult()
 
     def info(self, resource_id: str) -> InfoResult:
-        """Return table metadata: column schema + free-form `meta` dict.
+        """Return the Frictionless schema + row stats for a resource.
 
-        Placeholder: empty schema + minimal meta echoing the requested
-        resource_id. Real impl will read BigQuery's `Table` metadata
-        (schema, num_rows, num_bytes, modified, primary_key stored in
-        the table description JSON) and translate into the canonical
-        Frictionless type vocabulary.
+        Reads `schema` from the engine-managed `_table_metadata` (not
+        BigQuery's `INFORMATION_SCHEMA`) so the `primaryKey` and per-
+        field `info` data dictionary round-trip exactly as declared at
+        `datastore_create`. Row count comes from a `COUNT(*)` on the
+        data table.
+
+        Placeholder mode (no metadata store) returns a stub so the unit
+        suite can exercise the call path without GCP creds.
         """
-        return InfoResult(
-            fields=[],
-            schema={"fields": []},
-            meta={"resource_id": resource_id, "total": 0},
+        if self.metadata is None:
+            return InfoResult(
+                schema={"fields": []},
+                meta={"resource_id": resource_id, "total": 0},
+            )
+
+        schema = self.metadata.get(resource_id)
+        if schema is None:
+            raise NotFoundError(
+                f"resource {resource_id!r} is not declared; call "
+                "datastore_create first"
+            )
+
+        total = self._count_rows(resource_id)
+
+        pk_raw = schema.get("primaryKey")
+        pk: list[str] = (
+            [pk_raw] if isinstance(pk_raw, str) else list(pk_raw or [])
         )
+
+        return InfoResult(
+            schema=schema,
+            meta={
+                "resource_id": resource_id,
+                "total": total,
+                "primary_key": pk,
+            },
+        )
+
+    def _count_rows(self, resource_id: str) -> int:
+        """Look up row count from BigQuery's per-dataset `__TABLES__`
+        virtual table — free metadata query, no full-table scan.
+
+        `COUNT(*)` on the data table would scan every row and is billed
+        by bytes processed; for large tables `datastore_info` would
+        cost dollars per call. `__TABLES__.row_count` is exact for
+        tables written via DML INSERT (the path the backend uses) and
+        is updated as DML lands, so no streaming-buffer lag.
+
+        Returns 0 when the table is absent or the metadata row is
+        missing — keeps `datastore_info` informative rather than
+        500-ing the whole call on an inconsistent state.
+        """
+        from google.cloud import bigquery
+
+        tables_ref = (
+            f"`{self.config.BIGQUERY_PROJECT}."
+            f"{self.config.BIGQUERY_DATASET}.__TABLES__`"
+        )
+        sql = (
+            f"SELECT row_count FROM {tables_ref} "
+            f"WHERE table_id = @table_id"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter(
+                    "table_id", "STRING", resource_id
+                ),
+            ]
+        )
+        try:
+            job = self._run_query(
+                sql, op="ROW_COUNT", resource_id=resource_id,
+                job_config=job_config,
+            )
+            rows = list(job.result())
+        except ServerError as e:
+            log.warning(
+                "__TABLES__ lookup failed for %r; reporting total=0: %s",
+                resource_id, e,
+            )
+            return 0
+        if not rows:
+            return 0
+        return int(rows[0]["row_count"])
 
     def get_columns(self, resource_id: str) -> list[str]:
         """Return column names for a table.

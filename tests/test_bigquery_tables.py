@@ -823,3 +823,93 @@ def test_backend_propagates_config_flag_into_ddl(
     sql = mock_client.query.call_args[0][0]
     assert "`_id` INT64" in sql
     assert "_updated_at" not in sql
+
+
+# --- info() ---------------------------------------------------------------
+
+
+def test_info_returns_stored_schema_total_and_primary_key(
+    mock_client: MagicMock,
+) -> None:
+    """`info()` reads the Frictionless schema from `_table_metadata`
+    and pulls `row_count` from BigQuery's per-dataset `__TABLES__`
+    virtual table — metadata-only, no full-table scan. `meta` exposes
+    the schema's primaryKey under `primary_key`."""
+    schema = {
+        "fields": [
+            {"name": "auction_id", "type": "integer"},
+            {"name": "product_code", "type": "string"},
+        ],
+        "primaryKey": ["auction_id", "product_code"],
+    }
+    backend = _backend_with_schema(mock_client, schema)
+    count_row = MagicMock()
+    count_row.__getitem__.side_effect = (
+        lambda k: 18420 if k == "row_count" else None
+    )
+    mock_client.query.return_value.result.return_value = [count_row]
+
+    result = backend.info("balancing_auction_results_2025")
+
+    sql_arg, kwargs = mock_client.query.call_args
+    sql = sql_arg[0]
+    assert "`proj-1.ds-1.__TABLES__`" in sql
+    assert "WHERE table_id = @table_id" in sql
+    # `resource_id` rides as a parameter — never inlined (would be a
+    # SQL-injection vector since it's a value, not an identifier).
+    params = {p.name: p.value for p in kwargs["job_config"].query_parameters}
+    assert params == {"table_id": "balancing_auction_results_2025"}
+    assert result.schema == schema
+    assert result.meta["resource_id"] == "balancing_auction_results_2025"
+    assert result.meta["total"] == 18420
+    assert result.meta["primary_key"] == ["auction_id", "product_code"]
+
+
+def test_info_raises_not_found_for_undeclared_resource(
+    mock_client: MagicMock,
+) -> None:
+    """No metadata row → NotFoundError. The data table may exist
+    out-of-band but the engine treats `_table_metadata` as the
+    declaration source of truth."""
+    backend = _backend(mock_client)
+    backend.metadata = MagicMock()
+    backend.metadata.get.return_value = None
+
+    with pytest.raises(NotFoundError, match="not declared"):
+        backend.info("ghost")
+    # No COUNT runs when the resource isn't declared.
+    mock_client.query.assert_not_called()
+
+
+def test_info_returns_total_zero_when_count_fails(
+    mock_client: MagicMock,
+) -> None:
+    """If the data table is missing while metadata exists (inconsistent
+    state from manual cleanup), `info` reports total=0 rather than
+    500-ing the call — the schema is still informative on its own."""
+    schema = {
+        "fields": [{"name": "id", "type": "integer"}],
+        "primaryKey": ["id"],
+    }
+    backend = _backend_with_schema(mock_client, schema)
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "404 Not found: Table proj-1:ds-1.res-1"
+    )
+
+    result = backend.info("res-1")
+
+    assert result.meta["total"] == 0
+    assert result.schema == schema
+
+
+def test_info_placeholder_mode_returns_stub(mock_client: MagicMock) -> None:
+    """No metadata store → return an empty stub so the unit suite can
+    exercise the call path without GCP creds."""
+    backend = _backend(mock_client)
+    backend.metadata = None
+
+    result = backend.info("res-1")
+
+    assert result.schema == {"fields": []}
+    assert result.meta == {"resource_id": "res-1", "total": 0}
+    mock_client.query.assert_not_called()

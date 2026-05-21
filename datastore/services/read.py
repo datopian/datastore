@@ -160,10 +160,11 @@ async def info_datastore(
     """
     engine = get_datastore_engine(context, mode="ro")
     result = engine.info(resource_id=data_dict["resource_id"])
+    fields, _ = frictionless_schema_to_fields(result.schema)
     return DatastoreInfoResponse.Result(
         meta=result.meta,
         schema=result.schema,
-        fields=result.fields,
+        fields=fields,
     )
 
 
