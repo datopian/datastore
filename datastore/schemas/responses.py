@@ -123,7 +123,10 @@ class DatastoreSearchResponse(ResponseModel):
         limit: int
         offset: int
         total: int | None = None
-        links: dict[str, str] = Field(alias="_links", default_factory=dict)
+        # Carries URL strings (`start` / `prev` / `next`) plus integer
+        # page counters (`page` / `total_pages`); typed as `Any` for
+        # OpenAPI accuracy.
+        links: dict[str, Any] = Field(alias="_links", default_factory=dict)
 
     result: Result
 

@@ -118,6 +118,16 @@ class Config(BaseSettings):
         ),
     )
 
+    # Search
+    SEARCH_RESULT_ROWS_MAX: int = Field(
+        default=32000,
+        ge=1,
+        description=(
+            "Hard cap on `datastore_search` / `datastore_search_sql` `limit`. "
+            "Requests above this return 400."
+        ),
+    )
+
     # Redis settings
     REDIS_URL: str = Field(
         default="",

@@ -475,39 +475,38 @@ def test_csv_quotes_values_with_special_chars(
 
 
 def test_search_objects_response_includes_links(client: TestClient) -> None:
-    """`_links.start` (no offset) and `_links.next` (offset=limit) come back
-    with the same scheme + host as the request — TestClient uses
-    `http://testserver`."""
+    """Empty-table case (placeholder engine, total=0): only `start` is
+    emitted — `next` / `prev` don't apply and the page counters are
+    suppressed when there's nothing to page through. Scheme + host
+    carried from the request (TestClient uses `http://testserver`)."""
     response = client.get(SEARCH_URL, params=_params())
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    assert set(links) == {"start", "next"}
+    assert set(links) == {"start", "page_size"}
     assert links["start"].startswith("http://testserver/api/3/action/datastore_search")
-    assert links["next"].startswith("http://testserver/api/3/action/datastore_search")
-    # start: no offset (defaults to 0); next: offset = 0 + default limit (100)
     assert "offset" not in links["start"]
-    assert "offset=100" in links["next"]
     assert f"resource_id={_RESOURCE_ID}" in links["start"]
-    assert f"resource_id={_RESOURCE_ID}" in links["next"]
+    assert links["page_size"] == 100  # default limit
 
 
-def test_search_links_advance_by_limit(client: TestClient) -> None:
-    """`next` jumps by exactly `limit`, regardless of the caller's offset."""
+def test_search_links_prev_emitted_on_inner_page(client: TestClient) -> None:
+    """At `offset > 0`, `prev` lands at `max(0, offset - limit)`. No
+    `next` because placeholder total=0 means we're past the end."""
     response = client.get(SEARCH_URL, params=_params(limit=50, offset=25))
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    # start drops offset, keeps the rest
     assert "offset" not in links["start"]
     assert "limit=50" in links["start"]
-    # next advances offset by limit: 25 + 50 = 75
-    assert "offset=75" in links["next"]
-    assert "limit=50" in links["next"]
+    # prev clamps to 0 since offset (25) < limit (50).
+    assert "offset=0" in links["prev"]
+    assert "limit=50" in links["prev"]
+    assert "next" not in links
 
 
 def test_search_links_preserve_other_query_params(client: TestClient) -> None:
-    """Filters / sort / fields ride along on both `start` and `next`."""
+    """Filters / sort / fields ride along on every emitted link."""
     response = client.get(
         SEARCH_URL,
         params=_params(
@@ -519,16 +518,19 @@ def test_search_links_preserve_other_query_params(client: TestClient) -> None:
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    for link in (links["start"], links["next"]):
-        assert "filters=" in link
-        assert "sort=" in link
-        assert "fields=" in link
+    for v in links.values():
+        if not isinstance(v, str):
+            continue  # `page` / `total_pages` are ints
+        assert "filters=" in v
+        assert "sort=" in v
+        assert "fields=" in v
 
 
 def test_search_lists_format_also_includes_links(client: TestClient) -> None:
-    """`records_format=lists` is still a JSON envelope, so `_links` is present."""
+    """`records_format=lists` is still a JSON envelope, so `_links` is
+    present (placeholder engine, empty table: `start` + `page_size`)."""
     response = client.get(SEARCH_URL, params=_params(records_format="lists"))
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    assert set(links) == {"start", "next"}
+    assert set(links) == {"start", "page_size"}

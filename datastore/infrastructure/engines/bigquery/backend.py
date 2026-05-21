@@ -550,22 +550,124 @@ class BigQueryBackend(DatastoreBackend):
         sort: str | None,
         include_total: bool,
     ) -> SearchResult:
-        """Query records. Returns SearchResult with a lazy row iterator.
+        """Run a parameterised SELECT against the data table.
 
-        Placeholder: returns an empty result set so the call path is
-        exercised end-to-end. Real impl builds a parameterised SELECT
-        honouring `filters` / `q` / `distinct` / `sort`, optionally
-        runs `COUNT(*)` when `include_total=True`, and yields tuples
-        page-by-page from `query_job.result()`.
+        Pipeline:
+          1. Resolve schema from `_table_metadata` (404 if undeclared).
+          2. Build search + (optional) count SQL via `search.py`.
+             Validation of `fields` / `sort` / `filters` / `q` columns
+             happens inside the builders so a bad request becomes a
+             clean 400, never reaches BigQuery.
+          3. Submit both queries. When only an unfiltered total is
+             needed, fall back to `__TABLES__.row_count` — free vs the
+             COUNT(*) billing.
+          4. Return a row iterator that yields tuples in projection
+             order; memory stays bounded by the RowIterator's page
+             size, not the result set size.
+
+        `plain` and `language` are accepted for CKAN compatibility but
+        currently have no effect on the BigQuery side — `SEARCH()`
+        tokenises uniformly regardless of `plain`, and we don't expose
+        the analyzer arg.
+
+        Placeholder mode (no metadata store) returns an empty result so
+        the unit suite can exercise the call path without GCP creds.
         """
-        schema: dict = {
-            "fields": [{"name": c, "type": "any"} for c in fields]
-            if fields else []
-        }
+        from datastore.infrastructure.engines.bigquery.search import (
+            build_count,
+            build_search,
+            needs_count_query,
+        )
+
+        if self.metadata is None:
+            # Placeholder mode (no GCP creds) — echo the requested
+            # field shape so the unit suite can exercise the streaming
+            # writer + envelope plumbing without a real backend.
+            stub_schema = {
+                "fields": [
+                    {"name": c, "type": "any"} for c in (fields or [])
+                ],
+            }
+            return SearchResult(
+                schema=stub_schema,
+                records=iter([]),
+                total=0 if include_total else None,
+                records_truncated=False,
+            )
+
+        schema = self.metadata.get(resource_id)
+        if schema is None:
+            raise NotFoundError(
+                f"resource {resource_id!r} is not declared; call "
+                "datastore_create first"
+            )
+
+        try:
+            sql, params, projected = build_search(
+                table_ref=self._data_table_ref(resource_id),
+                schema=schema,
+                include_updated_at=self._include_updated_at,
+                fields=fields,
+                filters=filters,
+                q=q,
+                distinct=distinct,
+                sort=sort,
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as e:
+            raise ValidationError(str(e)) from e
+
+        from google.cloud import bigquery
+        job_config = bigquery.QueryJobConfig(query_parameters=params)
+
+        # Fire both jobs before waiting on either: BigQuery's
+        # `client.query()` is non-blocking, so the count and the page
+        # query run in parallel — wall time ≈ max(both).
+        count_job = None
+        if include_total and needs_count_query(
+            filters=filters, q=q, distinct=distinct,
+        ):
+            count_sql, count_params = build_count(
+                table_ref=self._data_table_ref(resource_id),
+                schema=schema,
+                include_updated_at=self._include_updated_at,
+                fields=fields,
+                filters=filters,
+                q=q,
+                distinct=distinct,
+            )
+            count_cfg = bigquery.QueryJobConfig(query_parameters=count_params)
+            count_job = self.client.query(count_sql, job_config=count_cfg)
+
+        search_job = self.client.query(sql, job_config=job_config)
+
+        try:
+            row_iter = search_job.result()
+        except Exception as e:
+            raise ServerError(
+                f"BigQuery search failed for resource {resource_id!r}: {e}"
+            ) from e
+
+        total: int | None = None
+        if include_total:
+            if count_job is None:
+                # Unfiltered + non-distinct → metadata row_count (free).
+                total = self._count_rows(resource_id)
+            else:
+                try:
+                    rows = list(count_job.result())
+                except Exception as e:
+                    raise ServerError(
+                        f"BigQuery search COUNT failed for resource "
+                        f"{resource_id!r}: {e}"
+                    ) from e
+                total = int(rows[0]["n"]) if rows else 0
+
         return SearchResult(
-            schema=schema,
-            records=iter([]),
-            total=0 if include_total else None,
+            schema=projected,
+            records=(tuple(row.values()) for row in row_iter),
+            total=total,
             records_truncated=False,
         )
 
@@ -594,7 +696,7 @@ class BigQueryBackend(DatastoreBackend):
         return WriteResult()
 
     def info(self, resource_id: str) -> InfoResult:
-        """Return the Frictionless schema + row stats for a resource.
+        """Return the table schema + row stats for a resource.
 
         Reads `schema` from the engine-managed `_table_metadata` (not
         BigQuery's `INFORMATION_SCHEMA`) so the `primaryKey` and per-
@@ -635,51 +737,31 @@ class BigQueryBackend(DatastoreBackend):
         )
 
     def _count_rows(self, resource_id: str) -> int:
-        """Look up row count from BigQuery's per-dataset `__TABLES__`
-        virtual table — free metadata query, no full-table scan.
+        """`COUNT(*)` against the data table; returns 0 on missing table.
 
-        `COUNT(*)` on the data table would scan every row and is billed
-        by bytes processed; for large tables `datastore_info` would
-        cost dollars per call. `__TABLES__.row_count` is exact for
-        tables written via DML INSERT (the path the backend uses) and
-        is updated as DML lands, so no streaming-buffer lag.
-
-        Returns 0 when the table is absent or the metadata row is
-        missing — keeps `datastore_info` informative rather than
-        500-ing the whole call on an inconsistent state.
+        A missing data table while metadata exists is an inconsistent
+        state (manual cleanup, partial drop). Logging it as a warning
+        and returning 0 keeps `datastore_info` informative rather than
+        500-ing the whole call.
         """
-        from google.cloud import bigquery
-
-        tables_ref = (
-            f"`{self.config.BIGQUERY_PROJECT}."
-            f"{self.config.BIGQUERY_DATASET}.__TABLES__`"
-        )
         sql = (
-            f"SELECT row_count FROM {tables_ref} "
-            f"WHERE table_id = @table_id"
-        )
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter(
-                    "table_id", "STRING", resource_id
-                ),
-            ]
+            f"SELECT COUNT(*) AS n FROM "
+            f"{self._data_table_ref(resource_id)}"
         )
         try:
             job = self._run_query(
-                sql, op="ROW_COUNT", resource_id=resource_id,
-                job_config=job_config,
+                sql, op="COUNT", resource_id=resource_id
             )
             rows = list(job.result())
         except ServerError as e:
             log.warning(
-                "__TABLES__ lookup failed for %r; reporting total=0: %s",
+                "COUNT(*) failed for resource %r; reporting total=0: %s",
                 resource_id, e,
             )
             return 0
         if not rows:
             return 0
-        return int(rows[0]["row_count"])
+        return int(rows[0]["n"])
 
     def get_columns(self, resource_id: str) -> list[str]:
         """Return column names for a table.

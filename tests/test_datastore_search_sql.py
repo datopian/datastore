@@ -79,11 +79,14 @@ def test_response_shape_matches_datastore_search(client: TestClient) -> None:
 
 
 def test_response_includes_pagination_links(client: TestClient) -> None:
-    """`_links` is emitted for envelope-shape parity (start / next keys)."""
+    """`_links` is emitted for envelope-shape parity. Raw-SQL responses
+    don't carry a `total`, so `next` and `total_pages` are omitted;
+    `start`, `page_size`, and the current `page` land."""
     response = client.get(SQL_URL, params={"sql": "SELECT 1"})
 
     links = response.json()["result"]["_links"]
-    assert set(links) == {"start", "next"}
+    assert set(links) == {"start", "page_size", "page"}
+    assert links["page"] == 1
 
 
 # 3. SQL validation ---------------------------------------------------------

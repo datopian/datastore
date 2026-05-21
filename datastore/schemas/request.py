@@ -149,7 +149,9 @@ class DatastoreSearchRequest(BaseModel):
     distinct: bool = False
     plain: bool = True
     language: str = "english"
-    limit: int = Field(default=100, ge=0, le=32000)
+    # Engine enforces `Config.SEARCH_RESULT_ROWS_MAX` (default 32000).
+    # No `le` here so ops can lift the cap via env without a schema change.
+    limit: int = Field(default=100, ge=0)
     offset: int = Field(default=0, ge=0)
     fields: str | None = None
     sort: str | None = None

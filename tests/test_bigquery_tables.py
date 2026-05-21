@@ -832,8 +832,7 @@ def test_info_returns_stored_schema_total_and_primary_key(
     mock_client: MagicMock,
 ) -> None:
     """`info()` reads the Frictionless schema from `_table_metadata`
-    and pulls `row_count` from BigQuery's per-dataset `__TABLES__`
-    virtual table — metadata-only, no full-table scan. `meta` exposes
+    and counts rows via `COUNT(*)` on the data table. `meta` exposes
     the schema's primaryKey under `primary_key`."""
     schema = {
         "fields": [
@@ -844,21 +843,16 @@ def test_info_returns_stored_schema_total_and_primary_key(
     }
     backend = _backend_with_schema(mock_client, schema)
     count_row = MagicMock()
-    count_row.__getitem__.side_effect = (
-        lambda k: 18420 if k == "row_count" else None
-    )
+    count_row.__getitem__.side_effect = lambda k: 18420 if k == "n" else None
     mock_client.query.return_value.result.return_value = [count_row]
 
     result = backend.info("balancing_auction_results_2025")
 
-    sql_arg, kwargs = mock_client.query.call_args
-    sql = sql_arg[0]
-    assert "`proj-1.ds-1.__TABLES__`" in sql
-    assert "WHERE table_id = @table_id" in sql
-    # `resource_id` rides as a parameter — never inlined (would be a
-    # SQL-injection vector since it's a value, not an identifier).
-    params = {p.name: p.value for p in kwargs["job_config"].query_parameters}
-    assert params == {"table_id": "balancing_auction_results_2025"}
+    sql = mock_client.query.call_args[0][0]
+    assert sql == (
+        "SELECT COUNT(*) AS n FROM "
+        "`proj-1.ds-1.balancing_auction_results_2025`"
+    )
     assert result.schema == schema
     assert result.meta["resource_id"] == "balancing_auction_results_2025"
     assert result.meta["total"] == 18420
@@ -912,4 +906,304 @@ def test_info_placeholder_mode_returns_stub(mock_client: MagicMock) -> None:
 
     assert result.schema == {"fields": []}
     assert result.meta == {"resource_id": "res-1", "total": 0}
+    mock_client.query.assert_not_called()
+
+
+# --- search() SQL builders -------------------------------------------------
+
+
+def test_parse_sort_validates_and_defaults_direction() -> None:
+    from datastore.infrastructure.engines.bigquery.search import parse_sort
+
+    pairs = parse_sort("a, b desc, c asc", {"a", "b", "c"})
+    assert pairs == [("a", "ASC"), ("b", "DESC"), ("c", "ASC")]
+
+    with pytest.raises(ValueError, match="unknown column 'ghost'"):
+        parse_sort("ghost desc", {"a"})
+    with pytest.raises(ValueError, match="direction"):
+        parse_sort("a sideways", {"a"})
+
+
+def test_build_search_renders_full_param_set() -> None:
+    """Every CKAN datastore_search param lands in the rendered SQL —
+    filters bind as parameters (no inlining), `q` becomes a row-wide
+    `SEARCH`, sort + projection are validated identifiers, and limit /
+    offset close the statement."""
+    from datastore.infrastructure.engines.bigquery.search import build_search
+
+    schema = {
+        "fields": [
+            {"name": "auction_id", "type": "integer"},
+            {"name": "product_code", "type": "string"},
+            {"name": "accepted", "type": "boolean"},
+        ],
+        "primaryKey": ["auction_id"],
+    }
+
+    sql, params, projected = build_search(
+        table_ref="`p.d.r`",
+        schema=schema,
+        include_updated_at=True,
+        fields=["auction_id", "product_code"],
+        filters={"product_code": "DCL", "accepted": True},
+        q="apple",
+        distinct=False,
+        sort="auction_id desc",
+        limit=100,
+        offset=25,
+    )
+
+    assert sql.startswith("SELECT `auction_id`, `product_code` FROM `p.d.r` AS t")
+    assert "WHERE `product_code` = @f0 AND `accepted` = @f1" in sql
+    assert "SEARCH(t, @f2)" in sql
+    assert "ORDER BY `auction_id` DESC" in sql
+    assert sql.rstrip().endswith("LIMIT 100 OFFSET 25")
+    # Parameter types track the schema (STRING / BOOL / STRING for q).
+    by_name = {p.name: p for p in params}
+    assert by_name["f0"].type_ == "STRING"
+    assert by_name["f0"].value == "DCL"
+    assert by_name["f1"].type_ == "BOOL"
+    assert by_name["f1"].value is True
+    assert by_name["f2"].type_ == "STRING"
+    assert by_name["f2"].value == "apple"
+    # Result schema reflects the projection, in user-specified order.
+    assert [f["name"] for f in projected["fields"]] == [
+        "auction_id", "product_code",
+    ]
+
+
+def test_build_search_in_clause_for_list_filter() -> None:
+    """Filter value as a list → `col IN UNNEST(@p)` with an ARRAY param."""
+    from datastore.infrastructure.engines.bigquery.search import build_search
+
+    schema = {"fields": [{"name": "id", "type": "integer"}]}
+    sql, params, _ = build_search(
+        table_ref="`p.d.r`",
+        schema=schema,
+        include_updated_at=False,
+        fields=None,
+        filters={"id": [1, 2, 3]},
+        q=None,
+        distinct=False,
+        sort=None,
+        limit=10,
+        offset=0,
+    )
+    assert "`id` IN UNNEST(@f0)" in sql
+    assert params[0].array_type == "INT64"
+    assert params[0].values == [1, 2, 3]
+
+
+def test_build_search_default_sort_is_id_asc() -> None:
+    """No `sort` → `_id ASC`. `_id` is always projected by default so
+    this is well-defined."""
+    from datastore.infrastructure.engines.bigquery.search import build_search
+
+    schema = {"fields": [{"name": "x", "type": "integer"}]}
+    sql, _, _ = build_search(
+        table_ref="`p.d.r`",
+        schema=schema,
+        include_updated_at=False,
+        fields=None,
+        filters=None,
+        q=None,
+        distinct=False,
+        sort=None,
+        limit=10,
+        offset=0,
+    )
+    assert "ORDER BY `_id` ASC" in sql
+
+
+def test_build_search_rejects_unknown_columns() -> None:
+    """`fields`, `sort`, `filters`, and dict-`q` all validate column
+    names against the schema — closing the SQL-injection vector on the
+    identifier-inlined slots."""
+    from datastore.infrastructure.engines.bigquery.search import build_search
+
+    schema = {"fields": [{"name": "a", "type": "integer"}]}
+    kwargs = dict(
+        table_ref="`p.d.r`",
+        schema=schema,
+        include_updated_at=False,
+        filters=None, q=None, distinct=False, sort=None,
+        limit=10, offset=0,
+    )
+    with pytest.raises(ValueError, match="fields references unknown"):
+        build_search(fields=["ghost"], **kwargs)
+    with pytest.raises(ValueError, match="sort references unknown"):
+        build_search(fields=None, **{**kwargs, "sort": "ghost asc"})
+    with pytest.raises(ValueError, match="filters references unknown"):
+        build_search(fields=None, **{**kwargs, "filters": {"ghost": 1}})
+    with pytest.raises(ValueError, match="q references unknown"):
+        build_search(fields=None, **{**kwargs, "q": {"ghost": "x"}})
+
+
+def test_build_search_rejects_filters_on_json_columns() -> None:
+    """JSON/array/geojson columns have no clean equality in BQ — reject
+    early so the caller gets a 400 rather than a 500 from BigQuery."""
+    from datastore.infrastructure.engines.bigquery.search import build_search
+
+    schema = {"fields": [{"name": "blob", "type": "object"}]}
+    with pytest.raises(ValueError, match="JSON/array/geojson"):
+        build_search(
+            table_ref="`p.d.r`",
+            schema=schema,
+            include_updated_at=False,
+            fields=None,
+            filters={"blob": {"k": "v"}},
+            q=None, distinct=False, sort=None,
+            limit=10, offset=0,
+        )
+
+
+def test_needs_count_query_only_when_filtering_or_distinct() -> None:
+    """Unfiltered + non-distinct search → backend takes the cheap
+    `__TABLES__`/`_count_rows` path; otherwise must run a real COUNT."""
+    from datastore.infrastructure.engines.bigquery.search import (
+        needs_count_query,
+    )
+
+    assert needs_count_query(filters=None, q=None, distinct=False) is False
+    assert needs_count_query(filters={"a": 1}, q=None, distinct=False) is True
+    assert needs_count_query(filters=None, q="x", distinct=False) is True
+    assert needs_count_query(filters=None, q=None, distinct=True) is True
+
+
+# --- backend.search() orchestration ---------------------------------------
+
+
+def test_search_returns_projection_schema_and_lazy_rows(
+    mock_client: MagicMock,
+) -> None:
+    """End-to-end through `BigQueryBackend.search`: builds the SELECT,
+    submits the search + count jobs (filtered → count is a real query,
+    not `_count_rows`), yields tuples in projection order, and pipes
+    the projected schema back to the streaming writer."""
+    schema = {
+        "fields": [
+            {"name": "auction_id", "type": "integer"},
+            {"name": "product_code", "type": "string"},
+        ],
+        "primaryKey": ["auction_id"],
+    }
+    backend = _backend_with_schema(mock_client, schema)
+
+    # Distinct jobs for search + count; each yields its own .result().
+    search_job = MagicMock()
+    search_row = MagicMock()
+    search_row.values.return_value = (1, "DCL")
+    search_job.result.return_value = iter([search_row])
+
+    count_job = MagicMock()
+    count_row = MagicMock()
+    count_row.__getitem__.side_effect = lambda k: 1 if k == "n" else None
+    count_job.result.return_value = [count_row]
+
+    mock_client.query.side_effect = [count_job, search_job]
+
+    result = backend.search(
+        resource_id="res-1",
+        filters={"product_code": "DCL"},
+        q=None,
+        distinct=False, plain=True, language="english",
+        limit=100, offset=0,
+        fields=["auction_id", "product_code"],
+        sort=None,
+        include_total=True,
+    )
+
+    # Count query fires first (queued before search so both run in
+    # parallel; this caller awaits search before count).
+    assert mock_client.query.call_count == 2
+    count_sql = mock_client.query.call_args_list[0][0][0]
+    search_sql = mock_client.query.call_args_list[1][0][0]
+    assert count_sql.startswith("SELECT COUNT(*) AS n FROM (")
+    assert search_sql.startswith(
+        "SELECT `auction_id`, `product_code` FROM `proj-1.ds-1.res-1` AS t"
+    )
+    assert result.total == 1
+    # `records` is a generator — assert lazy by exhausting it once.
+    rows = list(result.records)
+    assert rows == [(1, "DCL")]
+    # Projected schema is what the writer needs to label columns.
+    assert [f["name"] for f in result.schema["fields"]] == [
+        "auction_id", "product_code",
+    ]
+
+
+def test_search_unfiltered_uses_cheap_row_count(
+    mock_client: MagicMock,
+) -> None:
+    """No filters, no q, no distinct → backend skips the filtered
+    COUNT subquery and falls back to the cheap row-count helper. Two
+    `client.query` calls land in this order: (1) the search SELECT,
+    (2) `_count_rows`'s `SELECT COUNT(*) FROM target`. Neither wraps
+    the data table in a subquery."""
+    schema = {"fields": [{"name": "a", "type": "integer"}]}
+    backend = _backend_with_schema(mock_client, schema)
+
+    search_job = MagicMock()
+    search_job.result.return_value = iter([])
+    count_job = MagicMock()
+    cnt = MagicMock()
+    cnt.__getitem__.side_effect = lambda k: 42 if k == "n" else None
+    count_job.result.return_value = [cnt]
+
+    mock_client.query.side_effect = [search_job, count_job]
+
+    result = backend.search(
+        resource_id="res-1",
+        filters=None, q=None, distinct=False, plain=True,
+        language="english", limit=10, offset=0,
+        fields=None, sort=None, include_total=True,
+    )
+
+    assert mock_client.query.call_count == 2
+    sqls = [call.args[0] for call in mock_client.query.call_args_list]
+    # `_updated_at` rides along in default projection because the
+    # MagicMock config returns truthy for `INCLUDE_UPDATED_AT`.
+    assert sqls[0].startswith(
+        "SELECT `_id`, `a`, `_updated_at` FROM `proj-1.ds-1.res-1` AS t"
+    )
+    assert sqls[1] == (
+        "SELECT COUNT(*) AS n FROM `proj-1.ds-1.res-1`"
+    )
+    # No filtered count subquery anywhere.
+    assert not any("FROM (SELECT" in s for s in sqls)
+    assert result.total == 42
+
+
+def test_search_raises_not_found_for_undeclared_resource(
+    mock_client: MagicMock,
+) -> None:
+    backend = _backend(mock_client)
+    backend.metadata = MagicMock()
+    backend.metadata.get.return_value = None
+
+    with pytest.raises(NotFoundError, match="not declared"):
+        backend.search(
+            resource_id="ghost",
+            filters=None, q=None, distinct=False, plain=True,
+            language="english", limit=10, offset=0,
+            fields=None, sort=None, include_total=False,
+        )
+    mock_client.query.assert_not_called()
+
+
+def test_search_translates_builder_error_to_validation_error(
+    mock_client: MagicMock,
+) -> None:
+    """Builder `ValueError` (unknown column, etc.) becomes a clean
+    `ValidationError` — caller gets 400, never reaches BigQuery."""
+    schema = {"fields": [{"name": "a", "type": "integer"}]}
+    backend = _backend_with_schema(mock_client, schema)
+
+    with pytest.raises(ValidationError, match="unknown column"):
+        backend.search(
+            resource_id="res-1",
+            filters=None, q=None, distinct=False, plain=True,
+            language="english", limit=10, offset=0,
+            fields=["ghost"], sort=None, include_total=False,
+        )
     mock_client.query.assert_not_called()
