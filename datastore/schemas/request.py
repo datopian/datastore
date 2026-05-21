@@ -283,6 +283,15 @@ class DatastoreInfoRequest(BaseModel):
     def _require_resource_id_or_id(self) -> DatastoreInfoRequest:
         if self.resource_id is None and self.id is None:
             raise ValueError("either 'resource_id' or 'id' is required")
+        if (
+            self.resource_id is not None
+            and self.id is not None
+            and self.resource_id != self.id
+        ):
+            raise ValueError(
+                "'resource_id' and 'id' both provided with different "
+                "values; send exactly one"
+            )
         if self.resource_id is None:
             self.resource_id = self.id
         return self
@@ -312,6 +321,15 @@ class DatastoreDeleteRequest(BaseModel):
     def _require_resource_id_or_id(self) -> DatastoreDeleteRequest:
         if self.resource_id is None and self.id is None:
             raise ValueError("either 'resource_id' or 'id' is required")
+        if (
+            self.resource_id is not None
+            and self.id is not None
+            and self.resource_id != self.id
+        ):
+            raise ValueError(
+                "'resource_id' and 'id' both provided with different "
+                "values; send exactly one"
+            )
         if self.resource_id is None:
             self.resource_id = self.id
         return self

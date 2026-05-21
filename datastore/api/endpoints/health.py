@@ -11,10 +11,13 @@ from datastore.core.config import get_config
 from datastore.infrastructure.engines.registry import get_datastore_engine
 from datastore.schemas.responses import StatusResponse, WelcomeResponse
 
-router = APIRouter(tags=["health"])
+welcome_router = APIRouter(tags=["health"])
 
 
-@router.get("/", response_model=WelcomeResponse)
+probe_router = APIRouter(tags=["health"])
+
+
+@welcome_router.get("/", response_model=WelcomeResponse)
 def welcome(request: Request):
     return _success_response(
         request,
@@ -22,13 +25,13 @@ def welcome(request: Request):
     )
 
 
-@router.get("/health", response_model=StatusResponse)
+@probe_router.get("/health", response_model=StatusResponse)
 def health(request: Request):
     """Liveness — always 200 while the process is up."""
     return _success_response(request, StatusResponse.Result(status="ok"))
 
 
-@router.get("/ready", response_model=StatusResponse)
+@probe_router.get("/ready", response_model=StatusResponse)
 def ready(request: Request):
     """Readiness — 200 when both rw and ro engines pass `healthcheck()`,
     503 otherwise. Probes both modes because the credential split means
@@ -50,13 +53,7 @@ def ready(request: Request):
             content={
                 "help": str(request.url),
                 "success": False,
-                "error": {
-                    "__type": "Service Unavailable",
-                    "message": (
-                        f"engine healthcheck failed for mode(s): "
-                        f"{', '.join(failing)}"
-                    ),
-                },
+                "result": {"status": "not_ready"},
             },
         )
     return _success_response(request, StatusResponse.Result(status="ready"))

@@ -65,15 +65,28 @@ def test_id_alias_works(client: TestClient) -> None:
     assert result["meta"]["resource_id"] == _RESOURCE_ID
 
 
-def test_resource_id_wins_when_both_provided(client: TestClient) -> None:
-    """If both `resource_id` and `id` are present, `resource_id` is used."""
+def test_same_value_for_resource_id_and_id_accepted(client: TestClient) -> None:
+    """Same value on both `resource_id` and `id` is the no-conflict case
+    (legacy clients echoing both keys); accepted as `resource_id`."""
     response = client.get(INFO_URL, params={
         "resource_id": _RESOURCE_ID,
-        "id": "ignored-value",
+        "id": _RESOURCE_ID,
     })
-
     assert response.status_code == 200
     assert response.json()["result"]["meta"]["resource_id"] == _RESOURCE_ID
+
+
+def test_conflicting_resource_id_and_id_rejected(client: TestClient) -> None:
+    """Different values for `resource_id` and `id` → 400. Silently
+    preferring one would let CKAN-style legacy params mask a real client
+    bug, so the request must be unambiguous."""
+    response = client.get(INFO_URL, params={
+        "resource_id": _RESOURCE_ID,
+        "id": "different-value",
+    })
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["__type"] == "Validation Error"
 
 
 def test_missing_both_returns_validation_error(client: TestClient) -> None:

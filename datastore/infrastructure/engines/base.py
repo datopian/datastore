@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass
@@ -14,8 +17,8 @@ class SearchResult:
     the streaming serialiser.
     """
 
-    schema: dict  # {"fields": [{"name": "col", "type": "string"}, ...]}
-    records: Iterator[tuple]
+    schema: dict[str, Any]  # {"fields": [{"name": "col", "type": "string"}, ...]}
+    records: Iterator[tuple[Any, ...]]
     total: int | None = None
     records_truncated: bool = False
 
@@ -35,11 +38,10 @@ class InfoResult:
     """Table metadata returned by `datastore_info`.
 
 
-
     """
 
-    schema: dict
-    meta: dict
+    schema: dict[str, Any]
+    meta: dict[str, Any]
 
 
 @runtime_checkable
@@ -64,7 +66,7 @@ class MetadataStore(Protocol):
     def initialize(self) -> None:
         """Create the metadata table if it doesn't exist. Idempotent."""
 
-    def insert(self, resource_id: str, schema: dict) -> None:
+    def insert(self, resource_id: str, schema: dict[str, Any]) -> None:
         """Insert a new metadata row for `resource_id`.
 
         Sets `created_at` and `updated_at` to now. Fails if a row with
@@ -73,14 +75,14 @@ class MetadataStore(Protocol):
         already-declared resource).
         """
 
-    def update(self, resource_id: str, schema: dict) -> None:
+    def update(self, resource_id: str, schema: dict[str, Any]) -> None:
         """Update the metadata row for `resource_id`.
 
         Replaces `schema` and bumps `updated_at`; `created_at` is
         preserved. Keyed on `resource_id`; no-op when the row is absent.
         """
 
-    def get(self, resource_id: str) -> dict | None:
+    def get(self, resource_id: str) -> dict[str, Any] | None:
         """Return the stored Frictionless schema for `resource_id`,
         or `None` when no row exists."""
 
@@ -95,7 +97,11 @@ class DatastoreBackend(ABC):
 
     @abstractmethod
     def create(
-        self, resource_id: str, schema: dict, records: list | None, include_total: bool
+        self,
+        resource_id: str,
+        schema: dict[str, Any],
+        records: list[dict[str, Any]] | None,
+        include_total: bool,
     ) -> WriteResult:
         """Create/alter table, optionally with bulk insert.
 
@@ -113,14 +119,14 @@ class DatastoreBackend(ABC):
     def search(
         self,
         resource_id: str,
-        filters: dict | None,
-        q: str | dict | None,
+        filters: dict[str, Any] | None,
+        q: str | dict[str, Any] | None,
         distinct: bool,
         plain: bool,
         language: str,
         limit: int,
         offset: int,
-        fields: list | None,
+        fields: list[str] | None,
         sort: str | None,
         include_total: bool,
     ) -> SearchResult:
@@ -133,7 +139,11 @@ class DatastoreBackend(ABC):
 
     @abstractmethod
     def upsert(
-        self, resource_id: str, records: list, method: str, include_total: bool
+        self,
+        resource_id: str,
+        records: list[dict[str, Any]],
+        method: str,
+        include_total: bool,
     ) -> WriteResult:
         """Insert / update / upsert records.
 
@@ -146,7 +156,9 @@ class DatastoreBackend(ABC):
         """Execute raw SQL SELECT. Returns SearchResult with lazy row iterator."""
 
     @abstractmethod
-    def delete(self, resource_id: str, filters: dict | None) -> WriteResult:
+    def delete(
+        self, resource_id: str, filters: dict[str, Any] | None,
+    ) -> WriteResult:
         """Delete records (filtered) or drop table (no filters)."""
 
     @abstractmethod

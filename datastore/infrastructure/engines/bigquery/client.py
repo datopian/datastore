@@ -1,9 +1,5 @@
 """BigQuery `Client` construction.
 
-Credentials come from `BIGQUERY_CREDENTIALS` (read-write) or
-`BIGQUERY_CREDENTIALS_RO` (read-only, falls back to read-write). The
-value is either a JSON blob (leading `{`) or a path to a service-account
-JSON file. Empty → Application Default Credentials.
 """
 
 from __future__ import annotations
@@ -28,6 +24,11 @@ def build_client(config: Config, mode: Mode) -> bigquery.Client:
             "BIGQUERY_PROJECT is required when DATASTORE_ENGINE=bigquery"
         )
 
+    # Each mode reads its own credential variable independently. An
+    # empty RO credential falls through to ADC (Application Default
+    # Credentials) — never to the RW key, since that would silently
+    # give read paths write privileges and defeat the credential
+    # split.
     creds_raw = (
         config.BIGQUERY_CREDENTIALS_RO
         if mode == "ro"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict
+from pydantic import BaseModel, BeforeValidator, ConfigDict, field_validator
 
 from datastore.core.constants import (
     FRICTIONLESS_TO_POSTGRES,
@@ -101,9 +101,12 @@ def fields_to_frictionless_schema(
       - `id`   → `name`
       - `type` (Postgres canonical) → `type` (Frictionless), via
         `POSTGRES_TO_FRICTIONLESS`. Unknown types fall through to `string`.
-      - `info` is unpacked: recognised keys (`title`, `description`) move to
-        top-level Frictionless properties; the rest is preserved verbatim
-        under a custom `info` key so the data dictionary round-trips.
+      - `info` is unpacked: recognised keys (`title`, `description`) move
+        to top-level Frictionless properties; the rest stays nested
+        under a custom `info` key so `frictionless_schema_to_fields`
+        can round-trip the data dictionary intact (previously these
+        extras were spread onto the field and silently lost on the
+        reverse path).
 
     `primary_key` becomes the schema's `primaryKey` (Frictionless naming).
     """
@@ -184,12 +187,22 @@ def frictionless_schema_to_fields(
 
 
 def validate_frictionless_schema(value: Any) -> dict[str, Any] | None:
-    """Validate a frictionless Table Schema descriptor.
+    """Validate a Frictionless Table Schema descriptor against this
+    repo's stricter contract.
 
-    Pass-through `None`. Otherwise the dict is fed to
-    `frictionless.Schema.from_descriptor`, which raises if `fields` is
-    missing, a field type is unknown, or any other descriptor rule is
-    violated. We re-raise as `ValueError` so Pydantic surfaces it through
+    Pass-through `None`. Otherwise:
+      1. `frictionless.Schema.from_descriptor` validates the descriptor
+         shape (raises on missing `fields`, unknown field type, etc.).
+      2. Field types must be in `ALLOWED_FRICTIONLESS_TYPES` — wider
+         Frictionless vocabulary (e.g. `duration`, `year`, `yearmonth`)
+         is rejected here so storage layout stays predictable and the
+         engine type maps don't grow ad-hoc.
+      3. Field names must not collide with engine-reserved system
+         columns (`_id`, `_updated_at`). Silently dropping them would
+         leave the response advertising a column the engine won't
+         populate.
+
+    Any failure raises `ValueError` so Pydantic surfaces it through
     the standard CKAN error envelope.
     """
     if value is None:
@@ -200,10 +213,29 @@ def validate_frictionless_schema(value: Any) -> dict[str, Any] | None:
     from frictionless import Schema
     from frictionless.exception import FrictionlessException
 
+    from datastore.core.constants import (
+        ALLOWED_FRICTIONLESS_TYPES,
+        RESERVED_SYSTEM_COLUMN_NAMES,
+    )
+
     try:
         Schema.from_descriptor(value)
     except FrictionlessException as exc:
         raise ValueError(str(exc)) from exc
+
+    for f in value.get("fields", []) or []:
+        name = f.get("name")
+        if name in RESERVED_SYSTEM_COLUMN_NAMES:
+            raise ValueError(
+                f"field name {name!r} is reserved for engine-managed "
+                "system columns; rename the field"
+            )
+        ftype = f.get("type")
+        if ftype is not None and ftype not in ALLOWED_FRICTIONLESS_TYPES:
+            raise ValueError(
+                f"field {name!r} has unsupported type {ftype!r}; "
+                f"allowed: {sorted(ALLOWED_FRICTIONLESS_TYPES)}"
+            )
     return value
 
 
@@ -282,3 +314,14 @@ class FieldSpec(BaseModel):
     id: str
     type: PostgresType = None
     info: dict[str, Any] | None = None
+
+    @field_validator("id")
+    @classmethod
+    def _check_not_reserved(cls, v: str) -> str:
+        from datastore.core.constants import RESERVED_SYSTEM_COLUMN_NAMES
+        if v in RESERVED_SYSTEM_COLUMN_NAMES:
+            raise ValueError(
+                f"field id {v!r} is reserved for engine-managed system "
+                "columns; rename the field"
+            )
+        return v

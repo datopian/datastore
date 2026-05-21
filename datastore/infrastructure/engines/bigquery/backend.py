@@ -773,8 +773,20 @@ class BigQueryBackend(DatastoreBackend):
 
     def healthcheck(self) -> bool:
         """Probe the BigQuery client with `SELECT 1`. Returns False on
-        any failure so `/ready` can return 503 instead of crashing."""
+        any failure so `/ready` can return 503 instead of crashing.
+        """
         if self.client is None:
+            return False
+        if (
+            self.config is not None
+            and self.config.BIGQUERY_PROJECT.strip()
+            and self.metadata is None
+        ):
+            log.warning(
+                "BigQuery healthcheck failed (mode=%s): metadata store "
+                "unavailable — set BIGQUERY_DATASET.",
+                self.mode,
+            )
             return False
         try:
             self.client.query("SELECT 1").result()

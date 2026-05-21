@@ -83,9 +83,16 @@ async def upsert_datastore(
 async def delete_datastore(
     context: RequestContext, data_dict: dict[str, Any]
 ) -> DatastoreDeleteResponse.Result:
-    """Delete rows matching `filters`, or drop the whole table."""
+    """Delete rows matching `filters`, or drop the whole table.
+
+    Pass the validated `filters` through verbatim: ``None`` (key
+    missing) means "drop the table", ``{}`` means "no-WHERE delete",
+    and a populated dict means "filtered delete". Coercing ``{}`` to
+    ``None`` here would silently change a no-op into a destructive
+    DROP, so the engine sees exactly what the caller sent.
+    """
     resource_id = data_dict["resource_id"]
-    filters = data_dict.get("filters") or None
+    filters = data_dict.get("filters")
 
     engine = get_datastore_engine(context, mode="rw")
     engine.delete(resource_id=resource_id, filters=filters)

@@ -77,14 +77,26 @@ def test_id_alias_works(client: TestClient) -> None:
     assert response.json()["result"]["resource_id"] == _RESOURCE_ID
 
 
-def test_resource_id_wins_when_both_provided(client: TestClient) -> None:
+def test_same_value_for_resource_id_and_id_accepted(client: TestClient) -> None:
+    """Same value on both keys is the no-conflict legacy-echo case."""
     response = client.post(DELETE_URL, json={
         "resource_id": _RESOURCE_ID,
-        "id": "ignored-value",
+        "id": _RESOURCE_ID,
     })
-
     assert response.status_code == 200
     assert response.json()["result"]["resource_id"] == _RESOURCE_ID
+
+
+def test_conflicting_resource_id_and_id_rejected(client: TestClient) -> None:
+    """Different `resource_id` vs `id` → 400. Silently preferring one
+    would let a typo destroy the wrong resource."""
+    response = client.post(DELETE_URL, json={
+        "resource_id": _RESOURCE_ID,
+        "id": "different-value",
+    })
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["__type"] == "Validation Error"
 
 
 # 3. Validation -------------------------------------------------------------

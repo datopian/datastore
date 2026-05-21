@@ -16,6 +16,7 @@ from datastore.infrastructure.engines.base import DatastoreBackend
 
 if TYPE_CHECKING:  # type-only — no runtime import from api/
     from datastore.api.context import RequestContext
+    from datastore.core.config import Config
 
 Mode = Literal["rw", "ro"]
 
@@ -64,7 +65,13 @@ def get_allowed_sql_functions(
 
 _INSTANCES: dict[tuple[str, Mode], DatastoreBackend] = {}
 
-def _build_engine(engine: str, mode: Mode, *, config, context=None):
+def _build_engine(
+    engine: str,
+    mode: Mode,
+    *,
+    config: Config,
+    context: RequestContext | None = None,
+) -> DatastoreBackend:
     """Import the engine package and instantiate its `Backend` class.
 
     Engine packages expose a `Backend` symbol pointing at their concrete
@@ -92,7 +99,7 @@ def _build_engine(engine: str, mode: Mode, *, config, context=None):
     return backend
 
 
-def warmup_engines(config) -> None:
+def warmup_engines(config: Config) -> None:
     """Build + initialise rw and ro engine instances. Called from the
     FastAPI lifespan so credential errors surface at startup."""
     engine = config.DATASTORE_ENGINE
