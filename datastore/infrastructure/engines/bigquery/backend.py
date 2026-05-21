@@ -34,8 +34,11 @@ from datastore.infrastructure.engines.base import (
     WriteResult,
 )
 from datastore.infrastructure.engines.bigquery.lib import (
+    SYSTEM_COLUMN_NAMES,
     alter_clauses,
     column_defs,
+    delete_sql,
+    drop_columns_sql,
     insert_sql,
     merge_sql,
     reject_unsupported_type_changes,
@@ -686,14 +689,128 @@ class BigQueryBackend(DatastoreBackend):
             records_truncated=False,
         )
 
-    def delete(self, resource_id: str, filters: dict | None) -> WriteResult:
-        """Delete records (filtered) or drop table (no filters).
+    def delete(
+        self,
+        resource_id: str,
+        filters: dict[str, Any] | None,
+        fields: list[str] | None = None,
+    ) -> WriteResult:
+        """Drop the table (both None), delete rows by `filters`, or
+        drop columns by `fields`. Schema layer enforces mutual
+        exclusivity."""
+        if self.metadata is None:
+            return WriteResult()
 
-        Placeholder: returns an empty WriteResult. Real impl will issue
-        `DELETE FROM <resource> WHERE …` (parameterised) for `filters`,
-        or `DROP TABLE IF EXISTS <resource>` when filters is None.
-        """
+        schema = self.metadata.get(resource_id)
+        if schema is None:
+            raise NotFoundError(
+                f"resource {resource_id!r} is not declared; nothing to delete"
+            )
+
+        if fields is not None:
+            self._drop_columns(resource_id, schema, fields)
+            return WriteResult()
+
+        if filters is None:
+            self._drop_data_table(resource_id)
+            self.metadata.delete(resource_id)
+            return WriteResult()
+
+        self._delete_rows(resource_id, schema, filters)
         return WriteResult()
+
+    def _drop_data_table(self, resource_id: str) -> None:
+        """`DROP TABLE IF EXISTS` for the resource's data table."""
+        sql = f"DROP TABLE IF EXISTS {self._data_table_ref(resource_id)}"
+        self._run_query(sql, op="DROP TABLE", resource_id=resource_id)
+        log.info("BigQuery table dropped: %s", resource_id)
+
+    def _delete_rows(
+        self,
+        resource_id: str,
+        schema: dict,
+        filters: dict[str, Any],
+    ) -> None:
+        """Parameterised ``DELETE FROM … WHERE …`` from the filter map."""
+        from google.cloud import bigquery
+        try:
+            sql, params = delete_sql(
+                self._data_table_ref(resource_id), schema, filters,
+            )
+        except ValueError as e:
+            raise ValidationError(str(e)) from e
+
+        job_config = bigquery.QueryJobConfig(query_parameters=params)
+        try:
+            self._run_query(
+                sql, op="DELETE", resource_id=resource_id,
+                job_config=job_config,
+            )
+        except ServerError as e:
+            raise _translate_bigquery_error(e, resource_id, "delete") from e
+        log.info(
+            "BigQuery rows deleted: %s (filters=%s)",
+            resource_id, sorted(filters.keys()) or "<all>",
+        )
+
+    def _drop_columns(
+        self,
+        resource_id: str,
+        schema: dict[str, Any],
+        fields: list[str],
+    ) -> None:
+        """``ALTER TABLE DROP COLUMN …`` + rewrite the stored schema.
+        Rejects system columns, unknown columns, and PK columns."""
+        assert self.metadata is not None
+
+        existing = {
+            f["name"]
+            for f in schema.get("fields", [])
+            if f.get("name")
+        }
+        pk_raw = schema.get("primaryKey")
+        pk: set[str] = (
+            {pk_raw} if isinstance(pk_raw, str)
+            else set(pk_raw or [])
+        )
+
+        # System-column check first: `_id` / `_updated_at` aren't in
+        # the stored schema, so the unknown-column check would shadow
+        # them with a less specific error.
+        reserved = [c for c in fields if c in SYSTEM_COLUMN_NAMES]
+        if reserved:
+            raise ValidationError(
+                f"cannot drop engine-reserved system column(s): "
+                f"{sorted(reserved)}"
+            )
+        unknown = [c for c in fields if c not in existing]
+        if unknown:
+            raise ValidationError(
+                f"cannot drop unknown column(s): {sorted(unknown)}"
+            )
+        pk_violations = [c for c in fields if c in pk]
+        if pk_violations:
+            raise ValidationError(
+                f"cannot drop primary-key column(s): "
+                f"{sorted(pk_violations)}; re-create the resource with "
+                "a new primaryKey instead"
+            )
+
+        sql = drop_columns_sql(self._data_table_ref(resource_id), fields)
+        self._run_query(sql, op="ALTER DROP COLUMN", resource_id=resource_id)
+
+        drop_set = set(fields)
+        new_schema: dict[str, Any] = {
+            **schema,
+            "fields": [
+                f for f in schema.get("fields", [])
+                if f.get("name") not in drop_set
+            ],
+        }
+        self.metadata.update(resource_id, new_schema)
+        log.info(
+            "BigQuery columns dropped: %s (%s)", resource_id, sorted(fields),
+        )
 
     def info(self, resource_id: str) -> InfoResult:
         """Return the table schema + row stats for a resource.

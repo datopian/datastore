@@ -100,6 +100,7 @@ class DatastoreDeleteResponse(ResponseModel):
     class Result(BaseModel):
         resource_id: str
         filters: dict[str, Any] | None = None
+        fields: list[str] | None = None
 
     result: Result
 

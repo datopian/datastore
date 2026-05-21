@@ -1207,3 +1207,165 @@ def test_search_translates_builder_error_to_validation_error(
             fields=["ghost"], sort=None, include_total=False,
         )
     mock_client.query.assert_not_called()
+
+
+# --- delete() -------------------------------------------------------------
+
+
+def test_delete_with_no_filters_or_fields_drops_table_and_metadata(
+    mock_client: MagicMock,
+) -> None:
+    """Both `filters` and `fields` omitted → `DROP TABLE` + the
+    metadata row is removed. Resource disappears entirely."""
+    schema = {"fields": [{"name": "id", "type": "integer"}]}
+    backend = _backend_with_schema(mock_client, schema)
+
+    backend.delete("res-1", filters=None, fields=None)
+
+    sql = mock_client.query.call_args[0][0]
+    assert sql == "DROP TABLE IF EXISTS `proj-1.ds-1.res-1`"
+    backend.metadata.delete.assert_called_once_with("res-1")
+
+
+def test_delete_with_empty_filters_deletes_all_rows(
+    mock_client: MagicMock,
+) -> None:
+    """`filters={}` → `DELETE FROM … WHERE TRUE`. Table + metadata
+    survive; only rows go."""
+    schema = {"fields": [{"name": "id", "type": "integer"}]}
+    backend = _backend_with_schema(mock_client, schema)
+
+    backend.delete("res-1", filters={}, fields=None)
+
+    sql = mock_client.query.call_args[0][0]
+    assert sql == "DELETE FROM `proj-1.ds-1.res-1` WHERE TRUE"
+    backend.metadata.delete.assert_not_called()
+
+
+def test_delete_with_filters_binds_typed_parameters(
+    mock_client: MagicMock,
+) -> None:
+    """Populated `filters` produces parameterised SQL bound to the
+    column's type from the stored schema (no inlined values, no
+    string-vs-int confusion at the BQ layer)."""
+    schema = {
+        "fields": [
+            {"name": "auction_id", "type": "integer"},
+            {"name": "accepted", "type": "boolean"},
+        ],
+        "primaryKey": ["auction_id"],
+    }
+    backend = _backend_with_schema(mock_client, schema)
+
+    backend.delete(
+        "res-1", filters={"auction_id": 144, "accepted": False}, fields=None,
+    )
+
+    sql_arg, kwargs = mock_client.query.call_args
+    sql = sql_arg[0]
+    assert sql.startswith("DELETE FROM `proj-1.ds-1.res-1` WHERE ")
+    assert "`auction_id` = @f0" in sql
+    assert "`accepted` = @f1" in sql
+    params = {p.name: (p.value, p.type_) for p in kwargs["job_config"].query_parameters}
+    assert params == {"f0": (144, "INT64"), "f1": (False, "BOOL")}
+
+
+def test_delete_with_fields_drops_columns_and_updates_metadata(
+    mock_client: MagicMock,
+) -> None:
+    """`fields=[…]` → `ALTER TABLE DROP COLUMN …` (one ALTER, multiple
+    clauses) and the stored schema is rewritten without those fields."""
+    schema = {
+        "fields": [
+            {"name": "id", "type": "integer"},
+            {"name": "extra", "type": "string"},
+            {"name": "obsolete", "type": "string"},
+        ],
+        "primaryKey": ["id"],
+    }
+    backend = _backend_with_schema(mock_client, schema)
+
+    backend.delete("res-1", filters=None, fields=["extra", "obsolete"])
+
+    sql = mock_client.query.call_args[0][0]
+    assert sql == (
+        "ALTER TABLE `proj-1.ds-1.res-1` "
+        "DROP COLUMN `extra`, DROP COLUMN `obsolete`"
+    )
+    # Stored schema shrinks to just the surviving fields.
+    new_schema = backend.metadata.update.call_args[0][1]
+    assert [f["name"] for f in new_schema["fields"]] == ["id"]
+    assert new_schema["primaryKey"] == ["id"]
+
+
+def test_delete_rejects_dropping_primary_key_columns(
+    mock_client: MagicMock,
+) -> None:
+    """Dropping a PK column would silently break every subsequent
+    upsert; the engine refuses up front rather than letting the user
+    discover this later."""
+    schema = {
+        "fields": [
+            {"name": "id", "type": "integer"},
+            {"name": "label", "type": "string"},
+        ],
+        "primaryKey": ["id"],
+    }
+    backend = _backend_with_schema(mock_client, schema)
+
+    with pytest.raises(ValidationError, match="primary-key"):
+        backend.delete("res-1", filters=None, fields=["id"])
+    mock_client.query.assert_not_called()
+
+
+def test_delete_rejects_dropping_system_columns(
+    mock_client: MagicMock,
+) -> None:
+    """`_id` / `_updated_at` are engine-managed; the API can't drop
+    them. Caught as ValidationError before any DDL runs."""
+    schema = {"fields": [{"name": "id", "type": "integer"}]}
+    backend = _backend_with_schema(mock_client, schema)
+
+    with pytest.raises(ValidationError, match="system column"):
+        backend.delete("res-1", filters=None, fields=["_id"])
+    mock_client.query.assert_not_called()
+
+
+def test_delete_rejects_unknown_fields(mock_client: MagicMock) -> None:
+    schema = {"fields": [{"name": "id", "type": "integer"}]}
+    backend = _backend_with_schema(mock_client, schema)
+
+    with pytest.raises(ValidationError, match="unknown column"):
+        backend.delete("res-1", filters=None, fields=["ghost"])
+    mock_client.query.assert_not_called()
+
+
+def test_delete_rejects_unknown_filter_columns(mock_client: MagicMock) -> None:
+    """Filter column validation happens in `lib.delete_sql`; the
+    ValueError is converted to ValidationError before BigQuery is hit."""
+    schema = {"fields": [{"name": "id", "type": "integer"}]}
+    backend = _backend_with_schema(mock_client, schema)
+
+    with pytest.raises(ValidationError, match="unknown column"):
+        backend.delete("res-1", filters={"ghost": 1}, fields=None)
+    mock_client.query.assert_not_called()
+
+
+def test_delete_rejects_filters_on_json_columns(mock_client: MagicMock) -> None:
+    schema = {"fields": [{"name": "blob", "type": "object"}]}
+    backend = _backend_with_schema(mock_client, schema)
+
+    with pytest.raises(ValidationError, match="JSON/array/geojson"):
+        backend.delete("res-1", filters={"blob": {"k": "v"}}, fields=None)
+
+
+def test_delete_raises_not_found_for_undeclared_resource(
+    mock_client: MagicMock,
+) -> None:
+    backend = _backend(mock_client)
+    backend.metadata = MagicMock()
+    backend.metadata.get.return_value = None
+
+    with pytest.raises(NotFoundError, match="not declared"):
+        backend.delete("ghost", filters=None, fields=None)
+    mock_client.query.assert_not_called()

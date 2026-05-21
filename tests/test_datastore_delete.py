@@ -120,6 +120,33 @@ def test_extra_body_key_rejected(client: TestClient) -> None:
     assert response.json()["error"]["__type"] == "Validation Error"
 
 
+def test_filters_and_fields_are_mutually_exclusive(client: TestClient) -> None:
+    """Row delete (`filters`) and column drop (`fields`) are separate
+    operations; sending both is ambiguous and rejected up front."""
+    response = client.post(DELETE_URL, json={
+        "resource_id": _RESOURCE_ID,
+        "filters": {"id": 1},
+        "fields": ["label"],
+    })
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["__type"] == "Validation Error"
+    assert "mutually exclusive" in body["error"]["message"]
+
+
+def test_empty_fields_list_rejected(client: TestClient) -> None:
+    """`fields=[]` is ambiguous (column drop with no columns) — 400
+    rather than silently no-op."""
+    response = client.post(DELETE_URL, json={
+        "resource_id": _RESOURCE_ID,
+        "fields": [],
+    })
+
+    assert response.status_code == 400
+    assert response.json()["error"]["__type"] == "Validation Error"
+
+
 # 4. Auth -------------------------------------------------------------------
 
 def test_unknown_resource_returns_404(client: TestClient) -> None:

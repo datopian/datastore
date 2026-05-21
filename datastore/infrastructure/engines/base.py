@@ -157,9 +157,14 @@ class DatastoreBackend(ABC):
 
     @abstractmethod
     def delete(
-        self, resource_id: str, filters: dict[str, Any] | None,
+        self,
+        resource_id: str,
+        filters: dict[str, Any] | None,
+        fields: list[str] | None = None,
     ) -> WriteResult:
-        """Delete records (filtered) or drop table (no filters)."""
+        """Drop the table (both None), delete rows by `filters`, or
+        drop columns by `fields`. `filters` and `fields` are mutually
+        exclusive."""
 
     @abstractmethod
     def info(self, resource_id: str) -> InfoResult:

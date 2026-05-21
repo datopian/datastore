@@ -298,23 +298,17 @@ class DatastoreInfoRequest(BaseModel):
 
 
 class DatastoreDeleteRequest(BaseModel):
-    """Request body for `POST /api/3/datastore_delete`.
-
-    Deletes rows matching `filters`, or drops the whole table when
-    `filters` is omitted. Accepts either `resource_id` or `id` (same
-    aliasing as `datastore_info`); model_validator normalises `id` →
-    `resource_id`.
-
-    `force=True` is required to delete from a CKAN resource marked
-    read-only — the engine layer enforces this; the schema just carries
-    the flag.
-    """
+    """Request body for `POST /api/3/datastore_delete`. Drops the
+    whole table when both `filters` and `fields` are omitted; row
+    delete when `filters` is set; column drop when `fields` is set.
+    `filters` and `fields` are mutually exclusive."""
 
     model_config = ConfigDict(extra="forbid")
 
     resource_id: str | None = None
     id: str | None = None
     filters: dict[str, Any] | None = None
+    fields: list[str] | None = None
     force: bool = False
 
     @model_validator(mode="after")
@@ -332,4 +326,11 @@ class DatastoreDeleteRequest(BaseModel):
             )
         if self.resource_id is None:
             self.resource_id = self.id
+        if self.filters is not None and self.fields:
+            raise ValueError(
+                "'filters' and 'fields' are mutually exclusive — "
+                "rows and columns are separate delete operations"
+            )
+        if self.fields is not None and not self.fields:
+            raise ValueError("'fields' must list at least one column")
         return self

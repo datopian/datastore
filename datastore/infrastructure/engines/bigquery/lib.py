@@ -282,3 +282,84 @@ def _json_extract(field: dict) -> str:
     if bq_type == "STRING":
         return f"JSON_VALUE(r, {path})"
     return f"CAST(JSON_VALUE(r, {path}) AS {bq_type})"
+
+
+# Frictionless type → BigQuery scalar parameter type for filter values.
+# JSON / array / geojson absent — equality on those is rejected.
+_FILTER_PARAM_TYPE: dict[str, str] = {
+    "integer":  "INT64",
+    "number":   "FLOAT64",
+    "boolean":  "BOOL",
+    "string":   "STRING",
+    "date":     "DATE",
+    "datetime": "TIMESTAMP",
+    "time":     "TIME",
+    "any":      "STRING",
+}
+
+
+def drop_columns_sql(table_ref: str, columns: list[str]) -> str:
+    """Render ``ALTER TABLE <target> DROP COLUMN …``. Caller must
+    validate column names against the schema first (identifiers can't
+    be parameterised)."""
+    if not columns:
+        raise ValueError("drop_columns_sql requires at least one column")
+    clauses = ", ".join(f"DROP COLUMN `{c}`" for c in columns)
+    return f"ALTER TABLE {table_ref} {clauses}"
+
+
+def delete_sql(
+    table_ref: str,
+    schema: dict,
+    filters: dict,
+) -> tuple[str, list]:
+    """Render parameterised ``DELETE FROM <target> WHERE …``. Empty
+    ``filters`` yields ``WHERE TRUE`` (BigQuery requires a WHERE on
+    every DELETE). Returns ``(sql, query_parameters)``."""
+    from google.cloud import bigquery
+
+    if filters is None or not isinstance(filters, dict):
+        raise ValueError(
+            "delete filters must be a dict; use the DROP path when no "
+            "filter is intended"
+        )
+
+    type_map: dict[str, str] = {}
+    for f in schema.get("fields", []):
+        name = f.get("name")
+        if name and name not in SYSTEM_COLUMN_NAMES:
+            type_map[name] = f.get("type") or "string"
+    # System columns are always filterable.
+    type_map["_id"] = "integer"
+    type_map["_updated_at"] = "datetime"
+
+    params: list = []
+    clauses: list[str] = []
+    for col, value in filters.items():
+        if col not in type_map:
+            raise ValueError(
+                f"filters references unknown column {col!r}"
+            )
+        ftype = type_map[col]
+        if ftype in JSON_FRICTIONLESS_TYPES:
+            raise ValueError(
+                f"filters cannot target JSON/array/geojson column "
+                f"{col!r}; use datastore_search_sql for structural matches"
+            )
+        bq_type = _FILTER_PARAM_TYPE.get(ftype, "STRING")
+        name = f"f{len(params)}"
+        if isinstance(value, list):
+            params.append(
+                bigquery.ArrayQueryParameter(name, bq_type, value)
+            )
+            clauses.append(f"`{col}` IN UNNEST(@{name})")
+        elif value is None:
+            clauses.append(f"`{col}` IS NULL")
+        else:
+            params.append(
+                bigquery.ScalarQueryParameter(name, bq_type, value)
+            )
+            clauses.append(f"`{col}` = @{name}")
+
+    where = " AND ".join(clauses) if clauses else "TRUE"
+    return f"DELETE FROM {table_ref} WHERE {where}", params

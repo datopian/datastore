@@ -22,8 +22,9 @@ example_payload/
 │   ├── insert.json               # method=insert; new rows only
 │   └── update.json               # method=update; patches existing rows by unique_key
 ├── datastore_delete/
-│   ├── with_filters.json         # narrow delete by column values
-│   ├── whole_table.json          # no filters → drop the entire table
+│   ├── whole_table.json          # no filters / no fields → drop the entire table
+│   ├── with_filters.json         # narrow row delete by column values
+│   ├── with_fields.json          # drop columns from the schema
 │   └── force_readonly.json       # force=true to delete from a read-only resource
 ├── datastore_search/
 │   ├── basic.json                # minimal — just resource_id
