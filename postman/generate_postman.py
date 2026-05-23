@@ -7,10 +7,10 @@ URL query params (matching how the API actually consumes them).
 
 Run from the repo root:
 
-    python scripts/generate_postman.py
+    python postman/generate_postman.py
 
-Output: `postman/datastore-api.postman_collection.json` — import into
-Postman / Insomnia and set the `apiKey` collection variable.
+Output: `postman/collection.json` — import into Postman / Insomnia and
+set the `apiKey` collection variable.
 """
 
 from __future__ import annotations
@@ -19,10 +19,11 @@ import json
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 REPO = Path(__file__).resolve().parent.parent
 SOURCE_DIR = REPO / "example_payload"
-OUT_FILE = REPO / "ollection.json"
+OUT_FILE = REPO / "postman" / "collection.json"
 
 # Each endpoint's HTTP method + folder description. Order here matches
 # the walkthrough flow: declare → write → inspect → query → cleanup.
@@ -76,9 +77,14 @@ HEALTH_REQUESTS: list[tuple[str, str, str]] = [
 def _request_url(path: str, query: list[dict[str, str]] | None = None) -> dict[str, Any]:
     """Postman v2.1 structured URL — lets the Postman UI edit params."""
     parts = path.strip("/").split("/")
+    # Values can be JSON-encoded (e.g. `filters={"col":"v"}`) or contain
+    # spaces / `=` / `&`; percent-encode so the `raw` URL parses cleanly.
     url: dict[str, Any] = {
         "raw": "{{baseUrl}}/" + "/".join(parts) + (
-            "?" + "&".join(f"{q['key']}={q['value']}" for q in query)
+            "?" + "&".join(
+                f"{quote(q['key'], safe='')}={quote(q['value'], safe='')}"
+                for q in query
+            )
             if query else ""
         ),
         "host": ["{{baseUrl}}"],

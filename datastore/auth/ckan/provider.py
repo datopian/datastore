@@ -51,11 +51,22 @@ class CKANAuthProvider:
 
         cached = await _safe_get(self._cache, cache_key)
         if cached is not None:
-            log.debug(
-                "ckan auth cache HIT  scope=%s target=%s perm=%s",
-                scope, target, permission,
-            )
-            return _decision_from_bytes(cached)
+            try:
+                decision = _decision_from_bytes(cached)
+                log.debug(
+                    "ckan auth cache HIT  scope=%s target=%s perm=%s",
+                    scope, target, permission,
+                )
+                return decision
+            except (AuthorizationError, ValueError, TypeError) as e:
+                # Treat a corrupt cache entry as a miss — fall through
+                # to CKAN. Blocking auth on a poisoned cache would be a
+                # self-inflicted outage.
+                log.warning(
+                    "ckan auth cache entry malformed for scope=%s target=%s: "
+                    "%s — falling back to CKAN",
+                    scope, target, e,
+                )
 
         log.debug(
             "ckan auth cache MISS scope=%s target=%s perm=%s -> CKAN",
@@ -67,8 +78,11 @@ class CKANAuthProvider:
             package_id=package_id,
             permission=permission,
         )
+        # `subject` rides through the cache (orjson-serialised). Never
+        # store the raw credential there — use the same hash we already
+        # derive for the cache key.
         decision = Decision(
-            subject=credential,
+            subject=self.key_id(credential) if credential else None,
             resource=result.get("resource"),
             package=result.get("package"),
         )

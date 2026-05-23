@@ -105,10 +105,12 @@ def test_garbled_token_raises_authorization_error() -> None:
         _authorize(_provider(), "not.a.real.jwt")
 
 
-def test_key_id_uses_jti_for_caching() -> None:
+def test_key_id_hashes_full_token() -> None:
+    # Cache identity is sha256-of-credential — unverified JWT claims
+    # (like `jti`) are never used for the cache key.
     provider = _provider()
     token = jwt.encode({"sub": "u", "jti": "tok-1"}, SECRET, algorithm="HS256")
-    assert provider.key_id(token) == "jti:tok-1"
+    assert provider.key_id(token).startswith("h:")
 
 
 def test_provider_name_is_jwt() -> None:

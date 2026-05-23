@@ -222,10 +222,10 @@ def test_create_without_api_key_returns_403(
     but writes always require an authenticated user — short-circuit
     with 403 before CKAN is even called."""
     before = fake_ckan.authorize_calls
-    response = client.post(
-        CREATE_URL, json=_valid_payload_with_resource_id(),
-        headers={"Authorization": ""},
-    )
+    # Drop the default Authorization header the conftest sets — we
+    # want a real "no header" request, not "header with empty value".
+    client.headers.pop("Authorization", None)
+    response = client.post(CREATE_URL, json=_valid_payload_with_resource_id())
     assert response.status_code == 403
     assert response.json()["error"]["__type"] == "Authorization Error"
     # CKAN never sees the request — we reject before delegating.
