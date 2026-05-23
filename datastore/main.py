@@ -12,8 +12,8 @@ from datastore.api.error_handlers import register_exception_handlers
 from datastore.api.middleware import BodySizeLimitMiddleware
 from datastore.api.responses import ORJSONResponse
 from datastore.api.routes import api_router
-from datastore.core.config import get_config
 from datastore.auth.registry import get_auth_provider
+from datastore.core.config import get_config
 from datastore.infrastructure.cache import InMemoryCache, RedisCache
 from datastore.infrastructure.ckan_client import CKANClient
 from datastore.infrastructure.engines.registry import (

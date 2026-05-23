@@ -14,9 +14,9 @@ from typing import Any
 
 import jwt
 import pytest
+from datastore.auth.jwt import Provider as JWTAuthProvider
 from datastore.core.config import Config
 from datastore.core.exceptions import AuthorizationError
-from datastore.auth.jwt import Provider as JWTAuthProvider
 
 SECRET = "topsecret"
 

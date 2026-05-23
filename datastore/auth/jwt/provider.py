@@ -13,9 +13,9 @@ from __future__ import annotations
 import jwt
 from jwt import InvalidTokenError, PyJWTError
 
+from datastore.auth.base import Decision, default_key_id
 from datastore.core.config import Config
 from datastore.core.exceptions import AuthorizationError
-from datastore.auth.base import Decision, default_key_id
 
 
 class JWTAuthProvider:

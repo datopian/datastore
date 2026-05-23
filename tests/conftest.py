@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 from datastore.api.context import get_auth_provider, get_ckan_client
-from datastore.core.exceptions import AuthorizationError, NotFoundError
 from datastore.auth.ckan import Provider as CKANAuthProvider
+from datastore.core.exceptions import AuthorizationError, NotFoundError
 from datastore.infrastructure.cache import InMemoryCache
 from datastore.main import create_app
 from fastapi.testclient import TestClient
