@@ -221,6 +221,7 @@ Every entry below maps 1:1 to a field on `datastore.core.config.Config`. See [.e
 | `DATASTORE_ENGINE` | `bigquery` | Storage backend — must match a folder under `infrastructure/engines/`; validated at startup |
 | `SQL_FUNCTIONS_ALLOW_FILE` | _(empty)_ | Override path to the `datastore_search_sql` function allow-list; defaults to `<engine>/allowed_functions.txt` |
 | `BIGQUERY_PROJECT` | _(empty)_ | Google Cloud project ID. Required when `DATASTORE_ENGINE=bigquery`; unset → `/ready` returns 503 with a clear warning. |
+| `BIGQUERY_DATASET` | _(empty)_ | BigQuery dataset that holds per-resource tables + the engine-managed `_table_metadata`. Required when `DATASTORE_ENGINE=bigquery`; unset → metadata store is disabled and writes fall through to placeholder mode. |
 | `BIGQUERY_CREDENTIALS` | _(empty)_ | Read-write service-account creds. Accepts a JSON blob (leading `{`), a path to a service-account JSON file, or empty (→ Application Default Credentials). |
 | `BIGQUERY_CREDENTIALS_RO` | _(empty)_ | Read-only service-account creds (same format). Empty → falls back to `BIGQUERY_CREDENTIALS` so single-credential deployments work. |
 | `BIGQUERY_USE_QUERY_CACHE` | `true` | Use BigQuery's 24h query-results cache on `datastore_search` / `datastore_search_sql` / `datastore_info`. Identical SELECTs return free + fast on cache hits. Set `false` to force a fresh scan. |

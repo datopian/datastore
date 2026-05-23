@@ -11,12 +11,9 @@ provider only — generic providers leave them None).
 
 from __future__ import annotations
 
-import base64
 import hashlib
 from dataclasses import dataclass
 from typing import Any, Protocol
-
-import orjson
 
 
 @dataclass(slots=True, frozen=True)
@@ -47,20 +44,15 @@ class AuthProvider(Protocol):
 
 
 def default_key_id(credential: str) -> str:
-    """JWT `jti` if the credential is a JWT; sha256 prefix otherwise.
+    """sha256 prefix of the full credential string.
 
-    Shared by providers that accept either opaque or JWT tokens.
+    Security note: deliberately ignores any embedded JWT `jti` claim. An
+    unverified `jti` from the token's payload can be forged to collide
+    with a cached authorization decision for a different (verified)
+    token — the cache lookup is keyed before signature verification, so
+    a forged `jti:<value>` lookup would return the cached decision for
+    the legitimate user with the same `jti`. Hashing the whole
+    credential keeps the cache identity tied to bytes-on-the-wire and
+    makes any collision strictly equivalent to a sha256 collision.
     """
-    parts = credential.split(".")
-    if len(parts) == 3:
-        try:
-            segment = parts[1]
-            padded = segment + "=" * (-len(segment) % 4)
-            payload = orjson.loads(base64.urlsafe_b64decode(padded))
-            if isinstance(payload, dict):
-                jti = payload.get("jti")
-                if isinstance(jti, str) and jti:
-                    return f"jti:{jti}"
-        except (ValueError, TypeError, orjson.JSONDecodeError):
-            pass
     return "h:" + hashlib.sha256(credential.encode()).hexdigest()[:16]

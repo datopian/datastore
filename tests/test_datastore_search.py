@@ -253,10 +253,10 @@ def test_anonymous_read_calls_ckan_and_succeeds(
     visibility; on the FakeCKAN (no deny-list, no visibility flags)
     that succeeds, so the request returns 200."""
     before = fake_ckan.authorize_calls
-    response = client.get(
-        SEARCH_URL, params=_params(),
-        headers={"Authorization": ""},
-    )
+    # Drop the default Authorization header the conftest sets — we
+    # want a real "no header" request, not "header with empty value".
+    client.headers.pop("Authorization", None)
+    response = client.get(SEARCH_URL, params=_params())
     assert response.status_code == 200
     # Confirms the auth path actually reached CKAN (not short-circuited).
     assert fake_ckan.authorize_calls - before == 1
