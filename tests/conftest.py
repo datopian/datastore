@@ -76,7 +76,8 @@ class FakeCKAN:
         permission: str | None = None,
     ) -> dict[str, Any]:
         self.authorize_calls += 1
-        self._guard()
+        if self._api_key and self._api_key in self.deny_keys:
+            raise AuthorizationError(f"key '{self._api_key}' is not allowed")
 
         if resource_id is not None:
             existing = self.resources.get(resource_id)

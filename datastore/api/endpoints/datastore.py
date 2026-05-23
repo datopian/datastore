@@ -126,6 +126,8 @@ async def datastore_search_sql(
 
     data_dict = params.model_dump() | {
         "function_names": params.function_names,
+        "limit": params.limit,
+        "offset": params.offset,
     }
 
     body_iter = await search_sql_datastore(context, data_dict, request_url=str(request.url))

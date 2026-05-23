@@ -115,6 +115,10 @@ class DatastoreSearchResponse(ResponseModel):
         model_config = ConfigDict(populate_by_name=True)
 
         resource_id: str
+        # Only set for `datastore_search_sql`: the original SQL string
+        # echoed back so callers can confirm what ran (especially after
+        # `_links.next` rewrites the OFFSET).
+        sql: str | None = None
         schema: dict[str, Any]
         fields: Annotated[
             list[dict[str, Any]],

@@ -245,6 +245,23 @@ def test_denied_key_returns_403(client: TestClient, fake_ckan: FakeCKAN) -> None
     assert response.json()["error"]["__type"] == "Authorization Error"
 
 
+def test_anonymous_read_calls_ckan_and_succeeds(
+    client: TestClient, fake_ckan: FakeCKAN,
+) -> None:
+    """No Authorization header on a read → we still call CKAN's
+    `datastore_authorize`. CKAN itself decides based on resource
+    visibility; on the FakeCKAN (no deny-list, no visibility flags)
+    that succeeds, so the request returns 200."""
+    before = fake_ckan.authorize_calls
+    response = client.get(
+        SEARCH_URL, params=_params(),
+        headers={"Authorization": ""},
+    )
+    assert response.status_code == 200
+    # Confirms the auth path actually reached CKAN (not short-circuited).
+    assert fake_ckan.authorize_calls - before == 1
+
+
 # 6. records_format ---------------------------------------------------------
 
 

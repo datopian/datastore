@@ -10,6 +10,7 @@ from datastore.infrastructure.engines.registry import get_allowed_sql_functions
 from datastore.schemas.responses import DatastoreInfoResponse
 from datastore.schemas.validators import (
     frictionless_schema_to_fields,
+    rewrite_sql_offset,
     to_csv_list,
     to_json_object,
     to_str_or_json_object,
@@ -101,44 +102,49 @@ async def search_datastore(
     return _WRITERS[data_dict["records_format"]](**envelope_kwargs)
 
 
-_SQL_DEFAULT_LIMIT = 32000
-
-
 async def search_sql_datastore(
     context: RequestContext,
     data_dict: dict[str, Any],
     *,
     request_url: str,
 ) -> Iterator[bytes]:
-    """Run a raw SQL SELECT and stream the result.
+    """Run a vetted SELECT and stream the result.
 
-    Reuses the `datastore_search` writer + envelope so the response shape
-    is identical to `datastore_search`. Pagination is the caller's job
-    (edit the SQL); the envelope's `_links` / `limit` / `offset` /
-    `resource_id` fields are kept for shape parity, with no-op defaults.
+    `data_dict` carries `sql` + `function_names` + the `limit` /
+    `offset` parsed out of the SQL itself (LIMIT is required by the
+    request schema; OFFSET defaults to 0). The service:
 
-    `data_dict` carries `{"sql": ..., "function_names": [...]}`. The
-    endpoint already handles per-table CKAN authorize (using the schema's
-    `resource_ids`); this layer handles the engine-specific function
-    allow-list — `mode="ro"` selects read-only credentials so writes
-    can't happen even if a function slips through.
+      - rejects function calls outside the engine's allow-list,
+      - clamps LIMIT against `Config.SEARCH_RESULT_ROWS_MAX`,
+      - dispatches to the read-only engine (mode="ro" — RO credentials
+        are the load-bearing safety),
+      - builds CKAN-style pagination links by rewriting the SQL's
+        OFFSET so callers can follow `_links.next` / `prev` without
+        re-editing their SQL.
     """
     allowed = get_allowed_sql_functions(
         context.config.DATASTORE_ENGINE,
         override_path=context.config.SQL_FUNCTIONS_ALLOW_FILE,
     )
     disallowed = sorted(set(data_dict.get("function_names", [])) - allowed)
-    
     if disallowed:
         raise ValidationError(
             f"sql uses disallowed function(s): {', '.join(disallowed)}",
             fields={"sql": [f"disallowed: {', '.join(disallowed)}"]},
         )
 
+    limit = data_dict["limit"]
+    offset = data_dict["offset"]
+    max_limit = context.config.SEARCH_RESULT_ROWS_MAX
+    if limit > max_limit:
+        raise ValidationError(
+            f"LIMIT greater than {max_limit} is not allowed; "
+            "paginate with OFFSET to fetch more rows",
+            fields={"sql": [f"LIMIT must be <= {max_limit}"]},
+        )
+
     engine = get_datastore_engine(context, mode="ro")
-    result = engine.search_sql(
-        sql=data_dict["sql"], limit=_SQL_DEFAULT_LIMIT
-    )
+    result = engine.search_sql(sql=data_dict["sql"], limit=limit)
     fields, _ = frictionless_schema_to_fields(result.schema)
     return stream_objects(
         help_url=request_url,
@@ -146,13 +152,21 @@ async def search_sql_datastore(
         schema=result.schema,
         fields=fields,
         records=result.records,
-        limit=_SQL_DEFAULT_LIMIT,
-        offset=0,
-        total=None,
-        include_total=False,
-        links=_build_pagination_links(
-            request_url, limit=_SQL_DEFAULT_LIMIT, offset=0, total=None,
+        limit=limit,
+        offset=offset,
+        total=result.total,
+        include_total=result.total is not None,
+        links=_build_sql_pagination_links(
+            request_url,
+            sql=data_dict["sql"],
+            limit=limit,
+            offset=offset,
+            total=result.total,
         ),
+        # Echo the original SQL on the response so callers can confirm
+        # what actually ran (especially after `_links.next` rewrites
+        # the OFFSET on follow-up requests).
+        sql=data_dict["sql"],
     )
 
 
@@ -252,5 +266,53 @@ def _build_pagination_links(
         out["page"] = offset // limit + 1
         if total is not None:
             # ceil division without importing math
+            out["total_pages"] = (total + limit - 1) // limit
+    return out
+
+
+def _build_sql_pagination_links(
+    url: str,
+    *,
+    sql: str,
+    limit: int,
+    offset: int,
+    total: int | None,
+) -> dict[str, Any]:
+    """Pagination links for `datastore_search_sql`.
+
+    Same presence rules as `_build_pagination_links`, but the LIMIT /
+    OFFSET live inside the user's SQL — so we can't just bump the
+    `offset` query param. Each emitted URL carries a rewritten copy
+    of `sql` with a new OFFSET literal (LIMIT is preserved exactly).
+    """
+    parsed = urlparse(url)
+    base_pairs = [
+        (k, v)
+        for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+        if k != "sql"
+    ]
+
+    def _link_for(target_offset: int) -> str:
+        new_sql = rewrite_sql_offset(sql, target_offset)
+        pairs = base_pairs + [("sql", new_sql)]
+        return urlunparse((
+            parsed.scheme, parsed.netloc, parsed.path,
+            "", urlencode(pairs), "",
+        ))
+
+    out: dict[str, Any] = {"start": _link_for(0)}
+    if offset > 0:
+        out["prev"] = _link_for(max(0, offset - limit))
+    has_next = (
+        limit > 0 and total is not None and offset + limit < total
+    )
+    if has_next:
+        out["next"] = _link_for(offset + limit)
+    if limit > 0:
+        out["page_size"] = limit
+    has_rows_on_page = total is None or (total > 0 and offset < total)
+    if limit > 0 and has_rows_on_page:
+        out["page"] = offset // limit + 1
+        if total is not None:
             out["total_pages"] = (total + limit - 1) // limit
     return out

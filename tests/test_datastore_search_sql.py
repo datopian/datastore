@@ -32,7 +32,7 @@ SQL_URL = "/api/3/action/datastore_search_sql"
 # 1. Happy path -------------------------------------------------------------
 
 def test_basic_sql_succeeds(client: TestClient) -> None:
-    response = client.get(SQL_URL, params={"sql": "SELECT 1"})
+    response = client.get(SQL_URL, params={"sql": "SELECT 1 LIMIT 10"})
 
     assert response.status_code == 200
     body = response.json()
@@ -43,26 +43,53 @@ def test_basic_sql_succeeds(client: TestClient) -> None:
 def test_with_cte_succeeds(client: TestClient) -> None:
     """`WITH ... SELECT` (CTE) is allowed alongside plain SELECT."""
     response = client.get(SQL_URL, params={
-        "sql": "WITH t AS (SELECT 1 AS a) SELECT * FROM t"
+        "sql": "WITH t AS (SELECT 1 AS a) SELECT * FROM t LIMIT 10"
     })
     assert response.status_code == 200
 
 
 def test_trailing_semicolon_allowed(client: TestClient) -> None:
-    response = client.get(SQL_URL, params={"sql": "SELECT 1;"})
+    response = client.get(SQL_URL, params={"sql": "SELECT 1 LIMIT 10;"})
     assert response.status_code == 200
 
 
 def test_leading_comment_then_select_allowed(client: TestClient) -> None:
-    response = client.get(SQL_URL, params={"sql": "-- a note\nSELECT 1"})
+    response = client.get(SQL_URL, params={
+        "sql": "-- a note\nSELECT 1 LIMIT 10"
+    })
     assert response.status_code == 200
+
+
+def test_missing_limit_rejected(client: TestClient) -> None:
+    """LIMIT is required so the server can paginate and so unbounded
+    SELECTs can't pin the streaming response open."""
+    response = client.get(SQL_URL, params={"sql": "SELECT 1"})
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["__type"] == "Validation Error"
+    assert "LIMIT" in body["error"]["message"]
+
+
+def test_limit_above_max_rejected(client: TestClient) -> None:
+    """LIMIT must be <= `SEARCH_RESULT_ROWS_MAX` (default 32000).
+    Above the cap → 400 with a 'paginate with OFFSET' hint."""
+    response = client.get(SQL_URL, params={
+        "sql": "SELECT 1 LIMIT 50000",
+    })
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["__type"] == "Validation Error"
+    assert "OFFSET" in body["error"]["message"]
 
 
 # 2. Response envelope shape ------------------------------------------------
 
 def test_response_shape_matches_datastore_search(client: TestClient) -> None:
-    """Same envelope as `datastore_search` so clients can share a parser."""
-    response = client.get(SQL_URL, params={"sql": "SELECT 1"})
+    """Same envelope as `datastore_search` so clients can share a parser.
+    `limit` / `offset` come from the SQL's LIMIT / OFFSET literals."""
+    response = client.get(SQL_URL, params={
+        "sql": "SELECT 1 LIMIT 50 OFFSET 100"
+    })
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
@@ -73,20 +100,42 @@ def test_response_shape_matches_datastore_search(client: TestClient) -> None:
     # Both column shapes are present: canonical `schema` + legacy `fields`.
     assert isinstance(result["schema"], dict)
     assert "fields" in result["schema"]
-    # Defaults for fields that don't apply to raw SQL.
+    # `resource_id` is empty (raw SQL doesn't bind to one resource);
+    # `limit` / `offset` mirror the SQL literals.
     assert result["resource_id"] == ""
-    assert result["offset"] == 0
+    assert result["limit"] == 50
+    assert result["offset"] == 100
 
 
 def test_response_includes_pagination_links(client: TestClient) -> None:
-    """`_links` is emitted for envelope-shape parity. Raw-SQL responses
-    don't carry a `total`, so `next` and `total_pages` are omitted;
-    `start`, `page_size`, and the current `page` land."""
-    response = client.get(SQL_URL, params={"sql": "SELECT 1"})
+    """`_links` carries `start` + page counters. Placeholder engine
+    returns total=0 so `page` / `total_pages` are suppressed (empty
+    landing page rule); the URLs rewrite the SQL's OFFSET."""
+    response = client.get(SQL_URL, params={"sql": "SELECT 1 LIMIT 10"})
 
     links = response.json()["result"]["_links"]
-    assert set(links) == {"start", "page_size", "page"}
-    assert links["page"] == 1
+    assert "start" in links
+    assert links["page_size"] == 10
+    # start URL embeds the SQL with OFFSET 0
+    assert "OFFSET+0" in links["start"] or "OFFSET%200" in links["start"]
+
+
+def test_pagination_links_rewrite_sql_offset(client: TestClient) -> None:
+    """When the placeholder reports total=0 there's no `next`, but
+    once the engine reports rows the `next` URL would carry a SQL
+    string with OFFSET advanced by LIMIT. Verify the URL builder
+    rewrites OFFSET on the `start` link from the current offset back
+    to 0."""
+    response = client.get(SQL_URL, params={
+        "sql": "SELECT 1 LIMIT 50 OFFSET 200"
+    })
+    assert response.status_code == 200
+    links = response.json()["result"]["_links"]
+    # `start` resets to OFFSET 0 — `prev` lands at max(0, 200-50) = 150.
+    assert "prev" in links
+    # URL is percent-encoded; the new OFFSET literal is in the `sql`
+    # query param. Decode-ish: look for the substring after encoding.
+    assert "OFFSET+150" in links["prev"] or "OFFSET%20150" in links["prev"]
 
 
 # 3. SQL validation ---------------------------------------------------------
@@ -200,7 +249,7 @@ def test_parse_sql_references_rejects_unparseable() -> None:
 def test_disallowed_function_returns_validation_error(client: TestClient) -> None:
     """`pg_read_file` isn't in `ALLOWED_SQL_FUNCTIONS` → 400."""
     response = client.get(SQL_URL, params={
-        "sql": "SELECT pg_read_file('/etc/passwd')",
+        "sql": "SELECT pg_read_file('/etc/passwd') LIMIT 1",
     })
     assert response.status_code == 400
     body = response.json()
@@ -210,7 +259,7 @@ def test_disallowed_function_returns_validation_error(client: TestClient) -> Non
 
 def test_allowed_function_succeeds(client: TestClient) -> None:
     """`COUNT` is in the allow-list — no tables, so no auth call either."""
-    response = client.get(SQL_URL, params={"sql": "SELECT COUNT(*)"})
+    response = client.get(SQL_URL, params={"sql": "SELECT COUNT(*) LIMIT 1"})
     assert response.status_code == 200
 
 
@@ -221,7 +270,7 @@ def test_unknown_table_returns_404(
 ) -> None:
     """Each referenced table is authorized via CKAN — unknown → 404."""
     response = client.get(SQL_URL, params={
-        "sql": 'SELECT * FROM "does-not-exist"',
+        "sql": 'SELECT * FROM "does-not-exist" LIMIT 10',
     })
     assert response.status_code == 404
     body = response.json()
@@ -233,7 +282,7 @@ def test_existing_table_authorized(
 ) -> None:
     """Referenced table that exists in CKAN clears auth → 200."""
     response = client.get(SQL_URL, params={
-        "sql": 'SELECT * FROM "balancing_auction_results_2025"',
+        "sql": 'SELECT * FROM "balancing_auction_results_2025" LIMIT 10',
     })
     assert response.status_code == 200
 
@@ -244,7 +293,7 @@ def test_denied_api_key_returns_403(
     """Auth gate uses the same path as datastore_search — denial returns 403."""
     fake_ckan.deny("test-token")
     response = client.get(SQL_URL, params={
-        "sql": 'SELECT * FROM "balancing_auction_results_2025"',
+        "sql": 'SELECT * FROM "balancing_auction_results_2025" LIMIT 10',
     })
     assert response.status_code == 403
     assert response.json()["error"]["__type"] == "Authorization Error"
@@ -259,7 +308,7 @@ def test_each_table_authorized_once_for_joins(
     response = client.get(SQL_URL, params={
         "sql": (
             'SELECT a.id FROM "balancing_auction_results_2025" a '
-            'JOIN "other_table" b ON a.id = b.id'
+            'JOIN "other_table" b ON a.id = b.id LIMIT 10'
         ),
     })
     assert response.status_code == 200

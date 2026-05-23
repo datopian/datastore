@@ -153,6 +153,23 @@ def test_create_resource_id_with_denied_key_returns_403(
     assert body["error"]["__type"] == "Authorization Error"
 
 
+def test_create_without_api_key_returns_403(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    """Anonymous reads are allowed (CKAN decides on resource visibility),
+    but writes always require an authenticated user — short-circuit
+    with 403 before CKAN is even called."""
+    before = fake_ckan.authorize_calls
+    response = client.post(
+        CREATE_URL, json=_valid_payload_with_resource_id(),
+        headers={"Authorization": ""},
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["__type"] == "Authorization Error"
+    # CKAN never sees the request — we reject before delegating.
+    assert fake_ckan.authorize_calls == before
+
+
 # 4. Package not accessible -------------------------------------------------
 
 

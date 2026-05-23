@@ -41,8 +41,11 @@ from datastore.infrastructure.engines.bigquery.lib import (
     drop_columns_sql,
     insert_sql,
     merge_sql,
+    qualify_table_refs,
     reject_unsupported_type_changes,
     schema_diff,
+    strip_limit_offset,
+    unfiltered_table_name,
     update_sql,
 )
 
@@ -675,17 +678,150 @@ class BigQueryBackend(DatastoreBackend):
         )
 
     def search_sql(self, sql: str, limit: int) -> SearchResult:
-        """Execute raw SQL SELECT. Returns SearchResult with a lazy row
-        iterator.
+        """Execute a vetted SELECT/WITH statement and stream tuples.
 
-        Placeholder: returns an empty result set. Real impl will call
-        `client.query(sql, job_config=…)` and yield tuples from
-        `query_job.result()` page-by-page, setting
-        `records_truncated=True` if the iterator hit `limit`.
+        Safety relies on three layers, none of which this method itself
+        re-checks (validation already happened upstream):
+          1. The request schema rejects non-SELECT / multi-statement
+             / unparseable SQL (`schemas/request.py:DatastoreSearchSQLRequest`).
+          2. The endpoint authorises every referenced table against
+             CKAN as a resource_id, and the service rejects function
+             calls outside the engine's allow-list.
+          3. **The load-bearing guard:** this engine is built with the
+             read-only credential (`mode="ro"` selects `BIGQUERY_CREDENTIALS_RO`),
+             so BigQuery IAM physically refuses any DML / DDL even if
+             upstream checks were bypassed. The assertion below catches
+             the dev mistake of dispatching `search_sql` through the
+             rw engine.
+
+        Result schema is read from BigQuery's job schema (column types
+        come back as BQ types and are mapped to Frictionless via
+        `frictionless_type_from_bigquery`). Row output is bounded by
+        `limit` via `itertools.islice` so a runaway SELECT without an
+        embedded LIMIT can't pin the streaming response open forever.
         """
+        from itertools import islice
+
+        from datastore.infrastructure.engines.bigquery.types import (
+            frictionless_type_from_bigquery,
+        )
+
+        if self.client is None:
+            return SearchResult(
+                schema={"fields": []},
+                records=iter([]),
+                records_truncated=False,
+            )
+
+        if self.mode != "ro":
+            raise ServerError(
+                "datastore_search_sql must run on a read-only engine; "
+                "got mode=" + repr(self.mode)
+            )
+
+        # User refers to tables by their CKAN resource_id; BigQuery
+        # needs a fully-qualified `project.dataset.table` reference
+        # with backticks. The qualifier walks the AST, prepends the
+        # configured project + dataset to every non-CTE table ref,
+        # and re-emits as BigQuery dialect.
+        try:
+            qualified_sql = qualify_table_refs(
+                sql,
+                project=self.config.BIGQUERY_PROJECT,
+                dataset=self.config.BIGQUERY_DATASET,
+            )
+        except Exception as e:
+            raise ServerError(
+                f"failed to qualify table references in SQL: {e}"
+            ) from e
+
+        # Pick the cheapest viable path for `total`:
+        #
+        #   1. Plain `SELECT cols FROM table [LIMIT/OFFSET]` (no
+        #      WHERE/GROUP/JOIN/aggregate) → read `total_rows` from
+        #      `INFORMATION_SCHEMA.TABLE_STORAGE`. Free metadata query,
+        #      no bytes scanned.
+        #
+        #   2. Anything that filters, joins, aggregates, or otherwise
+        #      changes row count → wrap the user's SQL (LIMIT/OFFSET
+        #      stripped) in `SELECT COUNT(*) FROM (...)`. Same pattern
+        #      datastore_search uses for filtered/distinct queries.
+        #
+        # `RowIterator.total_rows` alone won't do — it's the row count
+        # of the destination temp table (post-LIMIT page size), so
+        # building pagination from it would always say "last page".
+        count_sql: str | None
+        count_params: list = []
+        try:
+            table = unfiltered_table_name(qualified_sql)
+            if table is not None:
+                count_sql = (
+                    "SELECT total_rows AS n FROM "
+                    f"`{self.config.BIGQUERY_PROJECT}."
+                    f"{self.config.BIGQUERY_DATASET}."
+                    "INFORMATION_SCHEMA.TABLE_STORAGE` "
+                    "WHERE table_name = @table_name"
+                )
+                from google.cloud import bigquery
+                count_params = [
+                    bigquery.ScalarQueryParameter(
+                        "table_name", "STRING", table,
+                    ),
+                ]
+            else:
+                inner = strip_limit_offset(qualified_sql)
+                count_sql = f"SELECT COUNT(*) AS n FROM ({inner})"
+        except Exception as e:
+            log.warning(
+                "search_sql: could not build COUNT query (%s); "
+                "total will be omitted",
+                e,
+            )
+            count_sql = None
+
+        # Submit COUNT first (non-blocking) so it runs in parallel with
+        # the data query. A COUNT failure is non-fatal — log and degrade
+        # `total` to None; a data-query failure is the user's primary
+        # request, so it propagates as ServerError.
+        count_job = None
+        if count_sql:
+            try:
+                from google.cloud import bigquery
+                count_cfg = (
+                    bigquery.QueryJobConfig(query_parameters=count_params)
+                    if count_params else None
+                )
+                count_job = self.client.query(count_sql, job_config=count_cfg)
+            except Exception as e:
+                log.warning("search_sql COUNT submit failed: %s", e)
+
+        try:
+            data_job = self.client.query(qualified_sql)
+            row_iter = data_job.result()
+        except Exception as e:
+            raise ServerError(f"BigQuery search_sql failed: {e}") from e
+
+        total: int | None = None
+        if count_job is not None:
+            try:
+                count_rows = list(count_job.result())
+                total = int(count_rows[0]["n"]) if count_rows else 0
+            except Exception as e:
+                log.warning("search_sql COUNT failed: %s", e)
+
+        schema_fields = [
+            {
+                "name": field.name,
+                "type": frictionless_type_from_bigquery(field.field_type),
+            }
+            for field in (row_iter.schema or [])
+        ]
+
+        rows = (tuple(r.values()) for r in islice(row_iter, limit))
         return SearchResult(
-            schema={"fields": []},
-            records=iter([]),
+            schema={"fields": schema_fields},
+            records=rows,
+            total=total,
             records_truncated=False,
         )
 

@@ -290,6 +290,81 @@ def parse_sql_references(sql: str, *, dialect: str = "postgres") -> tuple[list[s
     return sorted(tables), sorted(functions)
 
 
+def parse_sql_pagination(
+    sql: str, *, dialect: str = "postgres",
+) -> tuple[int, int]:
+    """Extract `(limit, offset)` from a SELECT. LIMIT is required.
+
+    `datastore_search_sql` lets callers ship raw SQL but the API still
+    wants page metadata + links — so we parse the LIMIT/OFFSET out of
+    the user's statement and use those for `result.limit`, `offset`,
+    `page`, `total_pages`, and the prev/next links. Missing LIMIT
+    raises `ValueError`; callers should be explicit so the server can
+    paginate properly and so an unbounded SELECT can't lock streaming
+    open.
+
+    OFFSET defaults to 0 when absent. Non-integer LIMIT/OFFSET
+    expressions (e.g. `LIMIT @x`) raise too — pagination needs a
+    constant.
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    try:
+        tree = sqlglot.parse_one(sql, dialect=dialect)
+    except Exception as e:
+        raise ValueError(f"could not parse SQL: {e}") from e
+
+    limit_node = tree.args.get("limit")
+    if limit_node is None:
+        raise ValueError(
+            "SQL must include a LIMIT clause (e.g. 'LIMIT 100'); "
+            "an explicit page size is required for pagination links "
+            "and to prevent unbounded SELECTs"
+        )
+    limit_expr = limit_node.expression if isinstance(limit_node, exp.Limit) else None
+    if not isinstance(limit_expr, exp.Literal) or not limit_expr.is_int:
+        raise ValueError(
+            "LIMIT must be a constant integer literal"
+        )
+    limit = int(limit_expr.this)
+    if limit < 0:
+        raise ValueError("LIMIT must be >= 0")
+
+    offset = 0
+    offset_node = tree.args.get("offset")
+    if offset_node is not None:
+        offset_expr = (
+            offset_node.expression
+            if isinstance(offset_node, exp.Offset) else None
+        )
+        if not isinstance(offset_expr, exp.Literal) or not offset_expr.is_int:
+            raise ValueError(
+                "OFFSET must be a constant integer literal"
+            )
+        offset = int(offset_expr.this)
+        if offset < 0:
+            raise ValueError("OFFSET must be >= 0")
+
+    return limit, offset
+
+
+def rewrite_sql_offset(
+    sql: str, new_offset: int, *, dialect: str = "postgres",
+) -> str:
+    """Return `sql` with its OFFSET replaced (or inserted) at `new_offset`.
+
+    Used by the search_sql link builder to produce prev / next URLs
+    without asking the caller to rebuild the SQL themselves.
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    tree = sqlglot.parse_one(sql, dialect=dialect)
+    tree.set("offset", exp.Offset(expression=exp.Literal.number(new_offset)))
+    return tree.sql(dialect=dialect)
+
+
 # --- reusable Annotated types ------------------------------------------------
 # The parser functions above (`to_json_object`, `to_str_or_json_object`,
 # `to_csv_list`) are invoked directly at the service boundary; they don't

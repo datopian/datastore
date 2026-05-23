@@ -49,6 +49,7 @@ def stream_objects(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """`records_format=objects` — `records` is a JSON array of `{col: value}`."""
     columns = [f["id"] for f in fields]
@@ -63,6 +64,7 @@ def stream_objects(
         total=total,
         include_total=include_total,
         links=links,
+        sql=sql,
     )
 
 
@@ -78,6 +80,7 @@ def stream_lists(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """`records_format=lists` — `records` is a JSON array of `[v1, v2, ...]`."""
     return _stream_envelope(
@@ -91,6 +94,7 @@ def stream_lists(
         total=total,
         include_total=include_total,
         links=links,
+        sql=sql,
     )
 
 
@@ -106,6 +110,7 @@ def stream_csv(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """`records_format=csv` — `records` is a JSON string of CSV text."""
     columns = [f["id"] for f in fields]
@@ -120,6 +125,7 @@ def stream_csv(
         total=total,
         include_total=include_total,
         links=links,
+        sql=sql,
     )
 
 
@@ -135,6 +141,7 @@ def stream_tsv(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """`records_format=tsv` — `records` is a JSON string of TSV text."""
     columns = [f["id"] for f in fields]
@@ -149,6 +156,7 @@ def stream_tsv(
         total=total,
         include_total=include_total,
         links=links,
+        sql=sql,
     )
 
 
@@ -164,6 +172,7 @@ def _stream_envelope(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """CKAN envelope skeleton. Each format passes its own `records_chunks`
     iterator that emits the JSON value for the `records` field — either
@@ -171,11 +180,16 @@ def _stream_envelope(
 
     Column metadata is emitted in both shapes: `schema` (canonical
     Frictionless) and `fields` (legacy `{id, type}` list, deprecated).
+    `sql` is emitted only when supplied (i.e. for `datastore_search_sql`);
+    `datastore_search` leaves it out.
     """
     yield b'{"help":'
     yield orjson.dumps(help_url)
     yield b',"success":true,"result":{"resource_id":'
     yield orjson.dumps(resource_id)
+    if sql is not None:
+        yield b',"sql":'
+        yield orjson.dumps(sql)
     yield b',"schema":'
     yield orjson.dumps(schema)
     yield b',"fields":'

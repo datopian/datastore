@@ -1369,3 +1369,318 @@ def test_delete_raises_not_found_for_undeclared_resource(
     with pytest.raises(NotFoundError, match="not declared"):
         backend.delete("ghost", filters=None, fields=None)
     mock_client.query.assert_not_called()
+
+
+# --- search_sql() ---------------------------------------------------------
+
+
+def _ro_backend(client: MagicMock) -> BigQueryBackend:
+    """Read-only engine — what `search_sql` should always run against.
+    The mode-flag check is defense in depth; the load-bearing guard is
+    the RO credential bound at `build_client`."""
+    b = BigQueryBackend(mode="ro")
+    b.client = client
+    b.config = MagicMock()
+    b.config.BIGQUERY_PROJECT = "proj-1"
+    b.config.BIGQUERY_DATASET = "ds-1"
+    return b
+
+
+def test_search_sql_streams_rows_with_result_schema(
+    mock_client: MagicMock,
+) -> None:
+    """Result schema comes from BigQuery's job schema (BQ types mapped
+    back to Frictionless); rows arrive as tuples in column order."""
+    backend = _ro_backend(mock_client)
+
+    bq_schema = [
+        MagicMock(name="day",   field_type="DATE"),
+        MagicMock(name="avg",   field_type="FLOAT64"),
+        MagicMock(name="count", field_type="INT64"),
+    ]
+    # MagicMock binds `name` as kwarg-to-MagicMock-name, not to attr —
+    # set it explicitly so `field.name` returns the column name.
+    for sf, n in zip(bq_schema, ("day", "avg", "count"), strict=True):
+        sf.name = n
+
+    row_iter = MagicMock()
+    row_iter.schema = bq_schema
+    row1 = MagicMock()
+    row1.values.return_value = ("2025-11-04", 47.82, 2)
+    row2 = MagicMock()
+    row2.values.return_value = ("2025-11-05", 51.10, 1)
+    row_iter.__iter__.return_value = iter([row1, row2])
+
+    data_job = MagicMock()
+    data_job.result.return_value = row_iter
+    # COUNT(*) returns the unbounded filtered total — distinct from
+    # the data page's row count (which would only be the page size).
+    count_row = MagicMock()
+    count_row.__getitem__.side_effect = lambda k: 42 if k == "n" else None
+    count_job = MagicMock()
+    count_job.result.return_value = [count_row]
+    # COUNT is submitted first, then the data query.
+    mock_client.query.side_effect = [count_job, data_job]
+
+    result = backend.search_sql(
+        "SELECT day, avg, count FROM x LIMIT 100", limit=100,
+    )
+
+    # Two queries fire. For this unfiltered SELECT the total comes
+    # from `INFORMATION_SCHEMA.TABLE_STORAGE` (free metadata read), not
+    # a COUNT(*) full-scan.
+    assert mock_client.query.call_count == 2
+    count_sql, data_sql = (
+        mock_client.query.call_args_list[0][0][0],
+        mock_client.query.call_args_list[1][0][0],
+    )
+    assert "INFORMATION_SCHEMA.TABLE_STORAGE" in count_sql
+    assert "WHERE table_name = @table_name" in count_sql
+    assert "`proj-1`" in data_sql
+    assert "`ds-1`" in data_sql
+    assert "FROM `proj-1`.`ds-1`.x" in data_sql
+    # Total is the metadata row count (parametrised mock returns 42).
+    assert result.total == 42
+    # Frictionless types come back from the BQ type map.
+    assert result.schema == {
+        "fields": [
+            {"name": "day",   "type": "date"},
+            {"name": "avg",   "type": "number"},
+            {"name": "count", "type": "integer"},
+        ],
+    }
+    # Records iterator is lazy — exhaust to verify shape.
+    assert list(result.records) == [
+        ("2025-11-04", 47.82, 2),
+        ("2025-11-05", 51.10, 1),
+    ]
+
+
+def test_search_sql_bounds_rows_by_limit(mock_client: MagicMock) -> None:
+    """A SELECT without an embedded LIMIT can't run forever — the
+    engine caps output at the service-supplied `limit` via islice."""
+    backend = _ro_backend(mock_client)
+
+    rows = []
+    for i in range(10):
+        r = MagicMock()
+        r.values.return_value = (i,)
+        rows.append(r)
+    sf = MagicMock(field_type="INT64")
+    sf.name = "n"
+    row_iter = MagicMock()
+    row_iter.schema = [sf]
+    row_iter.__iter__.return_value = iter(rows)
+
+    data_job = MagicMock()
+    data_job.result.return_value = row_iter
+    count_row = MagicMock()
+    count_row.__getitem__.side_effect = lambda k: 10 if k == "n" else None
+    count_job = MagicMock()
+    count_job.result.return_value = [count_row]
+    mock_client.query.side_effect = [count_job, data_job]
+
+    result = backend.search_sql("SELECT n FROM x", limit=3)
+    assert list(result.records) == [(0,), (1,), (2,)]
+    # Filtered total is the unbounded count, not the page size.
+    assert result.total == 10
+
+
+def test_search_sql_refuses_to_run_on_rw_engine() -> None:
+    """Defense-in-depth: if a misconfigured caller routes search_sql to
+    the rw engine, the engine refuses before submitting the query —
+    RO credentials are the actual safety, this is the smoke alarm."""
+    client = MagicMock()
+    b = BigQueryBackend(mode="rw")
+    b.client = client
+    b.config = MagicMock()
+    b.config.BIGQUERY_PROJECT = "proj-1"
+    b.config.BIGQUERY_DATASET = "ds-1"
+
+    with pytest.raises(ServerError, match="read-only"):
+        b.search_sql("SELECT 1", limit=10)
+    client.query.assert_not_called()
+
+
+def test_search_sql_translates_bq_error_to_server_error(
+    mock_client: MagicMock,
+) -> None:
+    """A BQ-side failure (bad SQL, permission denied, …) surfaces as
+    `ServerError`, never as a raw google.api_core exception.
+
+    Two jobs fire (COUNT + data); both error. The data-job error is
+    the one promoted to ServerError since rows are the primary
+    deliverable; COUNT failures alone degrade total to None instead.
+    """
+    backend = _ro_backend(mock_client)
+    mock_client.query.side_effect = RuntimeError("syntax error at line 1")
+
+    with pytest.raises(ServerError, match="search_sql failed"):
+        backend.search_sql("SELECT bogus", limit=10)
+
+
+def test_search_sql_filtered_uses_count_subquery(
+    mock_client: MagicMock,
+) -> None:
+    """SQL with a WHERE clause can't take the free metadata path —
+    fall back to `SELECT COUNT(*) FROM (<inner>)` which gives the
+    actual filtered total."""
+    backend = _ro_backend(mock_client)
+
+    sf = MagicMock(field_type="INT64")
+    sf.name = "n"
+    row_iter = MagicMock()
+    row_iter.schema = [sf]
+    row_iter.__iter__.return_value = iter([])
+
+    data_job = MagicMock()
+    data_job.result.return_value = row_iter
+    count_row = MagicMock()
+    count_row.__getitem__.side_effect = lambda k: 7 if k == "n" else None
+    count_job = MagicMock()
+    count_job.result.return_value = [count_row]
+    mock_client.query.side_effect = [count_job, data_job]
+
+    result = backend.search_sql(
+        "SELECT n FROM x WHERE n > 5 LIMIT 10", limit=10,
+    )
+
+    count_sql = mock_client.query.call_args_list[0][0][0]
+    # Filtered query → subquery COUNT, no INFORMATION_SCHEMA path.
+    assert count_sql.startswith("SELECT COUNT(*) AS n FROM (")
+    assert "INFORMATION_SCHEMA" not in count_sql
+    assert result.total == 7
+
+
+def test_search_sql_aggregate_uses_count_subquery(
+    mock_client: MagicMock,
+) -> None:
+    """Queries with aggregates (GROUP BY, COUNT(), …) collapse rows —
+    the free metadata path would give the source table's row count,
+    not the result row count. Use COUNT subquery."""
+    backend = _ro_backend(mock_client)
+
+    sf = MagicMock(field_type="INT64")
+    sf.name = "n"
+    row_iter = MagicMock()
+    row_iter.schema = [sf]
+    row_iter.__iter__.return_value = iter([])
+    data_job = MagicMock()
+    data_job.result.return_value = row_iter
+    cnt = MagicMock()
+    cnt.__getitem__.side_effect = lambda k: 2 if k == "n" else None
+    count_job = MagicMock()
+    count_job.result.return_value = [cnt]
+    mock_client.query.side_effect = [count_job, data_job]
+
+    result = backend.search_sql(
+        "SELECT category, COUNT(*) FROM x GROUP BY category LIMIT 10",
+        limit=10,
+    )
+    count_sql = mock_client.query.call_args_list[0][0][0]
+    assert "INFORMATION_SCHEMA" not in count_sql
+    assert count_sql.startswith("SELECT COUNT(*) AS n FROM (")
+    assert result.total == 2
+
+
+def test_search_sql_total_falls_back_to_none_when_count_fails(
+    mock_client: MagicMock,
+) -> None:
+    """If COUNT errors but the data query succeeds, the user still
+    gets their rows — `total` degrades to None instead of failing
+    the whole request. Pagination links then drop `next` /
+    `total_pages`, matching the "unknown total" rules in
+    `_build_sql_pagination_links`."""
+    backend = _ro_backend(mock_client)
+
+    sf = MagicMock(field_type="INT64")
+    sf.name = "n"
+    row_iter = MagicMock()
+    row_iter.schema = [sf]
+    row_iter.__iter__.return_value = iter([])
+
+    data_job = MagicMock()
+    data_job.result.return_value = row_iter
+    count_job = MagicMock()
+    count_job.result.side_effect = RuntimeError("count failed")
+    mock_client.query.side_effect = [count_job, data_job]
+
+    result = backend.search_sql("SELECT n FROM x LIMIT 10", limit=10)
+    assert result.total is None
+    assert list(result.records) == []
+
+
+def test_search_sql_placeholder_mode_returns_empty(
+    mock_client: MagicMock,
+) -> None:
+    """No client (no GCP creds) → empty result, no exception. Lets the
+    unit suite drive `search_sql_datastore` without a real backend."""
+    backend = BigQueryBackend(mode="ro")
+    backend.client = None
+
+    result = backend.search_sql("SELECT 1", limit=10)
+    assert result.schema == {"fields": []}
+    assert list(result.records) == []
+    mock_client.query.assert_not_called()
+
+
+# --- qualify_table_refs() -------------------------------------------------
+
+
+def test_qualify_table_refs_prepends_project_dataset() -> None:
+    """User refers to tables by raw resource_id; the qualifier prepends
+    `project.dataset` and emits BigQuery-dialect SQL with backticks."""
+    from datastore.infrastructure.engines.bigquery.lib import (
+        qualify_table_refs,
+    )
+    out = qualify_table_refs(
+        'SELECT * FROM "c6153a74-43cb-4edf-8bdf-bb664feca937" LIMIT 10',
+        project="my-project",
+        dataset="my_dataset",
+    )
+    assert (
+        "`my-project`.`my_dataset`.`c6153a74-43cb-4edf-8bdf-bb664feca937`"
+        in out
+    )
+    assert out.endswith("LIMIT 10")
+
+
+def test_qualify_table_refs_handles_joins() -> None:
+    """Both sides of a JOIN get qualified independently."""
+    from datastore.infrastructure.engines.bigquery.lib import (
+        qualify_table_refs,
+    )
+    out = qualify_table_refs(
+        'SELECT a.id FROM "tbl_a" a JOIN "tbl_b" b ON a.id = b.id LIMIT 10',
+        project="p", dataset="d",
+    )
+    assert "`p`.`d`.`tbl_a`" in out
+    assert "`p`.`d`.`tbl_b`" in out
+
+
+def test_qualify_table_refs_skips_cte_aliases() -> None:
+    """CTE aliases are inline, not external tables — leave them alone."""
+    from datastore.infrastructure.engines.bigquery.lib import (
+        qualify_table_refs,
+    )
+    out = qualify_table_refs(
+        'WITH t AS (SELECT 1 AS a) SELECT * FROM t LIMIT 10',
+        project="p", dataset="d",
+    )
+    assert "`p`.`d`.`t`" not in out
+    # CTE name `t` survives unqualified.
+    assert " FROM t " in out or " FROM `t` " in out
+
+
+def test_qualify_table_refs_leaves_already_qualified_refs_alone() -> None:
+    """If a caller fully-qualifies a ref, don't double-prefix."""
+    from datastore.infrastructure.engines.bigquery.lib import (
+        qualify_table_refs,
+    )
+    out = qualify_table_refs(
+        "SELECT * FROM other_project.other_dataset.tbl LIMIT 10",
+        project="p", dataset="d",
+    )
+    assert "`p`.`d`.`other_project`" not in out
+    assert "other_project" in out and "other_dataset" in out
+    assert "tbl" in out

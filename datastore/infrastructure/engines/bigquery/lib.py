@@ -363,3 +363,108 @@ def delete_sql(
 
     where = " AND ".join(clauses) if clauses else "TRUE"
     return f"DELETE FROM {table_ref} WHERE {where}", params
+
+
+def unfiltered_table_name(
+    sql: str, *, dialect: str = "bigquery",
+) -> str | None:
+    """Return the single source table name when `sql` is a plain
+    `SELECT cols FROM <table> [LIMIT/OFFSET]` — i.e. the result row
+    count equals the source table's row count.
+
+    Returns None whenever any clause could change the row count:
+    WHERE, GROUP BY, HAVING, JOIN, DISTINCT, QUALIFY, aggregate
+    functions, set ops (UNION/EXCEPT/INTERSECT), subqueries, or more
+    than one source table. The caller falls back to a real
+    `COUNT(*) FROM (<inner>)` in those cases.
+
+    Used by `datastore_search_sql` to route the unfiltered total
+    through `INFORMATION_SCHEMA.TABLE_STORAGE` — free metadata read,
+    no bytes scanned — instead of a full table scan via COUNT(*).
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    try:
+        tree = sqlglot.parse_one(sql, dialect=dialect)
+    except Exception:
+        return None
+
+    if not isinstance(tree, exp.Select):
+        return None
+
+    blockers = ("where", "group", "having", "joins", "distinct", "qualify")
+    if any(tree.args.get(k) for k in blockers):
+        return None
+
+    # Nested SELECTs (subqueries) can reduce / expand rows in ways
+    # the surrounding clauses don't reveal — bail.
+    if sum(1 for _ in tree.find_all(exp.Select)) > 1:
+        return None
+
+    aggregates = (exp.Count, exp.Sum, exp.Avg, exp.Min, exp.Max)
+    if next(tree.find_all(*aggregates), None) is not None:
+        return None
+
+    cte_aliases = {
+        c.alias_or_name for c in tree.find_all(exp.CTE)
+        if c.alias_or_name
+    }
+    tables = [
+        t for t in tree.find_all(exp.Table)
+        if t.name and t.name not in cte_aliases
+    ]
+    if len(tables) != 1:
+        return None
+    return tables[0].name
+
+
+def strip_limit_offset(sql: str, *, dialect: str = "bigquery") -> str:
+    """Return `sql` with its LIMIT and OFFSET clauses removed.
+
+    Used by `datastore_search_sql` to wrap the user's filtered query in
+    a `SELECT COUNT(*) FROM (...)` for the total — the count has to
+    ignore the page size or it would just report the current page's
+    row count, breaking `total_pages` / `next` links.
+    """
+    import sqlglot
+
+    tree = sqlglot.parse_one(sql, dialect=dialect)
+    tree.set("limit", None)
+    tree.set("offset", None)
+    return tree.sql(dialect=dialect)
+
+
+def qualify_table_refs(sql: str, project: str, dataset: str) -> str:
+    """Rewrite every non-CTE table reference to its fully-qualified
+    BigQuery form and re-serialise the SQL in BigQuery dialect.
+
+    Users pass `datastore_search_sql` SQL with table refs that look
+    like CKAN resource_ids (`FROM "uuid"` or `FROM uuid`). BigQuery
+    needs `project.dataset.uuid` with backticked identifiers — so the
+    backend parses the user's SQL (postgres dialect, which accepts
+    double-quoted identifiers), tags each unqualified table with the
+    configured project + dataset, and serialises out as BigQuery SQL.
+
+    Tables that already carry a `catalog` (project) are left alone —
+    callers who fully-qualify their refs win against the auto-prefix.
+    CTE aliases are also skipped (they're defined inline, not external
+    tables).
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    tree = sqlglot.parse_one(sql, dialect="postgres")
+    cte_aliases = {
+        cte.alias_or_name for cte in tree.find_all(exp.CTE)
+        if cte.alias_or_name
+    }
+    for table in tree.find_all(exp.Table):
+        name = table.name
+        if not name or name in cte_aliases:
+            continue
+        if table.args.get("catalog") is not None:
+            continue
+        table.set("catalog", exp.to_identifier(project, quoted=True))
+        table.set("db", exp.to_identifier(dataset, quoted=True))
+    return tree.sql(dialect="bigquery")

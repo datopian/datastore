@@ -23,6 +23,14 @@ log = logging.getLogger(__name__)
 Permission = Literal["read", "create", "update", "delete", "patch"]
 ALLOWED_PERMISSIONS: frozenset[str] = frozenset(get_args(Permission))
 
+# Permissions that an unauthenticated caller is allowed to ask CKAN
+# about. For these we forward the request to `datastore_authorize`
+# without an API key; CKAN itself decides whether the resource is
+# public-readable. Anything outside this set still hard-fails on
+# missing credentials (no point calling CKAN — writes always need a
+# user).
+ANONYMOUS_PERMISSIONS: frozenset[str] = frozenset({"read"})
+
 
 # --- public ------------------------------------------------------------------
 async def authorize(
@@ -52,8 +60,10 @@ async def authorize(
                   resource_id, package_id)
         return _disabled_stub(resource_id, package_id)
 
-    if not api_key:
-        raise AuthorizationError("Access denied: Action requires an authenticated user")
+    if not api_key and permission not in ANONYMOUS_PERMISSIONS:
+        raise AuthorizationError(
+            "Access denied: Action requires an authenticated user"
+        )
 
     # Adapter enforces TTL: `cache.set(..., ttl=cache_ttl)` writes an entry
     # that expires `cache_ttl` seconds after this write.
@@ -81,12 +91,13 @@ async def authorize(
 # --- cache helpers -----------------------------------------------------------
 
 def _cache_key(
-    api_key: str,
+    api_key: str | None,
     scope: str,
     identifier: str,
     permission: str | None,
 ) -> str:
-    return f"auth:{_key_id(api_key)}:{scope}:{identifier}:{permission}"
+    key_id = _key_id(api_key) if api_key else "anon"
+    return f"auth:{key_id}:{scope}:{identifier}:{permission}"
 
 
 async def _safe_get(cache: CachePort, key: str) -> bytes | None:

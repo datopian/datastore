@@ -16,6 +16,7 @@ from datastore.schemas.validators import (
     FieldSpec,
     StringOrList,
     fields_to_frictionless_schema,
+    parse_sql_pagination,
     parse_sql_references,
     to_json_object,
     to_str_or_json_object,
@@ -204,6 +205,8 @@ class DatastoreSearchSQLRequest(BaseModel):
     # the read-only properties below give callers a clean attribute.
     _resource_ids: list[str] = PrivateAttr(default_factory=list)
     _function_names: list[str] = PrivateAttr(default_factory=list)
+    _limit: int = PrivateAttr(default=0)
+    _offset: int = PrivateAttr(default=0)
 
     @property
     def resource_ids(self) -> list[str]:
@@ -216,6 +219,16 @@ class DatastoreSearchSQLRequest(BaseModel):
         """SQL function calls in the query, lowercased — checked
         against `core.constants.ALLOWED_SQL_FUNCTIONS`."""
         return self._function_names
+
+    @property
+    def limit(self) -> int:
+        """`LIMIT` literal parsed from the SQL — required."""
+        return self._limit
+
+    @property
+    def offset(self) -> int:
+        """`OFFSET` literal parsed from the SQL (0 when absent)."""
+        return self._offset
 
     @field_validator("sql")
     @classmethod
@@ -254,13 +267,18 @@ class DatastoreSearchSQLRequest(BaseModel):
 
     @model_validator(mode="after")
     def _extract_sql_references(self) -> DatastoreSearchSQLRequest:
-        """Parse `sql` via sqlglot and stash table + function names.
+        """Parse `sql` via sqlglot and stash table + function names +
+        the LIMIT/OFFSET literals.
 
         Runs after `_check_sql_is_select`, so we know we have a single
         SELECT / WITH. CTE aliases are excluded from `_resource_ids`
-        (they're defined inline, not external tables).
+        (they're defined inline, not external tables). LIMIT is
+        required — the service uses it to build pagination links and
+        to cap the streaming response; missing LIMIT raises a clean
+        ValidationError up front.
         """
         self._resource_ids, self._function_names = parse_sql_references(self.sql)
+        self._limit, self._offset = parse_sql_pagination(self.sql)
         return self
 
 

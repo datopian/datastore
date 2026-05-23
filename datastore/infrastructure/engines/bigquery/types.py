@@ -79,3 +79,38 @@ def can_widen(old_bq_type: str, new_bq_type: str) -> bool:
     if old_bq_type == new_bq_type:
         return True
     return new_bq_type in BIGQUERY_ALLOWED_TYPE_CHANGES.get(old_bq_type, set())
+
+
+# Inverse of `FRICTIONLESS_TO_BIGQUERY` — used when reading a result
+# schema back from BigQuery (e.g. `datastore_search_sql`) and surfacing
+# it to clients as Frictionless types. Many-to-one collapses some BQ
+# precision distinctions (NUMERIC / BIGNUMERIC / FLOAT64 → number).
+BIGQUERY_TO_FRICTIONLESS: dict[str, str] = {
+    "INT64":      "integer",
+    "INTEGER":    "integer",
+    "FLOAT64":    "number",
+    "FLOAT":      "number",
+    "NUMERIC":    "number",
+    "BIGNUMERIC": "number",
+    "BOOL":       "boolean",
+    "BOOLEAN":    "boolean",
+    "STRING":     "string",
+    "BYTES":      "string",
+    "DATE":       "date",
+    "TIME":       "time",
+    "DATETIME":   "datetime",
+    "TIMESTAMP":  "datetime",
+    "JSON":       "object",
+}
+
+
+def frictionless_type_from_bigquery(bq_type: str | None) -> str:
+    """Map a BigQuery column type back to a Frictionless type name.
+
+    Unknown or absent types collapse to `string` so a newer BigQuery
+    type (e.g. `RANGE`) is still surfaced as a usable column instead
+    of breaking the response.
+    """
+    if not bq_type:
+        return "string"
+    return BIGQUERY_TO_FRICTIONLESS.get(bq_type.upper(), "string")
