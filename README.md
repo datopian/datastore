@@ -223,6 +223,7 @@ Every entry below maps 1:1 to a field on `datastore.core.config.Config`. See [.e
 | `BIGQUERY_PROJECT` | _(empty)_ | Google Cloud project ID. Required when `DATASTORE_ENGINE=bigquery`; unset → `/ready` returns 503 with a clear warning. |
 | `BIGQUERY_CREDENTIALS` | _(empty)_ | Read-write service-account creds. Accepts a JSON blob (leading `{`), a path to a service-account JSON file, or empty (→ Application Default Credentials). |
 | `BIGQUERY_CREDENTIALS_RO` | _(empty)_ | Read-only service-account creds (same format). Empty → falls back to `BIGQUERY_CREDENTIALS` so single-credential deployments work. |
+| `BIGQUERY_USE_QUERY_CACHE` | `true` | Use BigQuery's 24h query-results cache on `datastore_search` / `datastore_search_sql` / `datastore_info`. Identical SELECTs return free + fast on cache hits. Set `false` to force a fresh scan. |
 | `REDIS_URL` | _(empty)_ | Redis URL for cache; empty → in-process `InMemoryCache` |
 | `CKAN_URL` | _(empty)_ | Base URL of the CKAN instance (required when `AUTH_TYPE=ckan`) |
 | `HTTP_TIMEOUT_SECONDS` | `10` | Timeout for outbound CKAN calls (seconds) |
@@ -383,10 +384,3 @@ calls. `FakeCKAN` exposes `add_resource(...)`, `add_package(...)`,
 `deny(api_key)` and an `authorize_calls` counter to assert cache
 behaviour.
 
-An autouse `_isolate_bigquery_env` fixture clears the `BIGQUERY_*`
-envs so the engine stays in placeholder mode for every test.
-
-The CKAN pytest plugin auto-installed system-wide is disabled for this
-project via `addopts = "-p no:ckan -p no:ckan_fixtures"` in
-`pyproject.toml` — otherwise it tries to load a CKAN `.ini` we don't
-have.

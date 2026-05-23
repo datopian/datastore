@@ -48,6 +48,9 @@ def _backend(client: MagicMock) -> BigQueryBackend:
     b.config = MagicMock()
     b.config.BIGQUERY_PROJECT = "proj-1"
     b.config.BIGQUERY_DATASET = "ds-1"
+    # Default cache flag — real bool so `QueryJobConfig.use_query_cache`
+    # is True, not a MagicMock, in tests that inspect the job config.
+    b.config.BIGQUERY_USE_QUERY_CACHE = True
     return b
 
 
@@ -1383,6 +1386,7 @@ def _ro_backend(client: MagicMock) -> BigQueryBackend:
     b.config = MagicMock()
     b.config.BIGQUERY_PROJECT = "proj-1"
     b.config.BIGQUERY_DATASET = "ds-1"
+    b.config.BIGQUERY_USE_QUERY_CACHE = True
     return b
 
 
@@ -1684,3 +1688,127 @@ def test_qualify_table_refs_leaves_already_qualified_refs_alone() -> None:
     assert "`p`.`d`.`other_project`" not in out
     assert "other_project" in out and "other_dataset" in out
     assert "tbl" in out
+
+
+# --- query-results cache on read paths ------------------------------------
+#
+# BigQuery's built-in query cache makes identical, deterministic SELECTs
+# free + fast on the second call. The default is on at the API, but every
+# read site funnels its `QueryJobConfig` through `_read_job_config` so
+# the flag is explicit in the code AND the `BIGQUERY_USE_QUERY_CACHE`
+# opt-out actually flows through. These tests pin that contract.
+
+
+def _job_config_kwarg(call) -> Any:
+    """Pull `job_config` from a `client.query(...)` call regardless of
+    whether it rode as a kwarg or as the second positional arg."""
+    if "job_config" in call.kwargs:
+        return call.kwargs["job_config"]
+    return call.args[1] if len(call.args) > 1 else None
+
+
+def test_search_passes_use_query_cache_true_on_data_and_count_jobs(
+    mock_client: MagicMock,
+) -> None:
+    schema = {
+        "fields": [
+            {"name": "auction_id", "type": "integer"},
+            {"name": "product_code", "type": "string"},
+        ],
+        "primaryKey": ["auction_id"],
+    }
+    backend = _backend_with_schema(mock_client, schema)
+
+    # Filtered search → triggers both COUNT and SELECT submits.
+    search_job = MagicMock()
+    search_job.result.return_value = iter([])
+    count_job = MagicMock()
+    cnt = MagicMock()
+    cnt.__getitem__.side_effect = lambda k: 0 if k == "n" else None
+    count_job.result.return_value = [cnt]
+    mock_client.query.side_effect = [count_job, search_job]
+
+    backend.search(
+        resource_id="res-1",
+        filters={"product_code": "DCL"},
+        q=None, distinct=False, plain=True, language="english",
+        limit=10, offset=0, fields=["auction_id"], sort=None,
+        include_total=True,
+    )
+
+    assert mock_client.query.call_count == 2
+    for call in mock_client.query.call_args_list:
+        cfg = _job_config_kwarg(call)
+        assert cfg is not None, "search must pass a QueryJobConfig"
+        assert cfg.use_query_cache is True
+
+
+def test_search_sql_passes_use_query_cache_true_on_data_and_count_jobs(
+    mock_client: MagicMock,
+) -> None:
+    backend = _ro_backend(mock_client)
+
+    # Data result: empty iter with a minimal schema.
+    sf = MagicMock(field_type="INT64")
+    sf.name = "n"
+    row_iter = MagicMock()
+    row_iter.schema = [sf]
+    row_iter.__iter__.return_value = iter([])
+    data_job = MagicMock()
+    data_job.result.return_value = row_iter
+    count_job = MagicMock()
+    count_job.result.return_value = []
+    # COUNT submitted first (non-blocking), then DATA.
+    mock_client.query.side_effect = [count_job, data_job]
+
+    backend.search_sql(
+        "SELECT n FROM res1 WHERE n > 0 LIMIT 10", limit=10,
+    )
+
+    assert mock_client.query.call_count == 2
+    for call in mock_client.query.call_args_list:
+        cfg = _job_config_kwarg(call)
+        assert cfg is not None, "search_sql must pass a QueryJobConfig"
+        assert cfg.use_query_cache is True
+
+
+def test_info_count_rows_passes_use_query_cache_true(
+    mock_client: MagicMock,
+) -> None:
+    """`datastore_info` calls `_count_rows`, which issues
+    `SELECT COUNT(*) FROM <table>`. That SELECT must ride the cache."""
+    backend = _backend_with_schema(
+        mock_client, {"fields": [{"name": "id", "type": "integer"}]},
+    )
+    count_row = MagicMock()
+    count_row.__getitem__.side_effect = lambda k: 7 if k == "n" else None
+    mock_client.query.return_value.result.return_value = [count_row]
+
+    backend.info("res-1")
+
+    # `_count_rows` is the only `client.query` call in `info()`'s path
+    # (metadata is mocked) — assert its job_config carries the flag.
+    assert mock_client.query.call_count == 1
+    cfg = _job_config_kwarg(mock_client.query.call_args)
+    assert cfg is not None, "_count_rows must pass a QueryJobConfig"
+    assert cfg.use_query_cache is True
+
+
+def test_use_query_cache_respects_config_opt_out(
+    mock_client: MagicMock,
+) -> None:
+    """`BIGQUERY_USE_QUERY_CACHE=False` flows through to the wire so
+    integration tests / freshness-sensitive deployments can force a
+    fresh scan."""
+    backend = _backend_with_schema(
+        mock_client, {"fields": [{"name": "id", "type": "integer"}]},
+    )
+    backend.config.BIGQUERY_USE_QUERY_CACHE = False
+    count_row = MagicMock()
+    count_row.__getitem__.side_effect = lambda k: 0 if k == "n" else None
+    mock_client.query.return_value.result.return_value = [count_row]
+
+    backend.info("res-1")
+
+    cfg = _job_config_kwarg(mock_client.query.call_args)
+    assert cfg.use_query_cache is False

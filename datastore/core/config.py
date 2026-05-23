@@ -119,6 +119,16 @@ class Config(BaseSettings):
             "Either JSON blob or path to a service-account JSON file."
         ),
     )
+    BIGQUERY_USE_QUERY_CACHE: bool = Field(
+        default=True,
+        description=(
+            "Use BigQuery's built-in 24h query-results cache on read paths "
+            "(datastore_search / datastore_search_sql / datastore_info). "
+            "Identical, deterministic SELECTs return free + fast on cache "
+            "hits. Set False for freshness-sensitive deployments or to "
+            "force a fresh scan in tests."
+        ),
+    )
 
     # Per-row system columns
     INCLUDE_UPDATED_AT: bool = Field(

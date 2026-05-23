@@ -145,6 +145,30 @@ class BigQueryBackend(DatastoreBackend):
             f".{self.config.BIGQUERY_DATASET}.{resource_id}`"
         )
 
+    def _read_job_config(self, params: list | None = None) -> Any:
+        """QueryJobConfig for read paths — enables BigQuery's query cache.
+
+        BigQuery caches the result of every deterministic SELECT for
+        ~24h; an identical query hits the cache and returns free + fast
+        (no bytes scanned, sub-100ms typically). The flag is on by
+        default in BigQuery, but every read site builds its config
+        through this helper so:
+          - the read-side contract is explicit in the code,
+          - the `BIGQUERY_USE_QUERY_CACHE` opt-out actually flows
+            through to the wire (e.g. integration tests that need
+            a fresh scan can set it to False).
+
+        Write paths (DDL / DML) don't go through this — BigQuery's
+        cache only applies to SELECT anyway.
+        """
+        from google.cloud import bigquery
+        return bigquery.QueryJobConfig(
+            query_parameters=params or [],
+            use_query_cache=getattr(
+                self.config, "BIGQUERY_USE_QUERY_CACHE", True,
+            ),
+        )
+
     def _run_query(
         self,
         sql: str,
@@ -624,8 +648,10 @@ class BigQueryBackend(DatastoreBackend):
         except ValueError as e:
             raise ValidationError(str(e)) from e
 
-        from google.cloud import bigquery
-        job_config = bigquery.QueryJobConfig(query_parameters=params)
+        # Read-path configs use the query-results cache (see
+        # _read_job_config). Identical search params hit a 24h cache
+        # entry — free + fast on the second call.
+        job_config = self._read_job_config(params=params)
 
         # Fire both jobs before waiting on either: BigQuery's
         # `client.query()` is non-blocking, so the count and the page
@@ -643,7 +669,7 @@ class BigQueryBackend(DatastoreBackend):
                 q=q,
                 distinct=distinct,
             )
-            count_cfg = bigquery.QueryJobConfig(query_parameters=count_params)
+            count_cfg = self._read_job_config(params=count_params)
             count_job = self.client.query(count_sql, job_config=count_cfg)
 
         search_job = self.client.query(sql, job_config=job_config)
@@ -786,17 +812,15 @@ class BigQueryBackend(DatastoreBackend):
         count_job = None
         if count_sql:
             try:
-                from google.cloud import bigquery
-                count_cfg = (
-                    bigquery.QueryJobConfig(query_parameters=count_params)
-                    if count_params else None
-                )
+                count_cfg = self._read_job_config(params=count_params)
                 count_job = self.client.query(count_sql, job_config=count_cfg)
             except Exception as e:
                 log.warning("search_sql COUNT submit failed: %s", e)
 
         try:
-            data_job = self.client.query(qualified_sql)
+            data_job = self.client.query(
+                qualified_sql, job_config=self._read_job_config(),
+            )
             row_iter = data_job.result()
         except Exception as e:
             raise ServerError(f"BigQuery search_sql failed: {e}") from e
@@ -1003,7 +1027,8 @@ class BigQueryBackend(DatastoreBackend):
         )
         try:
             job = self._run_query(
-                sql, op="COUNT", resource_id=resource_id
+                sql, op="COUNT", resource_id=resource_id,
+                job_config=self._read_job_config(),
             )
             rows = list(job.result())
         except ServerError as e:
