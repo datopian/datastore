@@ -120,6 +120,19 @@ def test_response_includes_pagination_links(client: TestClient) -> None:
     assert "OFFSET+0" in links["start"] or "OFFSET%200" in links["start"]
 
 
+def test_response_echoes_original_sql(client: TestClient) -> None:
+    """`result.sql` echoes the request SQL verbatim. Useful when
+    `_links.next` rewrites the OFFSET — clients can still see what
+    actually ran on this page."""
+    sql = (
+        'SELECT auction_id FROM "balancing_auction_results_2025" '
+        'LIMIT 5 OFFSET 10'
+    )
+    response = client.get(SQL_URL, params={"sql": sql})
+    assert response.status_code == 200
+    assert response.json()["result"]["sql"] == sql
+
+
 def test_pagination_links_rewrite_sql_offset(client: TestClient) -> None:
     """When the placeholder reports total=0 there's no `next`, but
     once the engine reports rows the `next` URL would carry a SQL
