@@ -1,15 +1,20 @@
 # Datastore API
 
-A CKAN datastore like API for tabular data storage and querying,
-built on the FastAPI framework with a pluggable storage engine
-(BigQuery today; DuckLake on the roadmap). Exposes
-`/api/3/action/datastore_*` action endpoints.
+A CKAN-shaped action API for tabular data storage and querying, built
+on FastAPI with **two pluggable axes**:
 
-Each request is authorised against an upstream CKAN instance via
-`datastore_authorize` and TTL-cached (in-process by default; Redis when
-`REDIS_URL` is set), so the heavy datastore work lives in this service
-while CKAN remains the single source of truth for users, packages,
-resources, and permissions.
+- **Storage engine** — `DATASTORE_ENGINE` selects a folder under
+  `datastore/infrastructure/engines/` (BigQuery today; DuckLake planned).
+- **Auth provider** — `AUTH_TYPE` selects a folder under `datastore/auth/`.
+  Built-in: `ckan` (delegates to an upstream CKAN, TTL-cached),
+  `jwt` (verifies signature + claims locally), `anonymous` (allow-all,
+  for local dev / CI).
+
+Exposes `/api/3/action/datastore_*` endpoints. Runs **standalone**
+under `AUTH_TYPE=anonymous` or `AUTH_TYPE=jwt` — no CKAN required —
+or as a satellite to CKAN under `AUTH_TYPE=ckan`, in which case CKAN
+remains the single source of truth for users, packages, resources,
+and permissions, and the heavy datastore work lives here.
 
 ## Project structure
 
@@ -19,14 +24,26 @@ datastore/
 │
 ├── api/                          # HTTP layer — only layer that imports fastapi / starlette
 │   ├── routes.py                 # Top-level APIRouter; aggregates endpoints/
-│   ├── context.py                # RequestContext  (per-request DI bundle)
-│   ├── auth.py                   # CKAN datastore_authorize with TTL cache
+│   ├── context.py                # RequestContext (per-request DI bundle: config,
+│   │                             # api_key, auth_provider, ckan); .authorize() method
+│   ├── auth.py                   # Boundary policy (permission whitelist + anonymous-read
+│   │                             # rule); delegates to the active AuthProvider
 │   ├── middleware.py             # ASGI middleware (e.g. BodySizeLimitMiddleware)
 │   ├── responses.py              # Envelope response helpers (_success_response / _error_response)
 │   ├── error_handlers.py         # Exception handlers (APIError → CKAN error envelope)
 │   └── endpoints/                # Route handlers, one file per resource group
 │       ├── health.py             # /, /health, /ready
 │       └── datastore.py          # /api/3/action/datastore_*
+│
+├── auth/                         # Pluggable auth providers — one subpackage per type
+│   ├── base.py                   # AuthProvider Protocol + Decision dataclass +
+│   │                             # default_key_id (JWT jti / sha256 helper)
+│   ├── registry.py               # get_auth_provider(config, **extras) — importlib dispatch
+│   ├── ckan/                     # AUTH_TYPE=ckan: calls /api/3/action/datastore_authorize
+│   │                             # via CKANClient; holds its own TTL cache (the only
+│   │                             # network-bound provider) so we don't hit CKAN per request
+│   ├── jwt/                      # AUTH_TYPE=jwt: verifies HS*/RS*/ES* signature + aud/iss
+│   └── anonymous/                # AUTH_TYPE=anonymous: always allows; no identity
 │
 ├── core/                         # Cross-cutting helpers — no I/O, no fastapi
 │   ├── config.py                 # Pydantic-Settings `Config` (env-driven) + get_config()
@@ -47,7 +64,8 @@ datastore/
 │
 └── infrastructure/               # Adapters to outside systems
     ├── cache.py                  # InMemoryCache + RedisCache (CachePort protocol)
-    ├── ckan_client.py            # CKAN action API client (httpx-backed)
+    ├── ckan_client.py            # CKAN action API client (httpx-backed). Built in
+    │                             # lifespan only when AUTH_TYPE=ckan; otherwise None.
     └── engines/                  # Storage backends — one subpackage per engine
         ├── base.py               # DatastoreBackend ABC + result dataclasses
         ├── registry.py           # get_datastore_engine + get_allowed_sql_functions;
@@ -57,13 +75,20 @@ datastore/
         |   ├── __init__.py        # Exports `Backend = BigQueryBackend` —
         |   |                        # the registry imports `Backend`, so the
         |   |                        # concrete class name is engine-private.
-        |   ├── backend.py         # DatastoreBackend subclass (placeholder)
+        |   ├── backend.py         # DatastoreBackend subclass
         |   ├── client.py          # google-cloud-bigquery `Client` construction
-        |   ├── lib.py             # Backend-specific helpers (optional)
+        |   ├── lib.py             # Backend-specific helpers
+        |   ├── metadata.py        # _table_metadata table — Frictionless schema + unique_key
+        |   ├── search.py          # SQL builder for datastore_search
+        |   ├── types.py           # Frictionless → BigQuery type map
         |   └── allowed_functions.txt  # Per-engine datastore_search_sql
         |                                # function allow-list — one name per
         |                                # line, `#` comments allowed.
         └── ducklake/              # Future planned engine
+
+postman/                          # Importable Postman collection
+├── collection.json               # Auto-generated from example_payload/
+└── generate_postman.py           # Generator script (regenerate after edits)
 ```
 
 To add a new engine (e.g. `ducklake`), drop a sibling folder following
@@ -110,25 +135,36 @@ What's shipped and what's next. Tick each box as the change set lands.
 - [x] Engine-agnostic registry — drop a folder under `infrastructure/engines/<name>/`
   exporting `Backend`; `DATASTORE_ENGINE` is validated against engine directories
   on disk, no registry / config edit required.
+- [x] Real BigQuery backend (replace the placeholder in `infrastructure/engines/bigquery/backend.py`)
 
 ### Next
-
-- [ ] Real BigQuery backend (replace the placeholder in `infrastructure/engines/bigquery/backend.py`)
-- [ ] DuckLake backend (second concrete engine — same ABC, drop-in folder)
 - [ ] Observability — JSON structured logs + request-id middleware
 - [ ] Opt-in query-result cache (deferred until BigQuery lands)
+- [ ] DuckLake backend (future planned engine)
 
 
-## CKAN-side requirement
 
-This service does not implement its own user / permission model.
-Every request is gated by a call to CKAN's `datastore_authorize`
-action, which is **not part of stock CKAN** — it ships in the
+## Auth
+
+`AUTH_TYPE` selects the provider; each lives at `datastore/auth/<name>/`.
+
+| AUTH_TYPE | What it does | Required env |
+|---|---|---|
+| `ckan` (default) | Calls CKAN `/api/3/action/datastore_authorize` per request. TTL-cached inside the provider so we don't hit CKAN repeatedly. | `CKAN_URL` |
+| `jwt` | Verifies the bearer JWT signature + optional `aud` / `iss`. No external service. | `JWT_SECRET` (HS*) or `JWT_PUBLIC_KEY` (RS*/ES*) |
+| `anonymous` | Allows every call; no identity. Local dev / CI without auth. | _(none)_ |
+
+The orchestration in `datastore/api/auth.py` is provider-agnostic — it
+owns only the boundary policy (permission whitelist, `resource_id` XOR
+`package_id` rule, and the anonymous-read rule: `permission=read` calls
+forward to the provider without a credential; everything else
+hard-fails when the `Authorization` header is missing).
+
+**CKAN provider.** Uses the `datastore_authorize` action, which is **not
+part of stock CKAN** — it ships in the
 [`ckanext-datastore-authz`](https://github.com/datopian/ckanext-datastore-authz)
-extension.
-
-Before pointing this service at a CKAN instance, install the extension
-on the CKAN side and confirm the action is reachable:
+extension. Before pointing this service at a CKAN instance, install
+the extension and confirm the action is reachable:
 
 ```sh
 curl -s "$CKAN_URL/api/3/action/datastore_authorize" \
@@ -137,12 +173,21 @@ curl -s "$CKAN_URL/api/3/action/datastore_authorize" \
      -d '{"resource_id": "<some-resource-id>"}' | jq
 ```
 
-If that returns a CKAN envelope with `success: true` and a
-`result.{package, resource}` body, you're set. If you get 404, the
-extension isn't installed or isn't enabled in CKAN's `ckan.plugins`.
+A CKAN envelope with `success: true` and a `result.{package, resource}`
+body means you're set. 404 means the extension isn't enabled in
+`ckan.plugins`.
 
-For local dev without a CKAN at all, set `AUTH_ENABLED=false` in `.env`
-— the auth gate returns a stub decision and every request passes.
+**Adding a new provider.** Drop `datastore/auth/<name>/` with an
+`__init__.py` exporting `Provider = <ConcreteClass>` and a `provider.py`
+implementing the `AuthProvider` Protocol (`base.py`). No registry edit
+required — `AUTH_TYPE` is validated against the directories on disk at
+startup, same auto-discovery as `DATASTORE_ENGINE`.
+
+**Standalone caveat.** `datastore_create` accepts two shapes:
+`resource_id` (table name only) and `resource` (a CKAN resource dict —
+the service calls `ckan.resource_create(...)` first, then writes the
+datastore table). The dict form is only valid under `AUTH_TYPE=ckan`;
+under JWT / anonymous it's rejected with a clear validation error.
 
 
 
@@ -179,10 +224,15 @@ Every entry below maps 1:1 to a field on `datastore.core.config.Config`. See [.e
 | `BIGQUERY_CREDENTIALS` | _(empty)_ | Read-write service-account creds. Accepts a JSON blob (leading `{`), a path to a service-account JSON file, or empty (→ Application Default Credentials). |
 | `BIGQUERY_CREDENTIALS_RO` | _(empty)_ | Read-only service-account creds (same format). Empty → falls back to `BIGQUERY_CREDENTIALS` so single-credential deployments work. |
 | `REDIS_URL` | _(empty)_ | Redis URL for cache; empty → in-process `InMemoryCache` |
-| `CKAN_URL` | _(empty)_ | Base URL of the CKAN instance (required when `AUTH_ENABLED=true`) |
+| `CKAN_URL` | _(empty)_ | Base URL of the CKAN instance (required when `AUTH_TYPE=ckan`) |
 | `HTTP_TIMEOUT_SECONDS` | `10` | Timeout for outbound CKAN calls (seconds) |
-| `AUTH_ENABLED` | `true` | CKAN auth gate; set to `false` for local dev / CI without a CKAN |
-| `AUTH_CACHE_TTL` | `10` | TTL for cached `datastore_authorize` decisions (seconds) |
+| `AUTH_TYPE` | `ckan` | Auth provider — must match a folder under `datastore/auth/`. Built-in: `ckan`, `jwt`, `anonymous` |
+| `AUTH_CACHE_TTL` | `10` | TTL for cached auth decisions (seconds) |
+| `JWT_ALGORITHM` | `HS256` | JWT signing algorithm. HS* uses `JWT_SECRET`; RS*/ES* uses `JWT_PUBLIC_KEY` |
+| `JWT_SECRET` | _(empty)_ | HS* shared secret. Required when `AUTH_TYPE=jwt` and `JWT_ALGORITHM=HS*` |
+| `JWT_PUBLIC_KEY` | _(empty)_ | RS*/ES* PEM-encoded public key. Required for RS*/ES* |
+| `JWT_AUDIENCE` | _(empty)_ | Expected `aud` claim. Empty = skip audience check |
+| `JWT_ISSUER` | _(empty)_ | Expected `iss` claim. Empty = skip issuer check |
 | `LOG_LEVEL` | `INFO` | Stdlib logging level (`DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`) |
 
 ## API Documentation 
@@ -199,7 +249,8 @@ Handler in `datastore/api/endpoints/<resource>.py` (parse → call service → r
 
 ### Request context
 
-Each endpoint takes a single `Context` that bundles the per-request handles (`auth`, `ckan`, `config`, and more as we grow). The bundle wires them together so handlers stay one-liner.
+Each endpoint takes a single `Context` that bundles the per-request
+handles. The bundle wires them together so handlers stay one-liner.
 
 ```python
 from datastore.api.context import Context
@@ -210,21 +261,33 @@ async def datastore_create(
     payload: DatastoreCreateRequest,
     context: Context,
 ):
-    # Authorize against CKAN. Pass `resource_id` (existing resource)
-    # or `package_id` (new resource under that package) — exactly one.
-    data_dict = await context.auth.authorize(
+    # Run policy + delegate to the active AuthProvider (CKAN / JWT /
+    # anonymous). Pass `resource_id` (existing) or `package_id` (new) —
+    # exactly one.
+    data_dict = await context.authorize(
         resource_id=payload.resource_id,
         permission="create",        # read | create | update | delete | patch
     )
 
-    # The service does the actual work (CKAN resource_create, engine.create, …).
+    # The service does the actual work (engine.create; CKAN resource_create
+    # when AUTH_TYPE=ckan and the request supplies a `resource` dict).
     result = await create_datastore(context, data_dict)
     return _success_response(request, result)
 ```
 
-- `context.auth` — `AuthContext`: cached `datastore_authorize` permission check. Holds the bound `api_key`, the cache, the TTL, and the CKAN client it delegates to.
-- `context.ckan` — `CKANClient` already bound to the caller's `api_key`. Call `resource_create` / `resource_patch` / `datastore_authorize` directly; the api_key travels with the client.
-- `context.config` — the loaded `Config` instance.
+- `context.authorize(...)` — runs the boundary policy and delegates to
+  the active `AuthProvider`. Returns the `data_dict` shape
+  `{"resource": <dict or {}>, "package": <dict or {}>}` ready to merge
+  with the request payload.
+- `context.ckan` — `CKANClient | None`, already bound to the caller's
+  `api_key`. `None` under non-CKAN auth (standalone). Code paths that
+  need CKAN must guard for `None`.
+- `context.api_key` — the raw bearer string (parsed from the
+  `Authorization` header). Provider-internal use; endpoints rarely
+  touch it.
+- `context.auth_provider` — the active provider instance (built once
+  in the lifespan, stored on `app.state.auth_provider`).
+- `context.config` — the loaded `Config`.
 
 
 
@@ -290,13 +353,40 @@ raise NotFoundError(f"resource '{rid}' not found")
 
 ### Testing
 
-Two layers of tests live in [tests/](tests/):
+Tests live in [tests/](tests/), organised by what they exercise:
 
-- **End-to-end** ([test_datastore_create.py](tests/test_datastore_create.py)) — uses the `client` fixture in [tests/conftest.py](tests/conftest.py), which wires up `FakeCKAN` (in-memory CKAN stand-in) and `InMemoryCache` via `app.dependency_overrides`. No real network calls.
-- **Service-level** ([test_write_service.py](tests/test_write_service.py)) — calls `create_datastore` directly with a fake context. Fast, no HTTP, isolates orchestration from FastAPI plumbing.
+```
+tests/
+├── conftest.py                   # FakeCKAN + InMemoryCache + TestClient fixture
+├── test_health.py                # /, /health, /ready
+├── test_datastore_*.py           # End-to-end per endpoint (TestClient)
+├── test_read_service.py          # Direct service calls — no HTTP
+├── test_write_service.py
+│
+├── auth/                         # Auth layer — one folder per provider
+│   ├── test_base.py              # Decision + default_key_id
+│   ├── test_registry.py          # AUTH_TYPE dispatch
+│   ├── test_orchestration.py     # api/auth.py boundary policy
+│   ├── ckan/test_provider.py     # CKAN provider + TTL cache
+│   ├── jwt/test_provider.py      # JWT signature / aud / iss / exp
+│   └── anonymous/test_provider.py
+│
+└── engines/
+    ├── bigquery/test_*.py        # Real BigQuery backend, fully mocked
+    └── ducklake/                 # (placeholder for future engine)
+```
 
-`FakeCKAN` exposes `add_resource(...)`, `add_package(...)`, `deny(api_key)` to set up scenarios, and an `authorize_calls` counter to assert cache behaviour.
+The `client` fixture in `conftest.py` wires up `FakeCKAN` (in-memory
+CKAN stand-in) and an `InMemoryCache` via `app.dependency_overrides`,
+and installs a `CKANAuthProvider` backed by the fake. No real network
+calls. `FakeCKAN` exposes `add_resource(...)`, `add_package(...)`,
+`deny(api_key)` and an `authorize_calls` counter to assert cache
+behaviour.
 
-Mark slow / network-bound tests with `@pytest.mark.integration` so they can be skipped in CI by default.
+An autouse `_isolate_bigquery_env` fixture clears the `BIGQUERY_*`
+envs so the engine stays in placeholder mode for every test.
 
-The CKAN pytest plugin auto-installed system-wide is disabled for this project via `addopts = "-p no:ckan -p no:ckan_fixtures"` in `pyproject.toml` — otherwise it tries to load a CKAN `.ini` we don't have.
+The CKAN pytest plugin auto-installed system-wide is disabled for this
+project via `addopts = "-p no:ckan -p no:ckan_fixtures"` in
+`pyproject.toml` — otherwise it tries to load a CKAN `.ini` we don't
+have.

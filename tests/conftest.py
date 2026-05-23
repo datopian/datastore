@@ -4,8 +4,9 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from datastore.api.context import get_cache, get_ckan_client
+from datastore.api.context import get_auth_provider, get_ckan_client
 from datastore.core.exceptions import AuthorizationError, NotFoundError
+from datastore.auth.ckan import Provider as CKANAuthProvider
 from datastore.infrastructure.cache import InMemoryCache
 from datastore.main import create_app
 from fastapi.testclient import TestClient
@@ -147,7 +148,11 @@ def cache() -> InMemoryCache:
 def client(fake_ckan: FakeCKAN, cache: InMemoryCache) -> Iterator[TestClient]:
     app = create_app()
     app.dependency_overrides[get_ckan_client] = lambda: fake_ckan
-    app.dependency_overrides[get_cache] = lambda: cache
+    # Auth provider talks to the same FakeCKAN — tests don't go through
+    # the real HTTP CKAN client. Mirrors what the lifespan would build.
+    app.dependency_overrides[get_auth_provider] = lambda: CKANAuthProvider(
+        ckan=fake_ckan, cache=cache, cache_ttl=60,
+    )
     with TestClient(app) as c:
         c.headers["Authorization"] = "test-token"
         yield c

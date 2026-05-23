@@ -26,8 +26,12 @@ async def create_datastore(
 
     fields, primary_key = frictionless_schema_to_fields(schema)
 
-    is_new_resource = isinstance(resource, dict)
-    if is_new_resource:
+    if isinstance(resource, dict):
+        # Endpoint gates this branch on AUTH_TYPE=ckan, so context.ckan is
+        # non-None here in practice; the assert keeps the type checker honest.
+        assert context.ckan is not None, (
+            "datastore_create `resource` dict path requires AUTH_TYPE=ckan"
+        )
         resource = await context.ckan.resource_create(resource=resource)
         resource_id = resource["id"]
     else:

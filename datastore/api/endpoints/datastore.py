@@ -8,6 +8,7 @@ from starlette.responses import StreamingResponse
 
 from datastore.api.context import Context
 from datastore.api.responses import _deprecation_warnings, _success_response
+from datastore.core.exceptions import ValidationError
 from datastore.schemas.request import (
     DatastoreCreateRequest,
     DatastoreDeleteRequest,
@@ -45,13 +46,19 @@ async def datastore_create(
 ):
     """`POST /api/3/datastore_create` — authorize, then run the create flow."""
 
+    if payload.resource is not None and context.config.AUTH_TYPE != "ckan":
+        raise ValidationError(
+            "`resource` dict is only supported for ckan auth; for other auth types,"
+            "use `resource_id` instead"
+        )
+
     if payload.resource_id:
-        data_dict = await context.auth.authorize(
+        data_dict = await context.authorize(
             resource_id=payload.resource_id,
             permission="create",
         )
     else:
-        data_dict = await context.auth.authorize(
+        data_dict = await context.authorize(
             package_id=payload.resource.get("package_id"),
             permission="create",
         )
@@ -79,7 +86,7 @@ async def datastore_upsert(
     context: Context,
 ):
     """`POST /api/3/datastore_upsert` — authorize, then upsert / insert / update rows."""
-    data_dict = await context.auth.authorize(
+    data_dict = await context.authorize(
         resource_id=payload.resource_id,
         permission="update",
     )
@@ -103,7 +110,7 @@ async def datastore_search(
     iterator in a `StreamingResponse` with a fixed `application/json`
     media type.
     """
-    data_dict = await context.auth.authorize(
+    data_dict = await context.authorize(
         resource_id=params.resource_id,
         permission="read",
     )
@@ -122,7 +129,7 @@ async def datastore_search_sql(
     Accepts a single `sql` query parameter;
     """
     for resource_id in params.resource_ids:
-        await context.auth.authorize(resource_id=resource_id, permission="read")
+        await context.authorize(resource_id=resource_id, permission="read")
 
     data_dict = params.model_dump() | {
         "function_names": params.function_names,
@@ -151,7 +158,7 @@ async def datastore_info(
         result.fields  — column schema, list of {"id", "type", ...}
         result.meta    — free-form dict (engine-specific extras)
     """
-    await context.auth.authorize(resource_id=params.resource_id, permission="read")
+    await context.authorize(resource_id=params.resource_id, permission="read")
     result = await info_datastore(context, params.model_dump())
     return _success_response(request, result)
 
@@ -174,6 +181,6 @@ async def datastore_delete(
     Returns the original `filters` echoed back (CKAN convention) so the
     caller can confirm what the server actually applied.
     """
-    await context.auth.authorize(resource_id=payload.resource_id, permission="delete")
+    await context.authorize(resource_id=payload.resource_id, permission="delete")
     result = await delete_datastore(context, payload.model_dump())
     return _success_response(request, result)

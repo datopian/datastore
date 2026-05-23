@@ -78,6 +78,68 @@ def test_create_with_resource_dict_succeeds(client: TestClient) -> None:
     assert result["package_id"] == "pkg-balancing-2025"
 
 
+def test_create_with_resource_dict_rejected_when_auth_type_is_not_ckan(
+    fake_ckan: FakeCKAN,
+) -> None:
+    """Only the CKAN provider can materialise a fresh resource on the fly
+    (`ckan.resource_create(...)`). Under JWT / anonymous auth the call has
+    nowhere to land — the endpoint rejects the dict form and tells the
+    caller to send `resource_id` instead."""
+    from datastore.api.context import get_auth_provider, get_ckan_client
+    from datastore.auth.anonymous import Provider as AnonymousProvider
+    from datastore.core.config import Config, get_config
+    from datastore.main import create_app
+
+    app = create_app()
+    app.dependency_overrides[get_config] = lambda: Config(
+        AUTH_TYPE="anonymous", CKAN_URL=""
+    )
+    app.dependency_overrides[get_ckan_client] = lambda: fake_ckan
+    app.dependency_overrides[get_auth_provider] = lambda: AnonymousProvider()
+
+    with TestClient(app) as c:
+        response = c.post(CREATE_URL, json=_valid_payload_with_resource())
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["success"] is False
+    assert body["error"]["__type"] == "Validation Error"
+    # Message must point the caller at the alternative (`resource_id`)
+    # and name ckan as the gate — exact wording is intentionally loose.
+    msg = body["error"]["message"]
+    assert "resource_id" in msg
+    assert "ckan" in msg.lower()
+
+
+def test_create_with_resource_id_succeeds_under_anonymous_auth(
+    fake_ckan: FakeCKAN,
+) -> None:
+    """The `resource_id` form keeps working without CKAN — no resource
+    materialisation needed, just the engine create."""
+    from datastore.api.context import get_auth_provider, get_ckan_client
+    from datastore.auth.anonymous import Provider as AnonymousProvider
+    from datastore.core.config import Config, get_config
+    from datastore.main import create_app
+
+    app = create_app()
+    app.dependency_overrides[get_config] = lambda: Config(
+        AUTH_TYPE="anonymous", CKAN_URL=""
+    )
+    app.dependency_overrides[get_ckan_client] = lambda: fake_ckan
+    app.dependency_overrides[get_auth_provider] = lambda: AnonymousProvider()
+
+    with TestClient(app) as c:
+        # Policy still requires *some* credential for non-read permissions;
+        # the anonymous provider just doesn't check what it is.
+        c.headers["Authorization"] = "any-token"
+        response = c.post(CREATE_URL, json=_valid_payload_with_resource_id())
+
+    assert response.status_code == 200
+    assert response.json()["result"]["resource_id"] == (
+        "balancing_auction_results_2025"
+    )
+
+
 # 2. Missing required field -------------------------------------------------
 
 
