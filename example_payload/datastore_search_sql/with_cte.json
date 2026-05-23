@@ -1,3 +1,0 @@
-{
-  "sql": "WITH daily AS (SELECT DATE(delivery_start) AS d, product_code, AVG(clearing_price_gbp_per_mwh) AS price FROM \"424ff992-17ff-4900-9ba4-c9450fff95ca\" WHERE accepted = true GROUP BY d, product_code) SELECT * FROM daily ORDER BY d DESC, product_code LIMIT 50"
-}

@@ -1,8 +1,0 @@
-{
-  "resource_id": "balancing_auction_results_2025",
-  "filters": {
-    "product_code": "DCL",
-    "accepted": true
-  },
-  "limit": 100
-}

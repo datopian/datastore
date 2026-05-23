@@ -1,0 +1,861 @@
+{
+  "info": {
+    "_postman_id": "b96f5ccc-fdd3-4a22-8911-51a5719b753e",
+    "name": "Datastore API",
+    "description": "CKAN-compatible datastore API \u2014 auto-generated from `example_payload/`. Set `baseUrl` to your server, `apiKey` to a CKAN API key (anonymous reads are allowed; writes require a key), and `resourceId` to the table you want to hit.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "resourceId",
+      "value": "balancing_auction_results_2025",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "Authorization",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "health",
+      "description": "Health endpoints live at the root and also under `/api/3/action/` so k8s probes and CKAN clients can both reach them. Listed here at the root.",
+      "item": [
+        {
+          "name": "Welcome",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ""
+              ]
+            },
+            "description": "Banner / root endpoint. Echoes `APP_MESSAGE`."
+          },
+          "response": []
+        },
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Liveness probe \u2014 always 200 while the process is up."
+          },
+          "response": []
+        },
+        {
+          "name": "Ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ready"
+              ]
+            },
+            "description": "Readiness probe \u2014 200 only when both engines pass healthcheck."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "datastore_create",
+      "description": "Declare a resource and optionally seed it with rows. Run this first. Accepts either the canonical Frictionless `schema` or the legacy `fields` + `primary_key` shape.",
+      "item": [
+        {
+          "name": "Create - Frictionless schema (recommended)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource_id\": \"balancing_auction_results_2025\",\n  \"schema\": {\n    \"fields\": [\n      {\n        \"name\": \"auction_id\",\n        \"type\": \"integer\",\n        \"title\": \"Auction ID\",\n        \"description\": \"Unique auction identifier.\"\n      },\n      {\n        \"name\": \"product_code\",\n        \"type\": \"string\",\n        \"title\": \"Product Code\"\n      },\n      {\n        \"name\": \"delivery_start\",\n        \"type\": \"datetime\",\n        \"title\": \"Delivery Start (UTC)\"\n      },\n      {\n        \"name\": \"duration_minutes\",\n        \"type\": \"integer\",\n        \"info\": {\n          \"unit\": \"minutes\"\n        }\n      },\n      {\n        \"name\": \"clearing_price_gbp_per_mwh\",\n        \"type\": \"number\",\n        \"title\": \"Clearing Price\",\n        \"info\": {\n          \"unit\": \"GBP/MWh\"\n        }\n      },\n      {\n        \"name\": \"volume_mwh\",\n        \"type\": \"number\",\n        \"info\": {\n          \"unit\": \"MWh\"\n        }\n      },\n      {\n        \"name\": \"accepted\",\n        \"type\": \"boolean\"\n      },\n      {\n        \"name\": \"bidder_metadata\",\n        \"type\": \"object\"\n      }\n    ],\n    \"primaryKey\": [\n      \"auction_id\",\n      \"product_code\"\n    ]\n  },\n  \"records\": [\n    {\n      \"auction_id\": 1,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.99,\n      \"volume_mwh\": 52.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 171\n      }\n    },\n    {\n      \"auction_id\": 1,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.41,\n      \"volume_mwh\": 117.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 402\n      }\n    },\n    {\n      \"auction_id\": 2,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.55,\n      \"volume_mwh\": 53.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 408\n      }\n    },\n    {\n      \"auction_id\": 2,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 35.66,\n      \"volume_mwh\": 69.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 314\n      }\n    },\n    {\n      \"auction_id\": 3,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.51,\n      \"volume_mwh\": 108.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 488\n      }\n    },\n    {\n      \"auction_id\": 3,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.15,\n      \"volume_mwh\": 119.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 210\n      }\n    },\n    {\n      \"auction_id\": 4,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.93,\n      \"volume_mwh\": 83.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 283\n      }\n    },\n    {\n      \"auction_id\": 4,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.19,\n      \"volume_mwh\": 110.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 374\n      }\n    },\n    {\n      \"auction_id\": 5,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.12,\n      \"volume_mwh\": 142.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 524\n      }\n    },\n    {\n      \"auction_id\": 5,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.72,\n      \"volume_mwh\": 138.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 460\n      }\n    },\n    {\n      \"auction_id\": 6,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.74,\n      \"volume_mwh\": 116.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 537\n      }\n    },\n    {\n      \"auction_id\": 6,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.82,\n      \"volume_mwh\": 60.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 183\n      }\n    },\n    {\n      \"auction_id\": 7,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.25,\n      \"volume_mwh\": 71.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 411\n      }\n    },\n    {\n      \"auction_id\": 7,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.87,\n      \"volume_mwh\": 103.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 294\n      }\n    },\n    {\n      \"auction_id\": 8,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.75,\n      \"volume_mwh\": 142.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 450\n      }\n    },\n    {\n      \"auction_id\": 8,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 43.11,\n      \"volume_mwh\": 126.8,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 512\n      }\n    },\n    {\n      \"auction_id\": 9,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 42.89,\n      \"volume_mwh\": 76.8,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 548\n      }\n    },\n    {\n      \"auction_id\": 9,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.95,\n      \"volume_mwh\": 71.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 173\n      }\n    },\n    {\n      \"auction_id\": 10,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.62,\n      \"volume_mwh\": 74.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 482\n      }\n    },\n    {\n      \"auction_id\": 10,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.61,\n      \"volume_mwh\": 139.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 170\n      }\n    },\n    {\n      \"auction_id\": 11,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.74,\n      \"volume_mwh\": 59.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 178\n      }\n    },\n    {\n      \"auction_id\": 11,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.69,\n      \"volume_mwh\": 129.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 297\n      }\n    },\n    {\n      \"auction_id\": 12,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.54,\n      \"volume_mwh\": 149.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 540\n      }\n    },\n    {\n      \"auction_id\": 12,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.56,\n      \"volume_mwh\": 118.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 484\n      }\n    },\n    {\n      \"auction_id\": 13,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.67,\n      \"volume_mwh\": 114.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 180\n      }\n    },\n    {\n      \"auction_id\": 13,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.34,\n      \"volume_mwh\": 145.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 597\n      }\n    },\n    {\n      \"auction_id\": 14,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.51,\n      \"volume_mwh\": 67.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 530\n      }\n    },\n    {\n      \"auction_id\": 14,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.97,\n      \"volume_mwh\": 110.9,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 376\n      }\n    },\n    {\n      \"auction_id\": 15,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.84,\n      \"volume_mwh\": 142.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 265\n      }\n    },\n    {\n      \"auction_id\": 15,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.22,\n      \"volume_mwh\": 61.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 222\n      }\n    },\n    {\n      \"auction_id\": 16,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.45,\n      \"volume_mwh\": 137.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 474\n      }\n    },\n    {\n      \"auction_id\": 16,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.15,\n      \"volume_mwh\": 56.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 165\n      }\n    },\n    {\n      \"auction_id\": 17,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.49,\n      \"volume_mwh\": 144.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 546\n      }\n    },\n    {\n      \"auction_id\": 17,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.16,\n      \"volume_mwh\": 146.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 465\n      }\n    },\n    {\n      \"auction_id\": 18,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 42.79,\n      \"volume_mwh\": 149.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 560\n      }\n    },\n    {\n      \"auction_id\": 18,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.94,\n      \"volume_mwh\": 62.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 110\n      }\n    },\n    {\n      \"auction_id\": 19,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.71,\n      \"volume_mwh\": 73.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 462\n      }\n    },\n    {\n      \"auction_id\": 19,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.78,\n      \"volume_mwh\": 72.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 136\n      }\n    },\n    {\n      \"auction_id\": 20,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.85,\n      \"volume_mwh\": 77.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 167\n      }\n    },\n    {\n      \"auction_id\": 20,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.08,\n      \"volume_mwh\": 138.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 501\n      }\n    },\n    {\n      \"auction_id\": 21,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.82,\n      \"volume_mwh\": 90.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 281\n      }\n    },\n    {\n      \"auction_id\": 21,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.59,\n      \"volume_mwh\": 96.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 131\n      }\n    },\n    {\n      \"auction_id\": 22,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.07,\n      \"volume_mwh\": 83.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 198\n      }\n    },\n    {\n      \"auction_id\": 22,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.76,\n      \"volume_mwh\": 94.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 336\n      }\n    },\n    {\n      \"auction_id\": 23,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.25,\n      \"volume_mwh\": 142.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 150\n      }\n    },\n    {\n      \"auction_id\": 23,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.26,\n      \"volume_mwh\": 149.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 574\n      }\n    },\n    {\n      \"auction_id\": 24,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.84,\n      \"volume_mwh\": 73.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 209\n      }\n    },\n    {\n      \"auction_id\": 24,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.62,\n      \"volume_mwh\": 140.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 299\n      }\n    },\n    {\n      \"auction_id\": 25,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.63,\n      \"volume_mwh\": 128.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 456\n      }\n    },\n    {\n      \"auction_id\": 25,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.93,\n      \"volume_mwh\": 149.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 179\n      }\n    },\n    {\n      \"auction_id\": 26,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.75,\n      \"volume_mwh\": 71.8,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 131\n      }\n    },\n    {\n      \"auction_id\": 26,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.7,\n      \"volume_mwh\": 55.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 570\n      }\n    },\n    {\n      \"auction_id\": 27,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.32,\n      \"volume_mwh\": 65.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 535\n      }\n    },\n    {\n      \"auction_id\": 27,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.65,\n      \"volume_mwh\": 109.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 306\n      }\n    },\n    {\n      \"auction_id\": 28,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.0,\n      \"volume_mwh\": 139.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 120\n      }\n    },\n    {\n      \"auction_id\": 28,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.48,\n      \"volume_mwh\": 91.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 261\n      }\n    },\n    {\n      \"auction_id\": 29,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.37,\n      \"volume_mwh\": 70.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 235\n      }\n    },\n    {\n      \"auction_id\": 29,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.89,\n      \"volume_mwh\": 117.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 575\n      }\n    },\n    {\n      \"auction_id\": 30,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.8,\n      \"volume_mwh\": 57.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 151\n      }\n    },\n    {\n      \"auction_id\": 30,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.83,\n      \"volume_mwh\": 71.3,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 551\n      }\n    },\n    {\n      \"auction_id\": 31,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.72,\n      \"volume_mwh\": 74.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 526\n      }\n    },\n    {\n      \"auction_id\": 31,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 48.58,\n      \"volume_mwh\": 80.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 104\n      }\n    },\n    {\n      \"auction_id\": 32,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.7,\n      \"volume_mwh\": 105.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 580\n      }\n    },\n    {\n      \"auction_id\": 32,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.95,\n      \"volume_mwh\": 76.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 179\n      }\n    },\n    {\n      \"auction_id\": 33,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.81,\n      \"volume_mwh\": 110.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 451\n      }\n    },\n    {\n      \"auction_id\": 33,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.86,\n      \"volume_mwh\": 76.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 147\n      }\n    },\n    {\n      \"auction_id\": 34,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.86,\n      \"volume_mwh\": 132.9,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 494\n      }\n    },\n    {\n      \"auction_id\": 34,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.27,\n      \"volume_mwh\": 148.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 382\n      }\n    },\n    {\n      \"auction_id\": 35,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.64,\n      \"volume_mwh\": 106.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 379\n      }\n    },\n    {\n      \"auction_id\": 35,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 35.9,\n      \"volume_mwh\": 86.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 165\n      }\n    },\n    {\n      \"auction_id\": 36,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.05,\n      \"volume_mwh\": 86.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 560\n      }\n    },\n    {\n      \"auction_id\": 36,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 43.95,\n      \"volume_mwh\": 118.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 499\n      }\n    },\n    {\n      \"auction_id\": 37,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.0,\n      \"volume_mwh\": 137.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 573\n      }\n    },\n    {\n      \"auction_id\": 37,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.25,\n      \"volume_mwh\": 136.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 551\n      }\n    },\n    {\n      \"auction_id\": 38,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.31,\n      \"volume_mwh\": 67.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 510\n      }\n    },\n    {\n      \"auction_id\": 38,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.75,\n      \"volume_mwh\": 123.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 503\n      }\n    },\n    {\n      \"auction_id\": 39,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.53,\n      \"volume_mwh\": 88.3,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 213\n      }\n    },\n    {\n      \"auction_id\": 39,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.99,\n      \"volume_mwh\": 141.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 214\n      }\n    },\n    {\n      \"auction_id\": 40,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 35.59,\n      \"volume_mwh\": 69.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 595\n      }\n    },\n    {\n      \"auction_id\": 40,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 54.33,\n      \"volume_mwh\": 85.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 269\n      }\n    },\n    {\n      \"auction_id\": 41,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.48,\n      \"volume_mwh\": 61.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 397\n      }\n    },\n    {\n      \"auction_id\": 41,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 59.06,\n      \"volume_mwh\": 76.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 276\n      }\n    },\n    {\n      \"auction_id\": 42,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.21,\n      \"volume_mwh\": 81.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 159\n      }\n    },\n    {\n      \"auction_id\": 42,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.63,\n      \"volume_mwh\": 107.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 100\n      }\n    },\n    {\n      \"auction_id\": 43,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 48.0,\n      \"volume_mwh\": 130.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 286\n      }\n    },\n    {\n      \"auction_id\": 43,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.78,\n      \"volume_mwh\": 144.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 260\n      }\n    },\n    {\n      \"auction_id\": 44,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.58,\n      \"volume_mwh\": 62.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 258\n      }\n    },\n    {\n      \"auction_id\": 44,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.67,\n      \"volume_mwh\": 82.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 165\n      }\n    },\n    {\n      \"auction_id\": 45,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.8,\n      \"volume_mwh\": 116.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 415\n      }\n    },\n    {\n      \"auction_id\": 45,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.23,\n      \"volume_mwh\": 90.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 246\n      }\n    },\n    {\n      \"auction_id\": 46,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.25,\n      \"volume_mwh\": 128.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 338\n      }\n    },\n    {\n      \"auction_id\": 46,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.04,\n      \"volume_mwh\": 117.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 437\n      }\n    },\n    {\n      \"auction_id\": 47,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 37.12,\n      \"volume_mwh\": 101.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 147\n      }\n    },\n    {\n      \"auction_id\": 47,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.46,\n      \"volume_mwh\": 125.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 512\n      }\n    },\n    {\n      \"auction_id\": 48,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.98,\n      \"volume_mwh\": 52.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 412\n      }\n    },\n    {\n      \"auction_id\": 48,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.24,\n      \"volume_mwh\": 57.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 199\n      }\n    },\n    {\n      \"auction_id\": 49,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.96,\n      \"volume_mwh\": 88.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 435\n      }\n    },\n    {\n      \"auction_id\": 49,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.19,\n      \"volume_mwh\": 139.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 498\n      }\n    },\n    {\n      \"auction_id\": 50,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.63,\n      \"volume_mwh\": 67.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 337\n      }\n    },\n    {\n      \"auction_id\": 50,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.26,\n      \"volume_mwh\": 74.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 168\n      }\n    },\n    {\n      \"auction_id\": 51,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.04,\n      \"volume_mwh\": 116.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 262\n      }\n    },\n    {\n      \"auction_id\": 51,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.75,\n      \"volume_mwh\": 139.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 318\n      }\n    },\n    {\n      \"auction_id\": 52,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.76,\n      \"volume_mwh\": 104.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 330\n      }\n    },\n    {\n      \"auction_id\": 52,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.48,\n      \"volume_mwh\": 74.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 348\n      }\n    },\n    {\n      \"auction_id\": 53,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-10T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.67,\n      \"volume_mwh\": 77.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 220\n      }\n    },\n    {\n      \"auction_id\": 53,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-10T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.79,\n      \"volume_mwh\": 82.0,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 177\n      }\n    },\n    {\n      \"auction_id\": 54,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-10T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.78,\n      \"volume_mwh\": 119.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 312\n      }\n    },\n    {\n      \"auction_id\": 54,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-10T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.19,\n      \"volume_mwh\": 104.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 526\n      }\n    },\n    {\n      \"auction_id\": 55,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-10T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.5,\n      \"volume_mwh\": 140.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 538\n      }\n    },\n    {\n      \"auction_id\": 55,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-10T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 57.02,\n      \"volume_mwh\": 107.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 252\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_create",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_create"
+              ]
+            },
+            "description": "Canonical input: pass a Frictionless Table Schema under `schema` and (optionally) seed rows under `records`."
+          },
+          "response": []
+        },
+        {
+          "name": "Create - legacy fields, existing resource",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource_id\": \"balancing_auction_results_2025\",\n  \"fields\": [\n    {\n      \"id\": \"auction_id\",\n      \"type\": \"int4\",\n      \"info\": {\n        \"title\": \"Auction ID\",\n        \"description\": \"Unique auction identifier.\"\n      }\n    },\n    {\n      \"id\": \"product_code\",\n      \"type\": \"text\"\n    },\n    {\n      \"id\": \"delivery_start\",\n      \"type\": \"timestamptz\",\n      \"info\": {\n        \"title\": \"Delivery Start (UTC)\"\n      }\n    },\n    {\n      \"id\": \"duration_minutes\",\n      \"type\": \"int4\",\n      \"info\": {\n        \"unit\": \"minutes\"\n      }\n    },\n    {\n      \"id\": \"clearing_price_gbp_per_mwh\",\n      \"type\": \"float8\",\n      \"info\": {\n        \"unit\": \"GBP/MWh\"\n      }\n    },\n    {\n      \"id\": \"volume_mwh\",\n      \"type\": \"float8\",\n      \"info\": {\n        \"unit\": \"MWh\"\n      }\n    },\n    {\n      \"id\": \"accepted\",\n      \"type\": \"bool\"\n    },\n    {\n      \"id\": \"bidder_metadata\",\n      \"type\": \"jsonb\"\n    }\n  ],\n  \"primary_key\": [\n    \"auction_id\",\n    \"product_code\"\n  ],\n  \"records\": [\n    {\n      \"auction_id\": 1,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.99,\n      \"volume_mwh\": 52.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 171\n      }\n    },\n    {\n      \"auction_id\": 1,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.41,\n      \"volume_mwh\": 117.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 402\n      }\n    },\n    {\n      \"auction_id\": 2,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.55,\n      \"volume_mwh\": 53.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 408\n      }\n    },\n    {\n      \"auction_id\": 2,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 35.66,\n      \"volume_mwh\": 69.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 314\n      }\n    },\n    {\n      \"auction_id\": 3,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.51,\n      \"volume_mwh\": 108.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 488\n      }\n    },\n    {\n      \"auction_id\": 3,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.15,\n      \"volume_mwh\": 119.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 210\n      }\n    },\n    {\n      \"auction_id\": 4,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.93,\n      \"volume_mwh\": 83.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 283\n      }\n    },\n    {\n      \"auction_id\": 4,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.19,\n      \"volume_mwh\": 110.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 374\n      }\n    },\n    {\n      \"auction_id\": 5,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.12,\n      \"volume_mwh\": 142.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 524\n      }\n    },\n    {\n      \"auction_id\": 5,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.72,\n      \"volume_mwh\": 138.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 460\n      }\n    },\n    {\n      \"auction_id\": 6,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.74,\n      \"volume_mwh\": 116.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 537\n      }\n    },\n    {\n      \"auction_id\": 6,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.82,\n      \"volume_mwh\": 60.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 183\n      }\n    },\n    {\n      \"auction_id\": 7,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.25,\n      \"volume_mwh\": 71.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 411\n      }\n    },\n    {\n      \"auction_id\": 7,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.87,\n      \"volume_mwh\": 103.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 294\n      }\n    },\n    {\n      \"auction_id\": 8,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.75,\n      \"volume_mwh\": 142.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 450\n      }\n    },\n    {\n      \"auction_id\": 8,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 43.11,\n      \"volume_mwh\": 126.8,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 512\n      }\n    },\n    {\n      \"auction_id\": 9,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 42.89,\n      \"volume_mwh\": 76.8,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 548\n      }\n    },\n    {\n      \"auction_id\": 9,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.95,\n      \"volume_mwh\": 71.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 173\n      }\n    },\n    {\n      \"auction_id\": 10,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.62,\n      \"volume_mwh\": 74.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 482\n      }\n    },\n    {\n      \"auction_id\": 10,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.61,\n      \"volume_mwh\": 139.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 170\n      }\n    },\n    {\n      \"auction_id\": 11,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.74,\n      \"volume_mwh\": 59.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 178\n      }\n    },\n    {\n      \"auction_id\": 11,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.69,\n      \"volume_mwh\": 129.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 297\n      }\n    },\n    {\n      \"auction_id\": 12,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.54,\n      \"volume_mwh\": 149.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 540\n      }\n    },\n    {\n      \"auction_id\": 12,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.56,\n      \"volume_mwh\": 118.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 484\n      }\n    },\n    {\n      \"auction_id\": 13,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.67,\n      \"volume_mwh\": 114.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 180\n      }\n    },\n    {\n      \"auction_id\": 13,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.34,\n      \"volume_mwh\": 145.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 597\n      }\n    },\n    {\n      \"auction_id\": 14,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.51,\n      \"volume_mwh\": 67.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 530\n      }\n    },\n    {\n      \"auction_id\": 14,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.97,\n      \"volume_mwh\": 110.9,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 376\n      }\n    },\n    {\n      \"auction_id\": 15,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.84,\n      \"volume_mwh\": 142.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 265\n      }\n    },\n    {\n      \"auction_id\": 15,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.22,\n      \"volume_mwh\": 61.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 222\n      }\n    },\n    {\n      \"auction_id\": 16,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.45,\n      \"volume_mwh\": 137.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 474\n      }\n    },\n    {\n      \"auction_id\": 16,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.15,\n      \"volume_mwh\": 56.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 165\n      }\n    },\n    {\n      \"auction_id\": 17,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.49,\n      \"volume_mwh\": 144.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 546\n      }\n    },\n    {\n      \"auction_id\": 17,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.16,\n      \"volume_mwh\": 146.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 465\n      }\n    },\n    {\n      \"auction_id\": 18,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 42.79,\n      \"volume_mwh\": 149.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 560\n      }\n    },\n    {\n      \"auction_id\": 18,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.94,\n      \"volume_mwh\": 62.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 110\n      }\n    },\n    {\n      \"auction_id\": 19,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.71,\n      \"volume_mwh\": 73.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 462\n      }\n    },\n    {\n      \"auction_id\": 19,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.78,\n      \"volume_mwh\": 72.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 136\n      }\n    },\n    {\n      \"auction_id\": 20,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.85,\n      \"volume_mwh\": 77.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 167\n      }\n    },\n    {\n      \"auction_id\": 20,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.08,\n      \"volume_mwh\": 138.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 501\n      }\n    },\n    {\n      \"auction_id\": 21,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.82,\n      \"volume_mwh\": 90.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 281\n      }\n    },\n    {\n      \"auction_id\": 21,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.59,\n      \"volume_mwh\": 96.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 131\n      }\n    },\n    {\n      \"auction_id\": 22,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.07,\n      \"volume_mwh\": 83.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 198\n      }\n    },\n    {\n      \"auction_id\": 22,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.76,\n      \"volume_mwh\": 94.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 336\n      }\n    },\n    {\n      \"auction_id\": 23,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.25,\n      \"volume_mwh\": 142.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 150\n      }\n    },\n    {\n      \"auction_id\": 23,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.26,\n      \"volume_mwh\": 149.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 574\n      }\n    },\n    {\n      \"auction_id\": 24,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.84,\n      \"volume_mwh\": 73.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 209\n      }\n    },\n    {\n      \"auction_id\": 24,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.62,\n      \"volume_mwh\": 140.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 299\n      }\n    },\n    {\n      \"auction_id\": 25,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.63,\n      \"volume_mwh\": 128.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 456\n      }\n    },\n    {\n      \"auction_id\": 25,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.93,\n      \"volume_mwh\": 149.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 179\n      }\n    },\n    {\n      \"auction_id\": 26,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.75,\n      \"volume_mwh\": 71.8,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 131\n      }\n    },\n    {\n      \"auction_id\": 26,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.7,\n      \"volume_mwh\": 55.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 570\n      }\n    },\n    {\n      \"auction_id\": 27,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.32,\n      \"volume_mwh\": 65.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 535\n      }\n    },\n    {\n      \"auction_id\": 27,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.65,\n      \"volume_mwh\": 109.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 306\n      }\n    },\n    {\n      \"auction_id\": 28,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.0,\n      \"volume_mwh\": 139.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 120\n      }\n    },\n    {\n      \"auction_id\": 28,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.48,\n      \"volume_mwh\": 91.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 261\n      }\n    },\n    {\n      \"auction_id\": 29,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.37,\n      \"volume_mwh\": 70.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 235\n      }\n    },\n    {\n      \"auction_id\": 29,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.89,\n      \"volume_mwh\": 117.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 575\n      }\n    },\n    {\n      \"auction_id\": 30,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.8,\n      \"volume_mwh\": 57.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 151\n      }\n    },\n    {\n      \"auction_id\": 30,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.83,\n      \"volume_mwh\": 71.3,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 551\n      }\n    },\n    {\n      \"auction_id\": 31,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.72,\n      \"volume_mwh\": 74.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 526\n      }\n    },\n    {\n      \"auction_id\": 31,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 48.58,\n      \"volume_mwh\": 80.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 104\n      }\n    },\n    {\n      \"auction_id\": 32,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.7,\n      \"volume_mwh\": 105.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 580\n      }\n    },\n    {\n      \"auction_id\": 32,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.95,\n      \"volume_mwh\": 76.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 179\n      }\n    },\n    {\n      \"auction_id\": 33,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.81,\n      \"volume_mwh\": 110.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 451\n      }\n    },\n    {\n      \"auction_id\": 33,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.86,\n      \"volume_mwh\": 76.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 147\n      }\n    },\n    {\n      \"auction_id\": 34,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.86,\n      \"volume_mwh\": 132.9,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 494\n      }\n    },\n    {\n      \"auction_id\": 34,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.27,\n      \"volume_mwh\": 148.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 382\n      }\n    },\n    {\n      \"auction_id\": 35,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.64,\n      \"volume_mwh\": 106.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 379\n      }\n    },\n    {\n      \"auction_id\": 35,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 35.9,\n      \"volume_mwh\": 86.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 165\n      }\n    },\n    {\n      \"auction_id\": 36,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.05,\n      \"volume_mwh\": 86.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 560\n      }\n    },\n    {\n      \"auction_id\": 36,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 43.95,\n      \"volume_mwh\": 118.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 499\n      }\n    },\n    {\n      \"auction_id\": 37,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.0,\n      \"volume_mwh\": 137.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 573\n      }\n    },\n    {\n      \"auction_id\": 37,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.25,\n      \"volume_mwh\": 136.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 551\n      }\n    },\n    {\n      \"auction_id\": 38,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.31,\n      \"volume_mwh\": 67.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 510\n      }\n    },\n    {\n      \"auction_id\": 38,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.75,\n      \"volume_mwh\": 123.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 503\n      }\n    },\n    {\n      \"auction_id\": 39,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.53,\n      \"volume_mwh\": 88.3,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 213\n      }\n    },\n    {\n      \"auction_id\": 39,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.99,\n      \"volume_mwh\": 141.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 214\n      }\n    },\n    {\n      \"auction_id\": 40,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 35.59,\n      \"volume_mwh\": 69.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 595\n      }\n    },\n    {\n      \"auction_id\": 40,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 54.33,\n      \"volume_mwh\": 85.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 269\n      }\n    },\n    {\n      \"auction_id\": 41,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.48,\n      \"volume_mwh\": 61.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 397\n      }\n    },\n    {\n      \"auction_id\": 41,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 59.06,\n      \"volume_mwh\": 76.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 276\n      }\n    },\n    {\n      \"auction_id\": 42,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.21,\n      \"volume_mwh\": 81.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 159\n      }\n    },\n    {\n      \"auction_id\": 42,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.63,\n      \"volume_mwh\": 107.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 100\n      }\n    },\n    {\n      \"auction_id\": 43,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 48.0,\n      \"volume_mwh\": 130.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 286\n      }\n    },\n    {\n      \"auction_id\": 43,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.78,\n      \"volume_mwh\": 144.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 260\n      }\n    },\n    {\n      \"auction_id\": 44,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.58,\n      \"volume_mwh\": 62.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 258\n      }\n    },\n    {\n      \"auction_id\": 44,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.67,\n      \"volume_mwh\": 82.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 165\n      }\n    },\n    {\n      \"auction_id\": 45,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.8,\n      \"volume_mwh\": 116.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 415\n      }\n    },\n    {\n      \"auction_id\": 45,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.23,\n      \"volume_mwh\": 90.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 246\n      }\n    },\n    {\n      \"auction_id\": 46,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.25,\n      \"volume_mwh\": 128.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 338\n      }\n    },\n    {\n      \"auction_id\": 46,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.04,\n      \"volume_mwh\": 117.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 437\n      }\n    },\n    {\n      \"auction_id\": 47,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 37.12,\n      \"volume_mwh\": 101.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 147\n      }\n    },\n    {\n      \"auction_id\": 47,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.46,\n      \"volume_mwh\": 125.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 512\n      }\n    },\n    {\n      \"auction_id\": 48,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.98,\n      \"volume_mwh\": 52.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 412\n      }\n    },\n    {\n      \"auction_id\": 48,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.24,\n      \"volume_mwh\": 57.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 199\n      }\n    },\n    {\n      \"auction_id\": 49,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.96,\n      \"volume_mwh\": 88.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 435\n      }\n    },\n    {\n      \"auction_id\": 49,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.19,\n      \"volume_mwh\": 139.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 498\n      }\n    },\n    {\n      \"auction_id\": 50,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.63,\n      \"volume_mwh\": 67.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 337\n      }\n    },\n    {\n      \"auction_id\": 50,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.26,\n      \"volume_mwh\": 74.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 168\n      }\n    },\n    {\n      \"auction_id\": 51,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.04,\n      \"volume_mwh\": 116.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 262\n      }\n    },\n    {\n      \"auction_id\": 51,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.75,\n      \"volume_mwh\": 139.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 318\n      }\n    },\n    {\n      \"auction_id\": 52,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.76,\n      \"volume_mwh\": 104.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 330\n      }\n    },\n    {\n      \"auction_id\": 52,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.48,\n      \"volume_mwh\": 74.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 348\n      }\n    },\n    {\n      \"auction_id\": 53,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-10T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.67,\n      \"volume_mwh\": 77.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 220\n      }\n    },\n    {\n      \"auction_id\": 53,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-10T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.79,\n      \"volume_mwh\": 82.0,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 177\n      }\n    },\n    {\n      \"auction_id\": 54,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-10T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.78,\n      \"volume_mwh\": 119.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 312\n      }\n    },\n    {\n      \"auction_id\": 54,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-10T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.19,\n      \"volume_mwh\": 104.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 526\n      }\n    },\n    {\n      \"auction_id\": 55,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-10T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.5,\n      \"volume_mwh\": 140.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 538\n      }\n    },\n    {\n      \"auction_id\": 55,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-10T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 57.02,\n      \"volume_mwh\": 107.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 252\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_create",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_create"
+              ]
+            },
+            "description": "Back-compat path: the legacy `fields` + `primary_key` shape against a resource id that already exists in CKAN."
+          },
+          "response": []
+        },
+        {
+          "name": "Create - legacy fields, new resource",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource\": {\n    \"id\": \"balancing_auction_results_2025\",\n    \"name\": \"Balancing Auction Results 2025\",\n    \"package_id\": \"pkg-balancing-2025\",\n    \"format\": \"datastore\",\n    \"mimetype\": \"application/json\",\n    \"description\": \"Cleared bids from the balancing market, one row per auction \\u00d7 product.\"\n  },\n  \"fields\": [\n    {\n      \"id\": \"auction_id\",\n      \"type\": \"int4\",\n      \"info\": {\n        \"title\": \"Auction ID\",\n        \"description\": \"Unique auction identifier.\"\n      }\n    },\n    {\n      \"id\": \"product_code\",\n      \"type\": \"text\"\n    },\n    {\n      \"id\": \"delivery_start\",\n      \"type\": \"timestamptz\",\n      \"info\": {\n        \"title\": \"Delivery Start (UTC)\"\n      }\n    },\n    {\n      \"id\": \"duration_minutes\",\n      \"type\": \"int4\",\n      \"info\": {\n        \"unit\": \"minutes\"\n      }\n    },\n    {\n      \"id\": \"clearing_price_gbp_per_mwh\",\n      \"type\": \"float8\",\n      \"info\": {\n        \"unit\": \"GBP/MWh\"\n      }\n    },\n    {\n      \"id\": \"volume_mwh\",\n      \"type\": \"float8\",\n      \"info\": {\n        \"unit\": \"MWh\"\n      }\n    },\n    {\n      \"id\": \"accepted\",\n      \"type\": \"bool\"\n    },\n    {\n      \"id\": \"bidder_metadata\",\n      \"type\": \"jsonb\"\n    }\n  ],\n  \"primary_key\": [\n    \"auction_id\",\n    \"product_code\"\n  ],\n  \"records\": [\n    {\n      \"auction_id\": 1,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.99,\n      \"volume_mwh\": 52.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 171\n      }\n    },\n    {\n      \"auction_id\": 1,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.41,\n      \"volume_mwh\": 117.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 402\n      }\n    },\n    {\n      \"auction_id\": 2,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.55,\n      \"volume_mwh\": 53.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 408\n      }\n    },\n    {\n      \"auction_id\": 2,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 35.66,\n      \"volume_mwh\": 69.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 314\n      }\n    },\n    {\n      \"auction_id\": 3,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.51,\n      \"volume_mwh\": 108.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 488\n      }\n    },\n    {\n      \"auction_id\": 3,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.15,\n      \"volume_mwh\": 119.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 210\n      }\n    },\n    {\n      \"auction_id\": 4,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.93,\n      \"volume_mwh\": 83.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 283\n      }\n    },\n    {\n      \"auction_id\": 4,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-01T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.19,\n      \"volume_mwh\": 110.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 374\n      }\n    },\n    {\n      \"auction_id\": 5,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.12,\n      \"volume_mwh\": 142.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 524\n      }\n    },\n    {\n      \"auction_id\": 5,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.72,\n      \"volume_mwh\": 138.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 460\n      }\n    },\n    {\n      \"auction_id\": 6,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.74,\n      \"volume_mwh\": 116.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 537\n      }\n    },\n    {\n      \"auction_id\": 6,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.82,\n      \"volume_mwh\": 60.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 183\n      }\n    },\n    {\n      \"auction_id\": 7,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.25,\n      \"volume_mwh\": 71.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 411\n      }\n    },\n    {\n      \"auction_id\": 7,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.87,\n      \"volume_mwh\": 103.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 294\n      }\n    },\n    {\n      \"auction_id\": 8,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.75,\n      \"volume_mwh\": 142.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 450\n      }\n    },\n    {\n      \"auction_id\": 8,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 43.11,\n      \"volume_mwh\": 126.8,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 512\n      }\n    },\n    {\n      \"auction_id\": 9,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 42.89,\n      \"volume_mwh\": 76.8,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 548\n      }\n    },\n    {\n      \"auction_id\": 9,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.95,\n      \"volume_mwh\": 71.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 173\n      }\n    },\n    {\n      \"auction_id\": 10,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-02T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.62,\n      \"volume_mwh\": 74.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 482\n      }\n    },\n    {\n      \"auction_id\": 10,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-02T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.61,\n      \"volume_mwh\": 139.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 170\n      }\n    },\n    {\n      \"auction_id\": 11,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.74,\n      \"volume_mwh\": 59.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 178\n      }\n    },\n    {\n      \"auction_id\": 11,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.69,\n      \"volume_mwh\": 129.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 297\n      }\n    },\n    {\n      \"auction_id\": 12,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.54,\n      \"volume_mwh\": 149.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 540\n      }\n    },\n    {\n      \"auction_id\": 12,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.56,\n      \"volume_mwh\": 118.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 484\n      }\n    },\n    {\n      \"auction_id\": 13,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.67,\n      \"volume_mwh\": 114.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 180\n      }\n    },\n    {\n      \"auction_id\": 13,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.34,\n      \"volume_mwh\": 145.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 597\n      }\n    },\n    {\n      \"auction_id\": 14,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.51,\n      \"volume_mwh\": 67.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 530\n      }\n    },\n    {\n      \"auction_id\": 14,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.97,\n      \"volume_mwh\": 110.9,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 376\n      }\n    },\n    {\n      \"auction_id\": 15,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.84,\n      \"volume_mwh\": 142.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 265\n      }\n    },\n    {\n      \"auction_id\": 15,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.22,\n      \"volume_mwh\": 61.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 222\n      }\n    },\n    {\n      \"auction_id\": 16,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-03T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.45,\n      \"volume_mwh\": 137.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 474\n      }\n    },\n    {\n      \"auction_id\": 16,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-03T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.15,\n      \"volume_mwh\": 56.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 165\n      }\n    },\n    {\n      \"auction_id\": 17,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.49,\n      \"volume_mwh\": 144.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 546\n      }\n    },\n    {\n      \"auction_id\": 17,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.16,\n      \"volume_mwh\": 146.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 465\n      }\n    },\n    {\n      \"auction_id\": 18,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 42.79,\n      \"volume_mwh\": 149.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 560\n      }\n    },\n    {\n      \"auction_id\": 18,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.94,\n      \"volume_mwh\": 62.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 110\n      }\n    },\n    {\n      \"auction_id\": 19,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.71,\n      \"volume_mwh\": 73.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 462\n      }\n    },\n    {\n      \"auction_id\": 19,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.78,\n      \"volume_mwh\": 72.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 136\n      }\n    },\n    {\n      \"auction_id\": 20,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 47.85,\n      \"volume_mwh\": 77.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 167\n      }\n    },\n    {\n      \"auction_id\": 20,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.08,\n      \"volume_mwh\": 138.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 501\n      }\n    },\n    {\n      \"auction_id\": 21,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.82,\n      \"volume_mwh\": 90.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 281\n      }\n    },\n    {\n      \"auction_id\": 21,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.59,\n      \"volume_mwh\": 96.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 131\n      }\n    },\n    {\n      \"auction_id\": 22,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-04T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.07,\n      \"volume_mwh\": 83.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 198\n      }\n    },\n    {\n      \"auction_id\": 22,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-04T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.76,\n      \"volume_mwh\": 94.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 336\n      }\n    },\n    {\n      \"auction_id\": 23,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.25,\n      \"volume_mwh\": 142.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 150\n      }\n    },\n    {\n      \"auction_id\": 23,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.26,\n      \"volume_mwh\": 149.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 574\n      }\n    },\n    {\n      \"auction_id\": 24,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.84,\n      \"volume_mwh\": 73.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 209\n      }\n    },\n    {\n      \"auction_id\": 24,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.62,\n      \"volume_mwh\": 140.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 299\n      }\n    },\n    {\n      \"auction_id\": 25,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.63,\n      \"volume_mwh\": 128.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 456\n      }\n    },\n    {\n      \"auction_id\": 25,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.93,\n      \"volume_mwh\": 149.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 179\n      }\n    },\n    {\n      \"auction_id\": 26,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.75,\n      \"volume_mwh\": 71.8,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 131\n      }\n    },\n    {\n      \"auction_id\": 26,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.7,\n      \"volume_mwh\": 55.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 570\n      }\n    },\n    {\n      \"auction_id\": 27,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.32,\n      \"volume_mwh\": 65.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 535\n      }\n    },\n    {\n      \"auction_id\": 27,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.65,\n      \"volume_mwh\": 109.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 306\n      }\n    },\n    {\n      \"auction_id\": 28,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-05T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.0,\n      \"volume_mwh\": 139.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 120\n      }\n    },\n    {\n      \"auction_id\": 28,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-05T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.48,\n      \"volume_mwh\": 91.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 261\n      }\n    },\n    {\n      \"auction_id\": 29,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.37,\n      \"volume_mwh\": 70.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 235\n      }\n    },\n    {\n      \"auction_id\": 29,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.89,\n      \"volume_mwh\": 117.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 575\n      }\n    },\n    {\n      \"auction_id\": 30,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.8,\n      \"volume_mwh\": 57.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 151\n      }\n    },\n    {\n      \"auction_id\": 30,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.83,\n      \"volume_mwh\": 71.3,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 551\n      }\n    },\n    {\n      \"auction_id\": 31,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.72,\n      \"volume_mwh\": 74.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 526\n      }\n    },\n    {\n      \"auction_id\": 31,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 48.58,\n      \"volume_mwh\": 80.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 104\n      }\n    },\n    {\n      \"auction_id\": 32,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.7,\n      \"volume_mwh\": 105.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 580\n      }\n    },\n    {\n      \"auction_id\": 32,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.95,\n      \"volume_mwh\": 76.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 179\n      }\n    },\n    {\n      \"auction_id\": 33,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.81,\n      \"volume_mwh\": 110.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 451\n      }\n    },\n    {\n      \"auction_id\": 33,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.86,\n      \"volume_mwh\": 76.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 147\n      }\n    },\n    {\n      \"auction_id\": 34,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-06T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.86,\n      \"volume_mwh\": 132.9,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 494\n      }\n    },\n    {\n      \"auction_id\": 34,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-06T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.27,\n      \"volume_mwh\": 148.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 382\n      }\n    },\n    {\n      \"auction_id\": 35,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.64,\n      \"volume_mwh\": 106.1,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 379\n      }\n    },\n    {\n      \"auction_id\": 35,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 35.9,\n      \"volume_mwh\": 86.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 165\n      }\n    },\n    {\n      \"auction_id\": 36,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.05,\n      \"volume_mwh\": 86.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 560\n      }\n    },\n    {\n      \"auction_id\": 36,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 43.95,\n      \"volume_mwh\": 118.2,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 499\n      }\n    },\n    {\n      \"auction_id\": 37,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.0,\n      \"volume_mwh\": 137.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 573\n      }\n    },\n    {\n      \"auction_id\": 37,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.25,\n      \"volume_mwh\": 136.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 551\n      }\n    },\n    {\n      \"auction_id\": 38,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.31,\n      \"volume_mwh\": 67.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 510\n      }\n    },\n    {\n      \"auction_id\": 38,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.75,\n      \"volume_mwh\": 123.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 503\n      }\n    },\n    {\n      \"auction_id\": 39,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.53,\n      \"volume_mwh\": 88.3,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 213\n      }\n    },\n    {\n      \"auction_id\": 39,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.99,\n      \"volume_mwh\": 141.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 214\n      }\n    },\n    {\n      \"auction_id\": 40,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-07T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 35.59,\n      \"volume_mwh\": 69.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 595\n      }\n    },\n    {\n      \"auction_id\": 40,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-07T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 54.33,\n      \"volume_mwh\": 85.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 269\n      }\n    },\n    {\n      \"auction_id\": 41,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.48,\n      \"volume_mwh\": 61.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 397\n      }\n    },\n    {\n      \"auction_id\": 41,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 59.06,\n      \"volume_mwh\": 76.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 276\n      }\n    },\n    {\n      \"auction_id\": 42,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.21,\n      \"volume_mwh\": 81.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 159\n      }\n    },\n    {\n      \"auction_id\": 42,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 44.63,\n      \"volume_mwh\": 107.7,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 100\n      }\n    },\n    {\n      \"auction_id\": 43,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 48.0,\n      \"volume_mwh\": 130.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 286\n      }\n    },\n    {\n      \"auction_id\": 43,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.78,\n      \"volume_mwh\": 144.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 260\n      }\n    },\n    {\n      \"auction_id\": 44,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.58,\n      \"volume_mwh\": 62.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 258\n      }\n    },\n    {\n      \"auction_id\": 44,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.67,\n      \"volume_mwh\": 82.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 165\n      }\n    },\n    {\n      \"auction_id\": 45,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.8,\n      \"volume_mwh\": 116.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 415\n      }\n    },\n    {\n      \"auction_id\": 45,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.23,\n      \"volume_mwh\": 90.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 246\n      }\n    },\n    {\n      \"auction_id\": 46,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-08T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.25,\n      \"volume_mwh\": 128.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 338\n      }\n    },\n    {\n      \"auction_id\": 46,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-08T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.04,\n      \"volume_mwh\": 117.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 437\n      }\n    },\n    {\n      \"auction_id\": 47,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 37.12,\n      \"volume_mwh\": 101.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 147\n      }\n    },\n    {\n      \"auction_id\": 47,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.46,\n      \"volume_mwh\": 125.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 512\n      }\n    },\n    {\n      \"auction_id\": 48,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.98,\n      \"volume_mwh\": 52.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 412\n      }\n    },\n    {\n      \"auction_id\": 48,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 56.24,\n      \"volume_mwh\": 57.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 199\n      }\n    },\n    {\n      \"auction_id\": 49,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.96,\n      \"volume_mwh\": 88.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 435\n      }\n    },\n    {\n      \"auction_id\": 49,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 52.19,\n      \"volume_mwh\": 139.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 498\n      }\n    },\n    {\n      \"auction_id\": 50,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.63,\n      \"volume_mwh\": 67.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 337\n      }\n    },\n    {\n      \"auction_id\": 50,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 36.26,\n      \"volume_mwh\": 74.9,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 168\n      }\n    },\n    {\n      \"auction_id\": 51,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.04,\n      \"volume_mwh\": 116.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 262\n      }\n    },\n    {\n      \"auction_id\": 51,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 58.75,\n      \"volume_mwh\": 139.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 318\n      }\n    },\n    {\n      \"auction_id\": 52,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-09T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.76,\n      \"volume_mwh\": 104.8,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 330\n      }\n    },\n    {\n      \"auction_id\": 52,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-09T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.48,\n      \"volume_mwh\": 74.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"SSE-PEH-3\",\n        \"submission_lag_ms\": 348\n      }\n    },\n    {\n      \"auction_id\": 53,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-10T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 50.67,\n      \"volume_mwh\": 77.5,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 220\n      }\n    },\n    {\n      \"auction_id\": 53,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-10T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.79,\n      \"volume_mwh\": 82.0,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 177\n      }\n    },\n    {\n      \"auction_id\": 54,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-10T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.78,\n      \"volume_mwh\": 119.4,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 312\n      }\n    },\n    {\n      \"auction_id\": 54,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-10T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.19,\n      \"volume_mwh\": 104.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 526\n      }\n    },\n    {\n      \"auction_id\": 55,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-10T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 45.5,\n      \"volume_mwh\": 140.5,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 538\n      }\n    },\n    {\n      \"auction_id\": 55,\n      \"product_code\": \"DCH\",\n      \"delivery_start\": \"2025-11-10T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 57.02,\n      \"volume_mwh\": 107.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 252\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_create",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_create"
+              ]
+            },
+            "description": "Back-compat path: declare a brand-new CKAN resource inline with `resource: {\u2026}` plus legacy `fields` / `primary_key`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "datastore_upsert",
+      "description": "Write rows. `method` picks the strategy: `upsert` (default \u2014 match by primaryKey, insert new), `insert` (fail on duplicate), or `update` (fail on miss). Run after `datastore_create`.",
+      "item": [
+        {
+          "name": "Upsert - method=upsert (default)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource_id\": \"balancing_auction_results_2025\",\n  \"method\": \"upsert\",\n  \"records\": [\n    {\n      \"auction_id\": 1,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-01T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 41.2,\n      \"volume_mwh\": 95.0,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 412,\n        \"revision\": 2\n      }\n    },\n    {\n      \"auction_id\": 200,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-12-01T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 39.5,\n      \"volume_mwh\": 110.0,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 350\n      }\n    }\n  ],\n  \"include_records\": true,\n  \"include_total\": false,\n  \"force\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_upsert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_upsert"
+              ]
+            },
+            "description": "Match each row by stored `primaryKey`; update on hit, insert on miss. Updates only bump `_updated_at` when a non-PK column actually changes."
+          },
+          "response": []
+        },
+        {
+          "name": "Upsert - method=insert",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource_id\": \"balancing_auction_results_2025\",\n  \"method\": \"insert\",\n  \"records\": [\n    {\n      \"auction_id\": 100,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-17T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.84,\n      \"volume_mwh\": 135.3,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 375\n      }\n    },\n    {\n      \"auction_id\": 101,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-18T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 53.69,\n      \"volume_mwh\": 104.6,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 349\n      }\n    },\n    {\n      \"auction_id\": 102,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-18T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 40.49,\n      \"volume_mwh\": 93.6,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-2\",\n        \"submission_lag_ms\": 442\n      }\n    },\n    {\n      \"auction_id\": 103,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-18T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 51.98,\n      \"volume_mwh\": 90.4,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 570\n      }\n    },\n    {\n      \"auction_id\": 104,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-18T12:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 38.19,\n      \"volume_mwh\": 112.2,\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 403\n      }\n    },\n    {\n      \"auction_id\": 105,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-18T16:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 49.11,\n      \"volume_mwh\": 52.7,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 543\n      }\n    },\n    {\n      \"auction_id\": 106,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-18T20:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 46.54,\n      \"volume_mwh\": 55.0,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-2\",\n        \"submission_lag_ms\": 332\n      }\n    },\n    {\n      \"auction_id\": 107,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-19T00:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 43.17,\n      \"volume_mwh\": 126.1,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"EDF-COTT-3\",\n        \"submission_lag_ms\": 229\n      }\n    },\n    {\n      \"auction_id\": 108,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-19T04:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 55.87,\n      \"volume_mwh\": 97.0,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 587\n      }\n    },\n    {\n      \"auction_id\": 109,\n      \"product_code\": \"DCL\",\n      \"delivery_start\": \"2025-11-19T08:00:00Z\",\n      \"duration_minutes\": 30,\n      \"clearing_price_gbp_per_mwh\": 43.75,\n      \"volume_mwh\": 115.0,\n      \"accepted\": true,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"submission_lag_ms\": 486\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_upsert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_upsert"
+              ]
+            },
+            "description": "Insert only; duplicate primary key surfaces as a clean ValidationError."
+          },
+          "response": []
+        },
+        {
+          "name": "Upsert - method=update",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource_id\": \"balancing_auction_results_2025\",\n  \"method\": \"update\",\n  \"records\": [\n    {\n      \"auction_id\": 1,\n      \"product_code\": \"DCL\",\n      \"accepted\": false,\n      \"bidder_metadata\": {\n        \"unit_id\": \"DRAX-1\",\n        \"rejection_reason\": \"settlement_dispute\"\n      }\n    },\n    {\n      \"auction_id\": 1,\n      \"product_code\": \"DCH\",\n      \"clearing_price_gbp_per_mwh\": 50.85\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_upsert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_upsert"
+              ]
+            },
+            "description": "Update only; any row whose `primaryKey` doesn't match an existing row raises NotFoundError."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "datastore_info",
+      "description": "Read the resource's column schema + row count. Useful for confirming the table exists and verifying writes landed.",
+      "item": [
+        {
+          "name": "Info - by resource_id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_info?resource_id=balancing_auction_results_2025",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_info"
+              ],
+              "query": [
+                {
+                  "key": "resource_id",
+                  "value": "balancing_auction_results_2025"
+                }
+              ]
+            },
+            "description": "Return the stored Frictionless schema + row count via `INFORMATION_SCHEMA.TABLE_STORAGE`."
+          },
+          "response": []
+        },
+        {
+          "name": "Info - `id` alias",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_info?id=balancing_auction_results_2025",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_info"
+              ],
+              "query": [
+                {
+                  "key": "id",
+                  "value": "balancing_auction_results_2025"
+                }
+              ]
+            },
+            "description": "`id` is accepted as a legacy CKAN alias for `resource_id`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "datastore_search",
+      "description": "Stream rows matching `filters` / `q`. Pagination via `limit` + `offset`; response carries `_links.next` / `prev` / `page_size` / `page` / `total_pages`.",
+      "item": [
+        {
+          "name": "Search - minimal (just resource_id)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=balancing_auction_results_2025",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search"
+              ],
+              "query": [
+                {
+                  "key": "resource_id",
+                  "value": "balancing_auction_results_2025"
+                }
+              ]
+            },
+            "description": "Default page (limit=100, offset=0, include_total=true)."
+          },
+          "response": []
+        },
+        {
+          "name": "Search - with filters",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&filters={\"product_code\": \"DCL\", \"accepted\": true}&limit=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search"
+              ],
+              "query": [
+                {
+                  "key": "resource_id",
+                  "value": "balancing_auction_results_2025"
+                },
+                {
+                  "key": "filters",
+                  "value": "{\"product_code\": \"DCL\", \"accepted\": true}"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            },
+            "description": "JSON-encoded filters on the URL. Value matches must respect column types (no JSON-column equality)."
+          },
+          "response": []
+        },
+        {
+          "name": "Search - `q` full-text",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&q=DRAX&plain=true&language=english&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search"
+              ],
+              "query": [
+                {
+                  "key": "resource_id",
+                  "value": "balancing_auction_results_2025"
+                },
+                {
+                  "key": "q",
+                  "value": "DRAX"
+                },
+                {
+                  "key": "plain",
+                  "value": "true"
+                },
+                {
+                  "key": "language",
+                  "value": "english"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "BigQuery `SEARCH(row, @q)` against every text column."
+          },
+          "response": []
+        },
+        {
+          "name": "Search - paginated + sorted",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&fields=auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh&sort=delivery_start desc, clearing_price_gbp_per_mwh asc&limit=100&offset=0&include_total=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search"
+              ],
+              "query": [
+                {
+                  "key": "resource_id",
+                  "value": "balancing_auction_results_2025"
+                },
+                {
+                  "key": "fields",
+                  "value": "auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh"
+                },
+                {
+                  "key": "sort",
+                  "value": "delivery_start desc, clearing_price_gbp_per_mwh asc"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "include_total",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Custom projection (CSV), multi-column sort, explicit limit / offset / include_total. Drives `_links.next`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "datastore_search_sql",
+      "description": "Run a vetted `SELECT` / `WITH` statement. `LIMIT` is required (parsed from the SQL); pagination links rewrite the SQL's `OFFSET` so callers can follow `next` without editing.",
+      "item": [
+        {
+          "name": "SQL - basic SELECT",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT auction_id, product_code, clearing_price_gbp_per_mwh FROM \"balancing_auction_results_2025\" WHERE accepted = true LIMIT 100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search_sql"
+              ],
+              "query": [
+                {
+                  "key": "sql",
+                  "value": "SELECT auction_id, product_code, clearing_price_gbp_per_mwh FROM \"balancing_auction_results_2025\" WHERE accepted = true LIMIT 100"
+                }
+              ]
+            },
+            "description": "Plain SELECT with WHERE + LIMIT. Total comes from `INFORMATION_SCHEMA.TABLE_STORAGE` since there's no aggregate."
+          },
+          "response": []
+        },
+        {
+          "name": "SQL - GROUP BY + aggregates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price, SUM(volume_mwh) AS total_volume FROM \"balancing_auction_results_2025\" WHERE accepted = true GROUP BY product_code ORDER BY product_code LIMIT 50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search_sql"
+              ],
+              "query": [
+                {
+                  "key": "sql",
+                  "value": "SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price, SUM(volume_mwh) AS total_volume FROM \"balancing_auction_results_2025\" WHERE accepted = true GROUP BY product_code ORDER BY product_code LIMIT 50"
+                }
+              ]
+            },
+            "description": "Aggregates collapse rows, so total goes through the `COUNT(*) FROM (<inner>)` path instead of the metadata shortcut."
+          },
+          "response": []
+        },
+        {
+          "name": "SQL - WITH (CTE)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=WITH daily AS (SELECT DATE(delivery_start) AS d, product_code, AVG(clearing_price_gbp_per_mwh) AS price FROM \"balancing_auction_results_2025\" WHERE accepted = true GROUP BY d, product_code) SELECT * FROM daily ORDER BY d DESC, product_code LIMIT 50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search_sql"
+              ],
+              "query": [
+                {
+                  "key": "sql",
+                  "value": "WITH daily AS (SELECT DATE(delivery_start) AS d, product_code, AVG(clearing_price_gbp_per_mwh) AS price FROM \"balancing_auction_results_2025\" WHERE accepted = true GROUP BY d, product_code) SELECT * FROM daily ORDER BY d DESC, product_code LIMIT 50"
+                }
+              ]
+            },
+            "description": "Common table expression. CTE aliases are excluded from auth + qualification (they're inline, not external tables)."
+          },
+          "response": []
+        },
+        {
+          "name": "SQL - LIMIT + OFFSET",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT _id, auction_id, product_code, delivery_start FROM \"balancing_auction_results_2025\" ORDER BY _id ASC LIMIT 50 OFFSET 100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search_sql"
+              ],
+              "query": [
+                {
+                  "key": "sql",
+                  "value": "SELECT _id, auction_id, product_code, delivery_start FROM \"balancing_auction_results_2025\" ORDER BY _id ASC LIMIT 50 OFFSET 100"
+                }
+              ]
+            },
+            "description": "Pagination via OFFSET. `_links.next` will rewrite the OFFSET in the SQL string so the caller can follow without editing."
+          },
+          "response": []
+        },
+        {
+          "name": "SQL - JOIN two resources",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT a._id AS a_id, b._id AS b_id, a.auction_id, a.product_code FROM \"balancing_auction_results_2025\" a JOIN \"balancing_auction_results_2024\" b ON a.auction_id = b.auction_id WHERE a.product_code = 'DCL' ORDER BY a.auction_id ASC LIMIT 50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search_sql"
+              ],
+              "query": [
+                {
+                  "key": "sql",
+                  "value": "SELECT a._id AS a_id, b._id AS b_id, a.auction_id, a.product_code FROM \"balancing_auction_results_2025\" a JOIN \"balancing_auction_results_2024\" b ON a.auction_id = b.auction_id WHERE a.product_code = 'DCL' ORDER BY a.auction_id ASC LIMIT 50"
+                }
+              ]
+            },
+            "description": "JOIN across two resource_ids. Each table is authorised independently via CKAN; both get the `project.dataset` prefix."
+          },
+          "response": []
+        },
+        {
+          "name": "SQL - UNION ALL two resources",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT '2025' AS source, auction_id, product_code, delivery_start FROM \"balancing_auction_results_2025\" UNION ALL SELECT '2024' AS source, auction_id, product_code, delivery_start FROM \"balancing_auction_results_2024\" ORDER BY delivery_start DESC LIMIT 100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search_sql"
+              ],
+              "query": [
+                {
+                  "key": "sql",
+                  "value": "SELECT '2025' AS source, auction_id, product_code, delivery_start FROM \"balancing_auction_results_2025\" UNION ALL SELECT '2024' AS source, auction_id, product_code, delivery_start FROM \"balancing_auction_results_2024\" ORDER BY delivery_start DESC LIMIT 100"
+                }
+              ]
+            },
+            "description": "UNION ALL across two resource_ids \u2014 handy for combined reports over time-partitioned tables."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "datastore_delete",
+      "description": "Cleanup. Drop the table (no filters/fields), delete rows (`filters`), or drop columns (`fields`). `filters` and `fields` are mutually exclusive.",
+      "item": [
+        {
+          "name": "Delete - drop the whole table",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource_id\": \"balancing_auction_results_2025\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_delete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_delete"
+              ]
+            },
+            "description": "No `filters`, no `fields` \u2192 DROP TABLE + delete metadata row. Resource disappears entirely."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete - narrow row delete",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource_id\": \"balancing_auction_results_2025\",\n  \"filters\": {\n    \"auction_id\": 1\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_delete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_delete"
+              ]
+            },
+            "description": "Parameterised `DELETE FROM \u2026 WHERE \u2026` against the filter columns. JSON-column equality rejected at the boundary."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete - drop columns",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource_id\": \"balancing_auction_results_2025\",\n  \"fields\": [\n    \"bidder_metadata\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_delete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_delete"
+              ]
+            },
+            "description": "`ALTER TABLE DROP COLUMN \u2026` + rewrite the stored schema. System columns (`_id`, `_updated_at`) and PK columns are protected."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete - force read-only resource",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource_id\": \"balancing_auction_results_2025\",\n  \"filters\": {\n    \"product_code\": \"FFR\"\n  },\n  \"force\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_delete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_delete"
+              ]
+            },
+            "description": "`force=true` bypasses the CKAN read-only guard."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
