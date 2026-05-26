@@ -16,6 +16,7 @@ from datastore.infrastructure.engines.base import DatastoreBackend
 
 if TYPE_CHECKING:  # type-only — no runtime import from api/
     from datastore.api.context import RequestContext
+    from datastore.core.config import Config
 
 Mode = Literal["rw", "ro"]
 
@@ -61,6 +62,56 @@ def get_allowed_sql_functions(
     return frozenset(names)
 
 
+
+_INSTANCES: dict[tuple[str, Mode], DatastoreBackend] = {}
+
+def _build_engine(
+    engine: str,
+    mode: Mode,
+    *,
+    config: Config,
+    context: RequestContext | None = None,
+) -> DatastoreBackend:
+    """Import the engine package and instantiate its `Backend` class.
+
+    Engine packages expose a `Backend` symbol pointing at their concrete
+    `DatastoreBackend` subclass (e.g. `BigQueryBackend`, future
+    `DucklakeBackend`, `PostgresBackend`). Decoupling the registry from
+    any specific class name keeps the dispatch engine-agnostic — adding
+    a new backend is a folder drop with a `Backend = …` re-export.
+    """
+    try:
+        module = importlib.import_module(
+            f"datastore.infrastructure.engines.{engine}"
+        )
+    except ImportError as e:
+        raise NotImplementedError(
+            f"engine package not available: {engine!r}"
+        ) from e
+
+    backend_cls = getattr(module, "Backend", None)
+    if backend_cls is None:
+        raise NotImplementedError(
+            f"engine {engine!r} has no `Backend` export — engine packages "
+        )
+    backend = backend_cls(context=context, config=config, mode=mode)
+    backend.initialize()
+    return backend
+
+
+def warmup_engines(config: Config) -> None:
+    """Build + initialise rw and ro engine instances. Called from the
+    FastAPI lifespan so credential errors surface at startup."""
+    engine = config.DATASTORE_ENGINE
+    for mode in ("rw", "ro"):
+        _INSTANCES[(engine, mode)] = _build_engine(engine, mode, config=config)
+
+
+def reset_engine_cache() -> None:
+    """Drop cached instances. Used by lifespan teardown + test fixtures."""
+    _INSTANCES.clear()
+
+
 def get_datastore_engine(
     context: RequestContext,
     *,
@@ -83,25 +134,11 @@ def get_datastore_engine(
     without re-resolving them. The factory itself only reads
     `context.config.DATASTORE_ENGINE` to pick a class.
 
-    Dispatch is dynamic: it imports `datastore.infrastructure.engines.<name>`
-    and uses the package's exported `BigQueryBackend` (legacy name kept
-    across engines for convention). Adding a new engine = drop in a new
-    package; no edit here required. Engines that exist locally but are
-    gitignored (e.g. a test variant) work the same way.
     """
     engine = context.config.DATASTORE_ENGINE
-    try:
-        module = importlib.import_module(
-            f"datastore.infrastructure.engines.{engine}"
+    key = (engine, mode)
+    if key not in _INSTANCES:
+        _INSTANCES[key] = _build_engine(
+            engine, mode, config=context.config, context=context
         )
-    except ImportError as e:
-        raise NotImplementedError(
-            f"engine package not available: {engine!r}"
-        ) from e
-
-    backend_cls = getattr(module, "BigQueryBackend", None)
-    if backend_cls is None:
-        raise NotImplementedError(
-            f"engine {engine!r} has no `BigQueryBackend` export"
-        )
-    return backend_cls(context=context, mode=mode)
+    return _INSTANCES[key]

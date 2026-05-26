@@ -7,10 +7,11 @@ storage backend (BigQuery Datastore or Ducklake as future support).
 ## 1. Goals
 
 - CKAN-compatible request/response shapes for `/api/3/action/datastore_*`.
-- Pluggable backend selected by `DATASTORE_ENGINE` env var (`bigquery` or `ducklake`).
-- Streaming responses for search (peak memory ≈ 1 row). _Planned, not yet implemented._
-- Strict request validation, structured error responses.
-- CKAN-based auth gate with TTL-cached decisions (InMemory by default; Redis when `REDIS_URL` is set).
+- **Pluggable storage backend** selected by `DATASTORE_ENGINE` (`bigquery` today; `ducklake` planned).
+- **Pluggable auth** selected by `AUTH_TYPE` (`ckan` / `jwt` / `anonymous`). Provider lives in `datastore/auth/<name>/`; only the CKAN provider touches the network, and its TTL cache is local to that provider.
+- **Standalone-capable** — runs without an upstream CKAN under `AUTH_TYPE=anonymous` or `AUTH_TYPE=jwt`. CKAN is only required when `AUTH_TYPE=ckan`.
+- **Streaming search responses** (peak memory ≈ 1 row) for `datastore_search` / `datastore_search_sql`.
+- Strict request validation, structured CKAN-shaped error envelopes.
 
 
 ## 2. Technology Stack
@@ -22,16 +23,18 @@ storage backend (BigQuery Datastore or Ducklake as future support).
 | Validation | **Pydantic v2** (request only) | Strict shape validation, no per-row cost |
 | JSON | **orjson** | 5–10× stdlib `json`, returns bytes, datetime-aware |
 | Datastore backend | **google-cloud-bigquery** | Managed, cached, scalable |
-| HTTP client | **httpx** (`AsyncClient`) | Connection-pooled CKAN auth calls |
-| Cache / auth store | **redis** + `hiredis` | TTL cache for auth decisions |
+| HTTP client | **httpx** (`AsyncClient`) | Connection-pooled CKAN calls |
+| Cache | **redis** + `hiredis` | TTL cache for CKAN auth decisions |
 | Schema validation | **frictionless** | Field schema validation on `datastore_create` |
+| SQL parsing | **sqlglot** | Parse `datastore_search_sql` — pull table + function names for the auth + allow-list gates |
+| JWT auth | **PyJWT** | HS*/RS*/ES* signature + `aud`/`iss`/`exp` validation for the JWT provider |
 
 
-`pyproject.toml` dependencies (target):
+`pyproject.toml` dependencies (live):
 ```toml
 [project]
 dependencies = [
-    "fastapi[standard]>=0.113,<0.114",
+    "fastapi[standard]>=0.115,<0.116",
     "pydantic>=2.7,<3",
     "pydantic-settings>=2.3",
     "orjson>=3.10",
@@ -41,6 +44,8 @@ dependencies = [
     "frictionless>=5.18",
     "uvloop>=0.21",
     "httptools>=0.6",
+    "sqlglot>=25.0",
+    "pyjwt>=2.8,<3",
 ]
 
 [tool.ruff.lint]
@@ -71,15 +76,17 @@ home in the tree:
 
 ```
 api  ──▶  services  ──▶  infrastructure
- ▲           │                 │
- │           └──▶ schemas ◀────┘     (schemas = Pydantic models, plain data)
- │                ▲
- └─ uses schemas for request/response shapes only
+ │           │                 ▲
+ ├──▶  auth  ─────────────────┤
+ │                            │
+ └──▶  schemas ◀──────────────┘     (schemas = Pydantic models, plain data)
 ```
 
-One-way dependency arrow. `infrastructure/` never imports from `api/` or
-`services/`. `services/` never imports from `api/`. `api/` is the only layer
-that knows about FastAPI/Starlette.
+One-way dependencies. `infrastructure/` never imports from `api/`,
+`services/`, or `auth/`. `services/` and `auth/` never import from
+`api/`. `api/` is the only layer that knows about FastAPI/Starlette.
+`auth/` may use `infrastructure/` adapters (the CKAN provider needs
+`CKANClient`, all providers may use `CachePort`).
 
 ### Tree
 
@@ -106,10 +113,15 @@ datastore-api/
 │   ├── api/
 │   │   ├── __init__.py
 │   │   ├── routes.py                 # Top-level APIRouter; mounts endpoints/
-│   │   ├── context.py                # RequestContext + AuthContext + ContextDep
-│   │   │                             # (per-request handles: config, auth, ckan)
-│   │   ├── auth.py                   # CKAN `datastore_authorize` with TTL cache —
-│   │   │                             # pure async functions; `AuthContext` wraps state
+│   │   ├── context.py                # RequestContext + ContextDep — per-request
+│   │   │                             # handles (config, api_key, auth_provider, ckan)
+│   │   │                             # with an `.authorize()` method that delegates
+│   │   │                             # to auth.py
+│   │   ├── auth.py                   # Provider-agnostic boundary policy: permission
+│   │   │                             # whitelist, resource_id XOR package_id rule,
+│   │   │                             # anonymous-read rule. Delegates to the active
+│   │   │                             # AuthProvider; no caching here (CKAN caches
+│   │   │                             # internally — see datastore/auth/ckan/).
 │   │   ├── responses.py              # CKAN envelope helpers (_success_response / _error_response)
 │   │   │                             # + orjson-backed ORJSONResponse
 │   │   ├── error_handlers.py         # APIError / HTTPException / RequestValidationError
@@ -118,10 +130,26 @@ datastore-api/
 │   │   └── endpoints/                # One module per resource group
 │   │       ├── __init__.py
 │   │       ├── health.py             # /, /health, /ready (CKAN-shaped envelopes)
-│   │       └── datastore.py          # /api/3/action/datastore_* (6 routes;
-│   │                                 # 1 implemented, 5 return HTTP 501)
+│   │       └── datastore.py          # /api/3/action/datastore_*
 │   │
-│   │ ── 2. CORE (cross-cutting, framework-agnostic) ──────
+│   │ ── 2. AUTH PROVIDERS ───────────────────────  (one subpackage per AUTH_TYPE)
+│   ├── auth/
+│   │   ├── __init__.py
+│   │   ├── base.py                   # AuthProvider Protocol + Decision dataclass +
+│   │   │                             # default_key_id (JWT jti / sha256 cache-key helper)
+│   │   ├── registry.py               # get_auth_provider(config, **extras) —
+│   │   │                             # importlib dispatch by AUTH_TYPE
+│   │   ├── ckan/                     # AUTH_TYPE=ckan
+│   │   │   ├── __init__.py           #   exports `Provider = CKANAuthProvider`
+│   │   │   └── provider.py           #   datastore_authorize via CKANClient + TTL cache
+│   │   ├── jwt/                      # AUTH_TYPE=jwt
+│   │   │   ├── __init__.py           #   exports `Provider = JWTAuthProvider`
+│   │   │   └── provider.py           #   PyJWT verify (HS*/RS*/ES* + aud/iss/exp)
+│   │   └── anonymous/                # AUTH_TYPE=anonymous
+│   │       ├── __init__.py           #   exports `Provider = AnonymousAuthProvider`
+│   │       └── provider.py           #   always allows; no identity
+│   │
+│   │ ── 3. CORE (cross-cutting, framework-agnostic) ──────
 │   ├── core/
 │   │   ├── __init__.py
 │   │   ├── config.py                 # Pydantic-Settings `Config` (env-driven) +
@@ -133,7 +161,7 @@ datastore-api/
 │   │   │                             # HTTP_STATUS_TO_TYPE_LABEL map
 │   │   └── helper.py                 # Pure helpers (parse_authorization_header, …)
 │   │
-│   │ ── 3. SCHEMAS (Pydantic — boundary validation only) ──
+│   │ ── 4. SCHEMAS (Pydantic — boundary validation only) ──
 │   ├── schemas/                      # Inbound request bodies + outbound response
 │   │   ├── __init__.py               # types. Never passed between services or
 │   │   ├── request.py                # returned from engines.
@@ -148,17 +176,20 @@ datastore-api/
 │   │   └── validators.py             #   validators.py – FieldSpec, StringOrList,
 │   │                                 #                   PostgresType, helper fns
 │   │
-│   │ ── 4. SERVICES (business logic, plain Python) ──────
+│   │ ── 5. SERVICES (business logic, plain Python) ──────
 │   ├── services/                     # Orchestration: validate → call engine →
 │   │   ├── __init__.py               # shape result. Inputs: plain types or
 │   │   ├── write.py                  # validated schemas. Outputs: typed response
 │   │   │                             # models. No FastAPI, no raw SQL.
-│   │   │                             #   write.py – create_datastore (real;
-│   │   │                             #              upsert/delete pending)
-│   │   └── read.py                   #   read.py  – placeholder (search /
-│   │                                 #              search_sql / info pending)
+│   │   │                             #   write.py     – create / upsert / delete
+│   │   ├── read.py                   #   read.py      – search / search_sql / info
+│   │   │                             #                  (engine call, format
+│   │   │                             #                  dispatch, pagination links,
+│   │   │                             #                  function allow-list)
+│   │   └── streaming.py              #   streaming.py – byte-yielding writers
+│   │                                 #                  (objects/lists/csv/tsv)
 │   │
-│   │ ── 5. INFRASTRUCTURE (adapters to the outside world) ─
+│   │ ── 6. INFRASTRUCTURE (adapters to the outside world) ─
 │   └── infrastructure/
 │       ├── __init__.py
 │       ├── cache.py                  # CachePort (Protocol) + InMemoryCache +
@@ -172,31 +203,47 @@ datastore-api/
 │           ├── registry.py           # get_datastore_engine + get_allowed_sql_functions;
 │           │                         # dynamic `importlib` dispatch keyed on
 │           │                         # context.config.DATASTORE_ENGINE
-│           ├──bigquery/             # Engine package (one folder per backend).
-│           |    ├── __init__.py       # Re-exports `BigQueryBackend`
-│           |    ├── backend.py        # google-cloud-bigquery adapter (placeholder)
-│           |    ├── lib.py            # Backend-specific helpers (optional)
-│           |    └── allowed_functions.txt   # Per-engine datastore_search_sql
-│           |                                  # function allow-list — one name per
-│           |                                  # line, `#` comments allowed.
+│           ├── bigquery/            # Engine package (one folder per backend).
+│           |   ├── __init__.py       # Exports `Backend = BigQueryBackend` —
+│           |   |                       # registry imports `Backend`, so the
+│           |   |                       # concrete class name is engine-private.
+│           |   ├── backend.py        # DatastoreBackend subclass (placeholder)
+│           |   ├── client.py         # google-cloud-bigquery `Client` construction
+│           |   ├── lib.py            # Backend-specific helpers (optional)
+│           |   └── allowed_functions.txt  # Per-engine datastore_search_sql
+│           |                               # function allow-list — one name per
+│           |                               # line, `#` comments allowed.
 │           └── ducklake/             # Future planned engine
 └── tests/
     ├── __init__.py
     ├── conftest.py                   # FakeCKAN, InMemoryCache, TestClient fixture;
+    │                                 # autouse _isolate_bigquery_env clears BQ envs;
     │                                 # CKAN pytest plugin disabled via pyproject
-    ├── test_datastore_create.py      # End-to-end HTTP suite (TestClient)
-    └── test_write_service.py         # Service-level units with a fake context
+    ├── test_health.py
+    ├── test_datastore_*.py           # End-to-end per endpoint (TestClient)
+    ├── test_read_service.py          # Direct service calls — no HTTP
+    ├── test_write_service.py
+    ├── auth/                         # One folder per auth provider, mirrors datastore/auth/
+    │   ├── test_base.py              # Decision + default_key_id
+    │   ├── test_registry.py          # AUTH_TYPE dispatch
+    │   ├── test_orchestration.py     # api/auth.py boundary policy
+    │   ├── ckan/test_provider.py     # CKAN provider + TTL cache
+    │   ├── jwt/test_provider.py
+    │   └── anonymous/test_provider.py
+    └── engines/
+        ├── bigquery/test_*.py        # Real BigQuery backend, fully mocked
+        └── ducklake/                 # (placeholder for future engine)
 ```
 
-**Adding a new engine** — drop a sibling folder with the same four files
-(`__init__.py` re-exports `BigQueryBackend`; `backend.py` is the
-`DatastoreBackend` subclass; `lib.py` is optional helpers;
-`allowed_functions.txt` lists allowed SQL functions). No edit to
-`registry.py` or `config.py` is required — `DATASTORE_ENGINE` validates
-against the set of engine subdirectories that exist at startup, and the
-factory dispatches via `importlib.import_module`. The `ducklake.py`
-adapter from the original plan will live at
-`infrastructure/engines/ducklake/` when it lands.
+**Adding a new engine** — drop a sibling folder with the same layout
+(`__init__.py` exports `Backend = <YourBackend>`; `backend.py` is the
+`DatastoreBackend` subclass; `client.py` / `lib.py` for backend-specific
+construction + helpers, both optional; `allowed_functions.txt` lists
+allowed SQL functions). No edit to `registry.py` or `config.py` is
+required — `DATASTORE_ENGINE` validates against the set of engine
+subdirectories that exist at startup, and the factory dispatches via
+`importlib.import_module` keyed off the `Backend` alias. The `ducklake`
+adapter will live at `infrastructure/engines/ducklake/` when it lands.
 
 `scripts/` and `docs/` are intentionally absent today. Add them when there's a concrete need
 (seed scripts, operational runbooks). Until then the README + this file are the docs.
@@ -205,30 +252,34 @@ adapter from the original plan will live at
 
 | Folder | Put here | Do NOT put here |
 |---|---|---|
-| `datastore/main.py` | App factory, lifespan, middleware order, handler registration | Routes, business logic |
+| `datastore/main.py` | App factory, lifespan (httpx, cache, auth provider, engines), middleware order, handler registration | Routes, business logic |
 | `datastore/api/endpoints/` | Route declarations, request parsing, response building | SQL, engine calls, validation rules — delegate to services |
-| `datastore/api/context.py` | `RequestContext`, `AuthContext`, `ContextDep`, `get_context` (per-request DI bundle) | The logic those handles invoke — that lives in `services/` / `infrastructure/` |
-| `datastore/api/auth.py` | CKAN `datastore_authorize` orchestration with TTL cache (pure async functions) | Raw CKAN HTTP plumbing — call `CKANClient` |
+| `datastore/api/context.py` | `RequestContext`, `ContextDep`, `get_context`, `get_auth_provider`, `get_ckan_client` (per-request DI bundle) | The logic those handles invoke — that lives in `services/` / `auth/` / `infrastructure/` |
+| `datastore/api/auth.py` | Provider-agnostic boundary policy (permission whitelist, anonymous-read rule, resource_id XOR package_id) | Concrete provider behaviour — CKAN/JWT/anonymous logic lives in `datastore/auth/<name>/` |
 | `datastore/api/responses.py` | CKAN envelope helpers, `ORJSONResponse` | Anything that needs DB access |
 | `datastore/api/error_handlers.py` | Exception → CKAN error envelope mapping | Business rules — raise `APIError` from wherever the rule lives |
+| `datastore/auth/<name>/` | Concrete `AuthProvider` implementation: `__init__.py` exports `Provider = <ConcreteClass>`; `provider.py` implements `authorize` + `key_id`. CKAN provider holds its own TTL cache. | Cross-provider policy (that's `api/auth.py`); FastAPI imports |
+| `datastore/auth/base.py` | `AuthProvider` Protocol, `Decision` dataclass, `default_key_id` helper | Provider implementations |
+| `datastore/auth/registry.py` | importlib factory keyed on `AUTH_TYPE` | Instance caching — the lifespan builds once and stashes on `app.state` |
 | `datastore/core/` | Config (`Config`), exceptions, constants, pure helpers | I/O, FastAPI imports, business orchestration |
 | `datastore/schemas/` | Pydantic `BaseModel` request / response / validator types | Methods that do work — schemas are data shapes only |
 | `datastore/services/` | Validation that needs cross-input context, calls to engines/cache/CKAN, result shaping | `fastapi`/`starlette` imports, raw SQL strings, HTTP clients (call adapters) |
-| `datastore/infrastructure/` | Adapters: cache (Redis / in-memory), CKAN HTTP client, storage engines (BigQuery / DuckLake) | Business rules, FastAPI types, orchestration |
-| `tests/` | Test code only | Fixtures that reach into production internals through back doors — go through the public API |
+| `datastore/infrastructure/` | Adapters: cache (Redis / in-memory), CKAN HTTP client, storage engines (BigQuery / DuckLake) | Business rules, FastAPI types, orchestration, auth providers (those are at `datastore/auth/`) |
+| `tests/` | Test code only — `tests/auth/<name>/` mirrors `datastore/auth/<name>/`; `tests/engines/<name>/` mirrors `datastore/infrastructure/engines/<name>/` | Fixtures that reach into production internals through back doors — go through the public API |
 
 ### Hard rules
 
 1. **Only `datastore/api/` and `datastore/main.py` may import from `fastapi` or `starlette`.**
-   Greppable invariant: `rg "from (fastapi|starlette)" datastore/services datastore/infrastructure datastore/core` must return nothing.
+   Greppable invariant: `rg "from (fastapi|starlette)" datastore/services datastore/infrastructure datastore/core datastore/auth` must return nothing.
 2. **Only `datastore/schemas/` and `datastore/core/config.py` may import from `pydantic` / `pydantic_settings`.**
-   Engines and services pass plain dicts, tuples, and dataclasses.
+   Engines, services, and auth providers pass plain dicts, tuples, and dataclasses.
 3. **Engines return a lazy row iterator of tuples, never `list[dict]`.** Streaming
    peak memory ≈ 1 row regardless of result size.
 4. **Pydantic validates at the boundary; orjson serialises out.** Don't use
    `model.model_dump()` on hot paths — build dicts inline and `orjson.dumps()`.
-5. **No `container.py` / DI framework.** FastAPI's `Depends` plus the engine
-   `registry.py` factory are the only wiring mechanisms.
+5. **Auth providers and storage engines are plugins, not registries to edit.** Drop a folder under `datastore/auth/<name>/` or `datastore/infrastructure/engines/<name>/` with `__init__.py` exporting `Provider` / `Backend`; `AUTH_TYPE` / `DATASTORE_ENGINE` are auto-validated against directories on disk. No `registry.py` or `config.py` edit required to add either.
+6. **Auth caching is provider-private.** The only "auth cache" in the codebase is the TTL cache inside `datastore/auth/ckan/provider.py` (network round trip; worth caching). JWT and anonymous are local and never cache.
+7. **No `container.py` / DI framework.** FastAPI's `Depends` plus the two `registry.py` factories (auth + engines) are the only wiring mechanisms.
 
 ---
 
@@ -256,7 +307,7 @@ flowchart TB
         Redis[("Redis<br/>StatefulSet or managed<br/>auth + query cache")]
     end
 
-    CKAN["CKAN<br/>/api/3/action/datastore_authorize"]
+    CKAN["CKAN<br/>/api/3/action/datastore_authorize<br/>(only when AUTH_TYPE=ckan)"]
     BQ["BigQuery API<br/>datastore backend"]
 
     Client -->|HTTPS| Ingress
@@ -268,8 +319,8 @@ flowchart TB
 
     Pod1 -.reads.-> Config
     Pod1 -.reads.-> Secret
-    Pod1 -->|auth cache| Redis
-    Pod1 -->|on cache miss| CKAN
+    Pod1 -->|auth cache (CKAN provider only)| Redis
+    Pod1 -.->|on cache miss| CKAN
     Pod1 -->|queries| BQ
 
     classDef ext fill:#fff5e6,stroke:#d97706,color:#7c2d12
@@ -288,13 +339,14 @@ flowchart LR
     Uvicorn --> MW["api/middleware.py\nbody-size + GZip"]
     MW --> Ctx["api/context.py\nget_context → RequestContext"]
     Ctx --> Routes["api/endpoints/\ndatastore.py + health.py"]
-    Routes --> Auth["api/auth.py\nauthorize (TTL cache)"]
-    Auth -->|cache hit/miss| Cache[("infrastructure/cache.py\nInMemory or Redis")]
-    Auth -->|cache miss| CKANSvc["CKAN\n/api/3/action/datastore_authorize"]
-    Routes --> Svc["services/\nwrite.py (read.py pending)"]
+    Routes --> Auth["api/auth.py\nboundary policy"]
+    Auth --> Provider["auth/<AUTH_TYPE>/provider.py\n(ckan / jwt / anonymous)"]
+    Provider -->|CKAN provider only| Cache[("infrastructure/cache.py\nInMemory or Redis")]
+    Provider -.->|CKAN provider, on miss| CKANSvc["CKAN\n/api/3/action/datastore_authorize"]
+    Routes --> Svc["services/\nwrite.py + read.py + streaming.py"]
     Svc --> Eng["infrastructure/engines/\nregistry.get_datastore_engine"]
-    Eng --> BQ["bigquery/backend.py (placeholder)"]
-    Eng --> DL[("ducklake.py (planned)")]
+    Eng --> BQ["bigquery/backend.py"]
+    Eng --> DL[("ducklake/ (planned)")]
     Routes --> Resp["api/responses.py\n_success_response / _error_response"]
     Resp --> Schema["schemas/responses.py\nResponseModel + Result"]
 
@@ -309,21 +361,24 @@ flowchart LR
 | Layer | Lives in | Knows about |
 |---|---|---|
 | HTTP | `api/endpoints/`, `api/routes.py`, `api/middleware.py` | Request parsing, status codes, FastAPI |
-| Request bundle | `api/context.py` (+ `api/auth.py` for the auth method) | Per-request handles: config, ckan client (bound), auth-with-cache |
+| Request bundle | `api/context.py` | Per-request handles: config, api_key, auth_provider, ckan (Optional). `.authorize()` method delegates to `api/auth.py` |
+| Auth boundary policy | `api/auth.py` | Permission whitelist, anonymous-read rule, validation — provider-agnostic |
+| Auth providers | `auth/<name>/` | One per `AUTH_TYPE`. CKAN (network + TTL cache), JWT (PyJWT verify), anonymous (no-op) |
 | Response | `api/responses.py`, `schemas/responses.py` | CKAN envelope shape, orjson, typed result models |
 | Errors | `api/error_handlers.py`, `core/exceptions.py` | APIError taxonomy → status code + `__type` label |
 | Business logic | `services/` | Orchestration — no FastAPI, no raw SQL, no HTTP plumbing |
-| Storage | `infrastructure/engines/` | Backend ABC + concrete adapters; SQL dialect, connection management, row iterators (when implemented) |
+| Storage | `infrastructure/engines/` | Backend ABC + concrete adapters; SQL dialect, connection management, row iterators |
 | External adapters | `infrastructure/cache.py`, `infrastructure/ckan_client.py` | TTL cache (InMemory / Redis), httpx-based CKAN client |
 | Cross-cutting | `core/` | Config, constants, exceptions, pure helpers |
 
 **Key design rules**
-- Endpoints call services; services call engines / CKAN client via `context.ckan`. Endpoints never touch SQL.
-- `services/write.py` owns cross-cutting validation that requires context from multiple inputs (e.g., resolving `primary_key` against declared fields once that lands).
-- Engines (when implemented) return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`. Peak memory ≈ 1 row regardless of result size.
+- Endpoints call `context.authorize(...)` then services; services call engines. Endpoints never touch SQL.
+- `services/write.py` `datastore_create` is the only path that uses `context.ckan` (for `resource_create` on the dict-resource branch); the endpoint gates that branch on `AUTH_TYPE=ckan`. All other endpoints work standalone.
+- Engines return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`. Peak memory ≈ 1 row regardless of result size.
 - Pydantic validates inbound (`schemas/request.py`) and documents outbound (`schemas/responses.py`). Outbound serialisation goes through `_success_response` → `ORJSONResponse` → orjson.
-- Per-request CKAN client binding happens once in `get_context` (`api/context.py`): the long-lived `httpx.AsyncClient` is owned by the lifespan; each request gets a shallow copy with `api_key` bound.
-- No DI container. FastAPI's `Depends` + the engine `registry.py` factory are the only wiring mechanisms.
+- The CKAN client is built once in the lifespan **only when `AUTH_TYPE=ckan`**; `get_context` binds the caller's `api_key` per request (a shallow `.bind(api_key)` copy). Under non-CKAN auth `app.state.ckan` is `None` and the per-request bound client is `None`.
+- The auth provider is built once in the lifespan (with cache + cache_ttl + ckan client passed as kwargs); registry returns a fresh instance on every call so the lifespan owns instance reuse.
+- No DI container. FastAPI's `Depends` + the two `registry.py` factories (auth + engines) are the only wiring mechanisms.
 
 **Pod-level shape**
 - One container per pod: the FastAPI app. Sidecars only for observability (e.g., OpenTelemetry collector).
@@ -355,22 +410,27 @@ All three return the CKAN envelope shape `{help, success, result: {...}}`.
 |---|---|---|---|
 | GET | `/` | implemented | `{"message": APP_MESSAGE}` |
 | GET | `/health` | implemented | `{"status": "ok"}` — liveness; always 200 if process is up |
-| GET | `/ready` | implemented (stub result) | `{"status": "ready"}` — should become 503 when backend `healthcheck()` fails (planned) |
+| GET | `/ready` | implemented | `{"status": "ready"}` — calls `engine.healthcheck()` for rw + ro; 503 with a `Service Unavailable` envelope if either fails |
 
 ### 5.2 Datastore endpoints
 
-Each endpoint takes a single `ContextDep`. The handler calls `context.auth.authorize(...)` and delegates to a service in `services/`.
+Each endpoint takes a single `ContextDep`. The handler calls `context.authorize(...)` (which runs the boundary policy + delegates to the active `AuthProvider`) and then delegates to a service in `services/`.
 
 | Method | Path | Status | Body / Params | Response model |
 |---|---|---|---|---|
 | POST | `/api/3/action/datastore_create` | **implemented** | `DatastoreCreateRequest` | `DatastoreCreateResponse` |
-| POST | `/api/3/action/datastore_upsert` | _501 stub_ | `DatastoreUpsertRequest` (TBD) | `DatastoreUpsertResponse` (TBD) |
-| POST | `/api/3/action/datastore_delete` | _501 stub_ | `DatastoreDeleteRequest` (TBD) | `DatastoreDeleteResponse` (TBD) |
-| GET | `/api/3/action/datastore_search` | _501 stub_ | query params | streaming JSON / CSV / TSV (planned) |
-| GET | `/api/3/action/datastore_search_sql` | _501 stub_ | `sql`, `limit` | streaming JSON (planned) |
-| GET | `/api/3/action/datastore_info` | _501 stub_ | `resource_id` | `DatastoreInfoResponse` (TBD) |
+| POST | `/api/3/action/datastore_upsert` | **implemented** | `DatastoreUpsertRequest` | `DatastoreUpsertResponse` |
+| POST | `/api/3/action/datastore_delete` | **implemented** | `DatastoreDeleteRequest` | `DatastoreDeleteResponse` |
+| GET  | `/api/3/action/datastore_search` | **implemented** (streaming) | `DatastoreSearchRequest` | `DatastoreSearchResponse` |
+| GET  | `/api/3/action/datastore_search_sql` | **implemented** (streaming) | `DatastoreSearchSQLRequest` | `DatastoreSearchResponse` |
+| GET  | `/api/3/action/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
 
-Stub endpoints raise `HTTPException(status_code=501, …)`; the error handler in `api/error_handlers.py` converts that to a CKAN envelope with `__type: "Not Implemented"`.
+The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, parameterised search, `_table_metadata` for Frictionless schema + unique_key round-trip, and a row-count fast path via `INFORMATION_SCHEMA.TABLE_STORAGE`. The DuckLake engine is the next concrete adapter — see §7.
+
+`datastore_create` accepts two shapes:
+
+- `resource_id` — table name only. Works under any `AUTH_TYPE`.
+- `resource` (dict) — calls `ckan.resource_create(...)` first to materialise a CKAN resource, then writes the datastore table. **Only valid under `AUTH_TYPE=ckan`**; the endpoint rejects this shape with a `Validation Error` under JWT / anonymous since there's no CKAN to land it.
 
 ---
 
@@ -798,32 +858,31 @@ The original phase plan that used to live here has mostly shipped. This section 
 
 ### Done
 
-- [x] **Foundation** — `pyproject.toml`, `Dockerfile`, `Makefile`, `.env.example`, `docker-compose.yml`. App factory + lifespan in [datastore/main.py](datastore/main.py). Body-size middleware in [datastore/api/middleware.py](datastore/api/middleware.py).
-- [x] **CKAN API surface** — `/api/3/action/datastore_*` mounted via [datastore/api/routes.py](datastore/api/routes.py). `datastore_create` implemented end-to-end; the other five datastore actions return `HTTP 501` (mapped to CKAN envelope `__type: "Not Implemented"`). Health endpoints (`/`, `/health`, `/ready`) return the CKAN envelope shape.
-- [x] **Request validation** — `DatastoreCreateRequest` in [datastore/schemas/request.py](datastore/schemas/request.py) with strict `extra="forbid"`, exactly-one `resource_id` / `resource` invariant, and `FieldSpec` validators in [validators.py](datastore/schemas/validators.py). Pydantic errors → `RequestValidationError` → CKAN error envelope with a `fields` map.
-- [x] **Response models** — [datastore/schemas/responses.py](datastore/schemas/responses.py) defines `ResponseModel` (`help` + `success`) and per-endpoint envelopes with a nested `Result` class. Routes declare `response_model=...` for OpenAPI; services return the typed inner `Result`.
-- [x] **Error envelope** — handlers in [datastore/api/error_handlers.py](datastore/api/error_handlers.py); taxonomy in [datastore/core/exceptions.py](datastore/core/exceptions.py) (`ValidationError`, `AuthorizationError`, `NotFoundError`, `ConflictError`, `ServerError` + `HTTP_STATUS_TO_TYPE_LABEL`).
-- [x] **Auth gate** — `context.auth.authorize(resource_id=…, package_id=…)` in [datastore/api/auth.py](datastore/api/auth.py); calls CKAN `datastore_authorize` on cache miss. Cache uses the `CachePort` Protocol so `InMemoryCache` and `RedisCache` are interchangeable based on `REDIS_URL`. TTL is `AUTH_CACHE_TTL`. The raw api_key never reaches the cache — it's hashed via `_key_id` (JWT `jti` or sha256 prefix).
-- [x] **Request context** — `RequestContext` + `AuthContext` + `ContextDep` in [datastore/api/context.py](datastore/api/context.py). The CKAN client is bound to the caller's `api_key` once per request via `ckan.bind(api_key)`.
-- [x] **Service layer** — [datastore/services/write.py](datastore/services/write.py)'s `create_datastore` orchestrates the new-vs-existing-resource flow, calls CKAN `resource_create` when the resource has no `id`, and hands off to the storage engine.
-- [x] **Engine abstraction** — `DatastoreBackend` ABC + `SearchResult` / `WriteResult` dataclasses in [base.py](datastore/infrastructure/engines/base.py). Factory in [registry.py](datastore/infrastructure/engines/registry.py) dispatches dynamically via `importlib`; valid `DATASTORE_ENGINE` values are auto-discovered from `infrastructure/engines/*/` directories at process start. `BigQueryBackend` placeholder in [bigquery/backend.py](datastore/infrastructure/engines/bigquery/backend.py).
-- [x] **Tests** — end-to-end TestClient suite in [tests/test_datastore_create.py](tests/test_datastore_create.py); service-level units with a fake context in [tests/test_write_service.py](tests/test_write_service.py). CKAN pytest plugin disabled via `addopts = "-p no:ckan -p no:ckan_fixtures"` in `pyproject.toml`.
+- [x] **Foundation** — `pyproject.toml`, `Dockerfile`, `Makefile`, `.env.example`, `docker-compose.yml`. App factory + lifespan in [datastore/main.py](datastore/main.py); body-size middleware in [datastore/api/middleware.py](datastore/api/middleware.py); startup log line via `uvicorn.error` showing the active engine + auth provider + cache backend.
+- [x] **All six `datastore_*` actions wired** — `create`, `upsert`, `delete`, `search`, `search_sql`, `info` mounted via [datastore/api/routes.py](datastore/api/routes.py). Every endpoint authorizes via `context.authorize(...)` and delegates to a service.
+- [x] **Real BigQuery backend** — [datastore/infrastructure/engines/bigquery/](datastore/infrastructure/engines/bigquery/) implements DDL, parameterised `search`, MERGE-based `upsert` (`method=upsert` / `insert` / `update`), DML `delete` (whole-table drop, row delete, column drop), parameterised `search_sql`, and `info`. Frictionless schema + `unique_key` round-trip via the `_table_metadata` table. Row counts use the cheap `INFORMATION_SCHEMA.TABLE_STORAGE` fast path when filters don't apply.
+- [x] **Streaming search** — [datastore/services/streaming.py](datastore/services/streaming.py) yields the CKAN envelope chunk-by-chunk for all four `records_format` values (`objects`, `lists`, `csv`, `tsv`); CSV/TSV ride the same JSON envelope (records is a multi-line string). Peak memory ≈ 1 row regardless of N. `_links.start` / `_links.next` carry full scheme + host with all non-`offset` params preserved.
+- [x] **`datastore_search_sql` SQL safety** — schema rejects non-SELECT / multi-statement / unparseable SQL (sqlglot). [datastore/schemas/validators.py](datastore/schemas/validators.py)'s `parse_sql_references` pulls table + function names; endpoint authorizes each table as a `resource_id`; service rejects functions outside the engine's allow-list at `engines/<name>/allowed_functions.txt` (overridable via `SQL_FUNCTIONS_ALLOW_FILE`).
+- [x] **Request validation** — Pydantic models in [datastore/schemas/request.py](datastore/schemas/request.py) with `extra="forbid"`. `datastore_info` / `datastore_delete` accept `resource_id` or `id` (normalised). Pydantic errors → CKAN error envelope with a `fields` map.
+- [x] **Response models** — [datastore/schemas/responses.py](datastore/schemas/responses.py) — one envelope per endpoint with a nested `Result` class. Routes declare `response_model=...` for OpenAPI; services return the typed inner `Result`.
+- [x] **Error envelope** — handlers in [datastore/api/error_handlers.py](datastore/api/error_handlers.py); taxonomy in [datastore/core/exceptions.py](datastore/core/exceptions.py).
+- [x] **Pluggable auth providers** — `AUTH_TYPE` selects a folder under [datastore/auth/](datastore/auth/). Built-in: `ckan` (delegates to `datastore_authorize` with a provider-local TTL cache), `jwt` (PyJWT verify HS*/RS*/ES* + `aud`/`iss`/`exp`), `anonymous` (allow-all). Boundary policy in [datastore/api/auth.py](datastore/api/auth.py) is provider-agnostic. Adding a new provider = drop a folder; no registry / config edit.
+- [x] **Standalone capability** — `CKANClient` is only constructed when `AUTH_TYPE=ckan`; `RequestContext.ckan` is `CKANClient | None`. `Config` validator rejects `AUTH_TYPE=ckan` + empty `CKAN_URL` at startup. `datastore_create` `resource` dict path is gated on CKAN auth; everything else runs without an upstream CKAN.
+- [x] **`/ready` healthcheck** — lifespan builds rw + ro engine instances and stashes on `app.state`; `/ready` calls `engine.healthcheck()` on both and returns 503 + `Service Unavailable` envelope if either fails.
+- [x] **Request context** — `RequestContext` + `ContextDep` in [datastore/api/context.py](datastore/api/context.py); CKAN client bound to the caller's `api_key` per request (or `None` under non-CKAN auth). `.authorize()` method delegates to `api/auth.py` policy + active provider.
+- [x] **Engine + auth registries** — `DatastoreBackend` ABC + result dataclasses in [engines/base.py](datastore/infrastructure/engines/base.py); `AuthProvider` Protocol + `Decision` in [auth/base.py](datastore/auth/base.py). Each subpackage exports `Backend` / `Provider`; `DATASTORE_ENGINE` / `AUTH_TYPE` are validated against directories on disk at startup; registries dispatch via `importlib`.
+- [x] **Postman collection** — [postman/collection.json](postman/collection.json) auto-generated from `example_payload/` by `postman/generate_postman.py`; covers every endpoint with a worked example.
+- [x] **Tests** — ~290 tests across endpoint, service, auth provider, and engine layers. CKAN pytest plugin disabled via `addopts` in `pyproject.toml`.
 
 ### Next
 
 Rough priority order. Tick each box as the change set lands.
 
-- [ ] **Wire the remaining datastore endpoints.** For each of `datastore_upsert`, `datastore_delete`, `datastore_search`, `datastore_search_sql`, `datastore_info`:
-  - [ ] Add the request schema to `schemas/request.py` (or a query-param dataclass for GETs).
-  - [ ] Add the response envelope to `schemas/responses.py` (subclass `ResponseModel`, define inner `Result`).
-  - [ ] Add the service function in `services/{read,write}.py` returning the inner `Result` model.
-  - [ ] Replace the `HTTPException(501)` in `endpoints/datastore.py` with the real handler + `response_model=...`.
-- [ ] **Real BigQuery backend.** Replace the stub in `infrastructure/engines/bigquery/backend.py`. Initialise `bigquery.Client(project=BQ_PROJECT)` once in the lifespan; store `unique_key` + per-field `info` in the table description (JSON, 16 KB cap); implement parameterised `search` / `upsert` (MERGE) / `delete` (DML) / `search_sql` / `info` / `healthcheck`. Type map per §6.1.
-- [ ] **Streaming search.** Once `datastore_search` is wired, add `stream_search` / `stream_csv` / `stream_tsv` helpers in `api/responses.py`. Engines must return `SearchResult` with a **lazy row iterator of tuples** — never `list[dict]`. The route returns `StreamingResponse` with `media_type` chosen by `records_format`. Target: peak memory ≈ 1 row regardless of result size.
-- [ ] **Real `/ready` healthcheck.** Construct read/write engine instances in the lifespan (the current placeholder doesn't open a connection). Stash on `app.state`. `/ready` calls `engine.healthcheck()` for both and returns 503 if either fails. `terminationGracePeriodSeconds: 30` in the k8s manifest so streams drain.
-- [ ] **DuckLake backend.** Second concrete engine implementing the same ABC. Single-replica `StatefulSet` + `PersistentVolumeClaim` in k8s. Local mode reads `DUCKDB_PATH`; DuckLake mode reads a catalog URL.
-- [ ] **Observability.** JSON structured logger in `core/logging.py`; per-request middleware in `api/middleware.py` injects a `request_id` and logs `method`, `path`, `status`, `duration_ms`. The `log.debug` lines already in `auth.py` and `error_handlers.py` light up under `LOG_LEVEL=DEBUG`.
-- [ ] **Opt-in query cache.** Auth decisions already cache via the existing `CachePort`. A separate query-result cache (small/hot SELECTs) was in the old plan but isn't on the critical path — defer until BigQuery + streaming land.
+- [ ] **DuckLake backend.** Second concrete engine implementing `DatastoreBackend`. Single-replica `StatefulSet` + `PersistentVolumeClaim` in k8s. Local mode reads `DUCKDB_PATH`; DuckLake mode reads a catalog URL.
+- [ ] **Observability.** JSON structured logger in `core/logging.py`; per-request middleware in `api/middleware.py` injects a `request_id` and logs `method`, `path`, `status`, `duration_ms`. The existing `log.debug` lines in auth + error handlers + the CKAN provider light up under `LOG_LEVEL=DEBUG`.
+- [ ] **Per-table SQL auth for `datastore_search_sql`** — today the endpoint authorizes each table the schema extracts via the active provider, but CKAN's `datastore_search_sql_authorize` is a separate action that takes the SQL string. Wire it through `context.ckan` for the CKAN provider as a tighter check; JWT / anonymous providers stay table-by-table.
+- [ ] **Opt-in query-result cache.** The CKAN auth provider already caches its own decisions. A separate cache for small / hot SELECTs would ride on the existing `CachePort`. Not on the critical path — defer until there's a workload that needs it.
+- [ ] **`terminationGracePeriodSeconds: 30`** in the k8s manifest so streaming responses drain on SIGTERM.
 
 ### Guardrails
 

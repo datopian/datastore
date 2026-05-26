@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -15,9 +15,12 @@ from pydantic import (
 from datastore.schemas.validators import (
     FieldSpec,
     StringOrList,
+    fields_to_frictionless_schema,
+    parse_sql_pagination,
     parse_sql_references,
     to_json_object,
     to_str_or_json_object,
+    validate_frictionless_schema,
 )
 
 UpsertMethod = Literal["upsert", "insert", "update"]
@@ -26,18 +29,38 @@ RecordsFormat = Literal["objects", "lists", "csv", "tsv"]
 
 class DatastoreCreateRequest(BaseModel):
     """Request body for `POST /api/3/datastore_create`.
+
+    Column definitions: provide either the legacy `fields` shape (a list of
+    `FieldSpec` objects) **or** a Frictionless Table Schema via `schema`,
+    never both. The Frictionless form is the native shape; `fields` is kept
+    as a back-compat input and will be deprecated.
+
+    When `schema` is supplied, `primary_key` must not be — the schema's
+    `primaryKey` is the single source of truth for the unique key.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     resource_id: str | None = None
     resource: dict[str, Any] | None = None
-    fields: list[FieldSpec] = Field(min_length=1)
-    primary_key: StringOrList = None
+    # `deprecated=` must ride on `Annotated` metadata, not as a `Field()`
+    # default — Pydantic silently drops it on union- / Annotated-aliased
+    # fields when supplied via `Field(default=..., deprecated=...)`.
+    fields: Annotated[
+        list[FieldSpec] | None,
+        Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+    ] = None
+    schema: dict[str, Any] | None = None
+    primary_key: Annotated[
+        StringOrList,
+        Field(deprecated="use 'schema.primaryKey' instead"),
+    ] = None
     records: list[dict[str, Any]] | None = None
     include_records: bool = False
     include_total: bool = False
     force: bool | None = None
+
+    _check_schema = field_validator("schema")(validate_frictionless_schema)
 
     @model_validator(mode="after")
     def _require_resource_id_or_resource(self) -> DatastoreCreateRequest:
@@ -47,10 +70,48 @@ class DatastoreCreateRequest(BaseModel):
             raise ValueError("provide either 'resource_id' or 'resource', not both")
         return self
 
+    @model_validator(mode="after")
+    def _require_fields_or_schema(self) -> DatastoreCreateRequest:
+        # Read deprecated fields via __dict__ so we don't trip our own
+        # `Field(deprecated=...)` DeprecationWarning during validation.
+        fields_val = self.__dict__.get("fields")
+        primary_key_val = self.__dict__.get("primary_key")
+        has_fields = fields_val is not None
+        has_schema = self.schema is not None
+        if has_fields and has_schema:
+            raise ValueError(
+                "provide either 'fields' (legacy) or 'schema' (frictionless), not both"
+            )
+        if not has_fields and not has_schema:
+            raise ValueError("either 'fields' or 'schema' is required")
+        if has_fields and len(fields_val or []) == 0:
+            raise ValueError("'fields' must not be empty")
+        if has_schema and primary_key_val:
+            raise ValueError(
+                "'primary_key' is not allowed with 'schema'; use the schema's 'primaryKey' instead"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _build_canonical_schema(self) -> DatastoreCreateRequest:
+        """Fold legacy `fields` + `primary_key` into the canonical `schema`.
+
+        After this validator `self.schema` is always populated, so the
+        endpoint / service only ever read the Frictionless shape — the
+        legacy inputs exist purely as a boundary back-compat surface.
+        Runs after `_require_fields_or_schema`, so we know exactly one
+        of {fields, schema} is set.
+        """
+        if self.schema is not None:
+            return self
+        fields_val = self.__dict__.get("fields") or []
+        primary_key_val = self.__dict__.get("primary_key") or []
+        self.__dict__["schema"] = fields_to_frictionless_schema(fields_val, primary_key_val)
+        return self
+
 
 class DatastoreUpsertRequest(BaseModel):
-    """Request body for `POST /api/3/datastore_upsert`.
-    """
+    """Request body for `POST /api/3/datastore_upsert`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -89,7 +150,9 @@ class DatastoreSearchRequest(BaseModel):
     distinct: bool = False
     plain: bool = True
     language: str = "english"
-    limit: int = Field(default=100, ge=0, le=32000)
+    # Engine enforces `Config.SEARCH_RESULT_ROWS_MAX` (default 32000).
+    # No `le` here so ops can lift the cap via env without a schema change.
+    limit: int = Field(default=100, ge=0)
     offset: int = Field(default=0, ge=0)
     fields: str | None = None
     sort: str | None = None
@@ -142,6 +205,8 @@ class DatastoreSearchSQLRequest(BaseModel):
     # the read-only properties below give callers a clean attribute.
     _resource_ids: list[str] = PrivateAttr(default_factory=list)
     _function_names: list[str] = PrivateAttr(default_factory=list)
+    _limit: int = PrivateAttr(default=0)
+    _offset: int = PrivateAttr(default=0)
 
     @property
     def resource_ids(self) -> list[str]:
@@ -154,6 +219,16 @@ class DatastoreSearchSQLRequest(BaseModel):
         """SQL function calls in the query, lowercased — checked
         against `core.constants.ALLOWED_SQL_FUNCTIONS`."""
         return self._function_names
+
+    @property
+    def limit(self) -> int:
+        """`LIMIT` literal parsed from the SQL — required."""
+        return self._limit
+
+    @property
+    def offset(self) -> int:
+        """`OFFSET` literal parsed from the SQL (0 when absent)."""
+        return self._offset
 
     @field_validator("sql")
     @classmethod
@@ -179,9 +254,7 @@ class DatastoreSearchSQLRequest(BaseModel):
 
         head = _SQL_COMMENT_RE.sub("", stripped).strip()
         if not _SQL_LEAD_RE.match(head):
-            raise ValueError(
-                "only SELECT / WITH statements are allowed"
-            )
+            raise ValueError("only SELECT / WITH statements are allowed")
 
         cleaned = stripped.rstrip(";").rstrip()
         if ";" in cleaned:
@@ -194,12 +267,88 @@ class DatastoreSearchSQLRequest(BaseModel):
 
     @model_validator(mode="after")
     def _extract_sql_references(self) -> DatastoreSearchSQLRequest:
-        """Parse `sql` via sqlglot and stash table + function names.
+        """Parse `sql` via sqlglot and stash table + function names +
+        the LIMIT/OFFSET literals.
 
         Runs after `_check_sql_is_select`, so we know we have a single
         SELECT / WITH. CTE aliases are excluded from `_resource_ids`
-        (they're defined inline, not external tables).
+        (they're defined inline, not external tables). LIMIT is
+        required — the service uses it to build pagination links and
+        to cap the streaming response; missing LIMIT raises a clean
+        ValidationError up front.
         """
         self._resource_ids, self._function_names = parse_sql_references(self.sql)
+        self._limit, self._offset = parse_sql_pagination(self.sql)
         return self
 
+
+class DatastoreInfoRequest(BaseModel):
+    """Query parameters for `GET /api/3/datastore_info`.
+
+    Accepts either `resource_id` or `id` — they're aliases for the same
+    thing (CKAN's `id` is historical; `resource_id` is what the rest of
+    this API uses). Exactly one must be provided. The model_validator
+    normalises `id` → `resource_id` so downstream code only reads one
+    field. `extra="forbid"` so unknown params surface as 400s.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str | None = None
+    id: str | None = None
+
+    @model_validator(mode="after")
+    def _require_resource_id_or_id(self) -> DatastoreInfoRequest:
+        if self.resource_id is None and self.id is None:
+            raise ValueError("either 'resource_id' or 'id' is required")
+        if (
+            self.resource_id is not None
+            and self.id is not None
+            and self.resource_id != self.id
+        ):
+            raise ValueError(
+                "'resource_id' and 'id' both provided with different "
+                "values; send exactly one"
+            )
+        if self.resource_id is None:
+            self.resource_id = self.id
+        return self
+
+
+class DatastoreDeleteRequest(BaseModel):
+    """Request body for `POST /api/3/datastore_delete`. Drops the
+    whole table when both `filters` and `fields` are omitted; row
+    delete when `filters` is set; column drop when `fields` is set.
+    `filters` and `fields` are mutually exclusive."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str | None = None
+    id: str | None = None
+    filters: dict[str, Any] | None = None
+    fields: list[str] | None = None
+    force: bool = False
+
+    @model_validator(mode="after")
+    def _require_resource_id_or_id(self) -> DatastoreDeleteRequest:
+        if self.resource_id is None and self.id is None:
+            raise ValueError("either 'resource_id' or 'id' is required")
+        if (
+            self.resource_id is not None
+            and self.id is not None
+            and self.resource_id != self.id
+        ):
+            raise ValueError(
+                "'resource_id' and 'id' both provided with different "
+                "values; send exactly one"
+            )
+        if self.resource_id is None:
+            self.resource_id = self.id
+        if self.filters is not None and self.fields:
+            raise ValueError(
+                "'filters' and 'fields' are mutually exclusive — "
+                "rows and columns are separate delete operations"
+            )
+        if self.fields is not None and not self.fields:
+            raise ValueError("'fields' must list at least one column")
+        return self

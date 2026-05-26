@@ -153,64 +153,149 @@ def test_tsv_records_string_is_empty_when_engine_yields_no_rows() -> None:
 
 
 def test_links_present_on_every_format() -> None:
+    """Placeholder engine returns total=0 → no rows, so `page` and
+    `total_pages` are suppressed. `page_size` is always present when
+    `limit > 0` since a UI can render it even on an empty page."""
     for fmt in ("objects", "lists", "csv", "tsv"):
         body = _call(data_dict_overrides={"records_format": fmt})
-        assert set(body["result"]["_links"]) == {"start", "next"}, fmt
+        links = body["result"]["_links"]
+        assert set(links) == {"start", "page_size"}, fmt
+        assert links["page_size"] == 100  # default limit
 
 
-def test_next_link_advances_offset_by_limit() -> None:
-    body = _call(
-        data_dict_overrides={"limit": 50, "offset": 25},
-        request_url="http://test/api/3/action/datastore_search?limit=50&offset=25",
-    )
-    links = body["result"]["_links"]
-    assert "offset=75" in links["next"]
-    assert "limit=50" in links["next"]
-
-
-# --- _build_pagination_links: URL surgery ----------------------------------
+# --- _build_pagination_links: URL surgery + presence rules -----------------
 
 
 def test_links_bare_path_url() -> None:
-    """Bare path input → bare path output (no scheme/host to preserve)."""
+    """Bare path input → bare path output (no scheme/host to preserve).
+    With a known `total > offset + limit`, `next` is emitted."""
     links = _build_pagination_links(
-        "/api/3/action/datastore_search", limit=100, offset=0
+        "/api/3/action/datastore_search",
+        limit=100, offset=0, total=500,
     )
     assert links["start"] == "/api/3/action/datastore_search"
     assert links["next"] == "/api/3/action/datastore_search?offset=100"
 
 
 def test_links_strip_offset_from_start() -> None:
+    """`start` always drops `offset` (it defaults to 0); `prev` lands
+    at `max(0, offset - limit)`; `next` advances by `limit`."""
     links = _build_pagination_links(
         "/api/3/action/datastore_search?resource_id=res-1&offset=50",
-        limit=10, offset=50,
+        limit=10, offset=50, total=200,
     )
     assert "offset" not in links["start"]
     assert "resource_id=res-1" in links["start"]
+    assert "offset=40" in links["prev"]
     assert "offset=60" in links["next"]
 
 
 def test_links_preserve_other_query_params() -> None:
-    """filters, sort, fields ride along on both start and next."""
+    """filters, sort, fields ride along on every emitted URL. Page
+    counters travel as ints and don't carry params."""
     url = (
         "/api/3/action/datastore_search"
         "?resource_id=res-1&filters=%7B%22a%22%3A1%7D"
         "&sort=created+desc&fields=a,b"
     )
-    links = _build_pagination_links(url, limit=20, offset=0)
-    for link in (links["start"], links["next"]):
-        assert "filters=" in link
-        assert "sort=" in link
-        assert "fields=" in link
-        assert "resource_id=res-1" in link
+    links = _build_pagination_links(url, limit=20, offset=20, total=100)
+    assert set(links) == {
+        "start", "prev", "next", "page_size", "page", "total_pages",
+    }
+    for v in links.values():
+        if not isinstance(v, str):
+            continue  # `page_size` / `page` / `total_pages` are ints
+        assert "filters=" in v
+        assert "sort=" in v
+        assert "fields=" in v
+        assert "resource_id=res-1" in v
+    assert links["page_size"] == 20
+    assert links["page"] == 2
+    assert links["total_pages"] == 5
 
 
 def test_links_preserve_scheme_and_host_from_full_url() -> None:
     """Full URL input → full URL output (scheme + host carried through)."""
     links = _build_pagination_links(
         "http://example.com/api/3/action/datastore_search?limit=100",
-        limit=100, offset=0,
+        limit=100, offset=0, total=500,
     )
     assert links["start"].startswith("http://example.com/api/3/action/datastore_search")
     assert links["next"].startswith("http://example.com/api/3/action/datastore_search")
     assert "offset=100" in links["next"]
+
+
+def test_links_omit_next_when_total_reached() -> None:
+    """On the last page (`offset + limit >= total`), `next` is dropped."""
+    links = _build_pagination_links(
+        "/path", limit=10, offset=90, total=100,
+    )
+    assert "next" not in links
+    assert "prev" in links  # offset > 0
+
+
+def test_links_omit_next_when_total_unknown() -> None:
+    """`include_total=False` → can't tell if a next page exists; drop
+    `next` and `total_pages` rather than guess. Clients detect end via
+    an empty `records` array. `page` + `page_size` stay since position
+    is meaningful for single-page pickers."""
+    links = _build_pagination_links(
+        "/path", limit=10, offset=0, total=None,
+    )
+    assert set(links) == {"start", "page_size", "page"}
+    assert links["page_size"] == 10
+    assert links["page"] == 1
+    assert "total_pages" not in links
+    assert "next" not in links
+
+
+def test_links_omit_prev_at_first_page() -> None:
+    """`offset == 0` → no previous page exists, so `prev` is dropped."""
+    links = _build_pagination_links(
+        "/path", limit=10, offset=0, total=100,
+    )
+    assert "prev" not in links
+    assert "next" in links
+
+
+def test_links_drop_page_counters_on_empty_resource() -> None:
+    """No rows on the current page (empty resource) → suppress `page`
+    and `total_pages`. `page_size` rides along since a UI can still
+    render it; `start` is the only meaningful nav URL."""
+    links = _build_pagination_links(
+        "/path", limit=10, offset=0, total=0,
+    )
+    assert set(links) == {"start", "page_size"}
+    assert links["page_size"] == 10
+
+
+def test_links_drop_page_counters_when_offset_past_total() -> None:
+    """Caller paged past the end (`offset >= total`) → counters lie
+    about position, so they're dropped. `prev` remains so the UI can
+    walk back to a real page; the empty `records` array signals the
+    overshoot."""
+    links = _build_pagination_links(
+        "/path", limit=100, offset=400, total=302,
+    )
+    assert "page" not in links
+    assert "total_pages" not in links
+    assert "prev" in links  # offset > 0
+    assert "next" not in links  # nothing past the end
+
+
+def test_links_keep_page_counters_on_real_page() -> None:
+    """Within total → page + total_pages reflect a real position."""
+    links = _build_pagination_links(
+        "/path", limit=100, offset=200, total=302,
+    )
+    assert links["page"] == 3
+    assert links["total_pages"] == 4
+
+
+def test_links_prev_clamps_to_zero_on_partial_first_page() -> None:
+    """Paging back from `offset < limit` must land at offset=0, not a
+    negative offset."""
+    links = _build_pagination_links(
+        "/path", limit=50, offset=20, total=100,
+    )
+    assert "offset=0" in links["prev"]

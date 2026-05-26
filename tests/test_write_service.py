@@ -30,13 +30,24 @@ def _ctx() -> SimpleNamespace:
     return SimpleNamespace(config=Config(), ckan=_FakeCKAN())
 
 
+def _schema(primary_key: list[str] | None = None) -> dict[str, Any]:
+    """Minimal canonical frictionless schema for service-level tests.
+
+    The request validator folds legacy `fields`/`primary_key` into this
+    shape; tests that bypass the boundary build it directly.
+    """
+    schema: dict[str, Any] = {"fields": [{"name": "a", "type": "integer"}]}
+    if primary_key:
+        schema["primaryKey"] = primary_key
+    return schema
+
+
 def test_existing_resource_skips_resource_create() -> None:
     ctx = _ctx()
     data_dict = {
         "package": {"id": "pkg-1"},
         "resource": "existing-resource-id",  # str → existing flow
-        "fields": [{"id": "a", "type": "int4"}],
-        "primary_key": ["a"],
+        "schema": _schema(primary_key=["a"]),
         "records": [{"a": 1}, {"a": 2}],
     }
 
@@ -44,7 +55,9 @@ def test_existing_resource_skips_resource_create() -> None:
 
     assert result.resource_id == "existing-resource-id"
     assert result.package_id == "pkg-1"
+    # Top-level `primary_key` and `schema.primaryKey` carry the same value.
     assert result.primary_key == ["a"]
+    assert result.schema["primaryKey"] == ["a"]
     assert ctx.ckan.created == []  # no CKAN call
 
 
@@ -53,8 +66,7 @@ def test_new_resource_creates_via_ckan() -> None:
     data_dict = {
         "package": {"id": "pkg-1"},
         "resource": {"package_id": "pkg-1", "name": "foo"},  # dict → new flow
-        "fields": [{"id": "a"}],
-        "primary_key": ["a"],
+        "schema": _schema(primary_key=["a"]),
         "records": [],
     }
 
@@ -72,8 +84,7 @@ def test_missing_records_is_handled() -> None:
     data_dict = {
         "package": {"id": "pkg-x"},
         "resource": "res-x",
-        "fields": [{"id": "a"}],
-        "primary_key": ["a"],
+        "schema": _schema(primary_key=["a"]),
         # records absent
     }
 
@@ -82,18 +93,19 @@ def test_missing_records_is_handled() -> None:
     assert result.records is None  # include_records defaults to False
 
 
-def test_primary_key_defaults_to_empty_list() -> None:
+def test_schema_without_primary_key_is_accepted() -> None:
+    """A schema with no `primaryKey` is valid — the response just omits it."""
     ctx = _ctx()
     data_dict = {
         "package": {"id": "pkg-x"},
         "resource": "res-x",
-        "fields": [{"id": "a"}],
-        # primary_key absent
+        "schema": _schema(),  # no primaryKey
         "records": [],
     }
 
     result = asyncio.run(create_datastore(ctx, data_dict))
 
+    assert "primaryKey" not in result.schema
     assert result.primary_key == []
 
 
@@ -103,8 +115,7 @@ def test_missing_package_returns_none_package_id() -> None:
     data_dict = {
         # no "package" key
         "resource": "res-x",
-        "fields": [{"id": "a"}],
-        "primary_key": ["a"],
+        "schema": _schema(primary_key=["a"]),
         "records": [{"a": 1}],
     }
 
@@ -137,11 +148,16 @@ def test_upsert_returns_typed_result() -> None:
 def test_upsert_default_method_is_upsert() -> None:
     """`method` is optional; absence resolves to 'upsert' inside the service."""
     ctx = _ctx()
-    result = asyncio.run(upsert_datastore(ctx, {
-        "resource_id": "res-1",
-        "records": [{"a": 1}],
-        # method absent
-    }))
+    result = asyncio.run(
+        upsert_datastore(
+            ctx,
+            {
+                "resource_id": "res-1",
+                "records": [{"a": 1}],
+                # method absent
+            },
+        )
+    )
 
     assert result.method == "upsert"
 
@@ -149,12 +165,17 @@ def test_upsert_default_method_is_upsert() -> None:
 def test_upsert_echoes_records_when_include_records() -> None:
     ctx = _ctx()
     records = [{"a": 1}, {"a": 2}]
-    result = asyncio.run(upsert_datastore(ctx, {
-        "resource_id": "res-1",
-        "records": records,
-        "method": "upsert",
-        "include_records": True,
-    }))
+    result = asyncio.run(
+        upsert_datastore(
+            ctx,
+            {
+                "resource_id": "res-1",
+                "records": records,
+                "method": "upsert",
+                "include_records": True,
+            },
+        )
+    )
 
     assert result.records == records
 
@@ -162,12 +183,17 @@ def test_upsert_echoes_records_when_include_records() -> None:
 def test_upsert_returns_total_when_include_total() -> None:
     """BigQuery placeholder returns `total=len(records)`; the service lifts it."""
     ctx = _ctx()
-    result = asyncio.run(upsert_datastore(ctx, {
-        "resource_id": "res-1",
-        "records": [{"a": 1}, {"a": 2}],
-        "method": "upsert",
-        "include_total": True,
-    }))
+    result = asyncio.run(
+        upsert_datastore(
+            ctx,
+            {
+                "resource_id": "res-1",
+                "records": [{"a": 1}, {"a": 2}],
+                "method": "upsert",
+                "include_total": True,
+            },
+        )
+    )
 
     assert result.total == 2
 
@@ -175,12 +201,17 @@ def test_upsert_returns_total_when_include_total() -> None:
 def test_upsert_omits_total_when_include_total_false() -> None:
     """Even if the engine populates total, the service gates on the request flag."""
     ctx = _ctx()
-    result = asyncio.run(upsert_datastore(ctx, {
-        "resource_id": "res-1",
-        "records": [{"a": 1}, {"a": 2}],
-        "method": "upsert",
-        "include_total": False,
-    }))
+    result = asyncio.run(
+        upsert_datastore(
+            ctx,
+            {
+                "resource_id": "res-1",
+                "records": [{"a": 1}, {"a": 2}],
+                "method": "upsert",
+                "include_total": False,
+            },
+        )
+    )
 
     assert result.total is None
 
@@ -188,11 +219,16 @@ def test_upsert_omits_total_when_include_total_false() -> None:
 def test_upsert_records_optional() -> None:
     """`records` may be omitted — service defaults to [] and doesn't crash."""
     ctx = _ctx()
-    result = asyncio.run(upsert_datastore(ctx, {
-        "resource_id": "res-1",
-        "method": "upsert",
-        # records absent
-    }))
+    result = asyncio.run(
+        upsert_datastore(
+            ctx,
+            {
+                "resource_id": "res-1",
+                "method": "upsert",
+                # records absent
+            },
+        )
+    )
 
     assert result.resource_id == "res-1"
     assert result.records is None  # include_records defaults to False

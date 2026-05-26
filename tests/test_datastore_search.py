@@ -57,7 +57,6 @@ def _params(**overrides: Any) -> dict[str, Any]:
 
 
 # 1. Happy path -------------------------------------------------------------
-
 def test_basic_search_succeeds(client: TestClient) -> None:
     response = client.get(SEARCH_URL, params=_params())
 
@@ -82,10 +81,14 @@ def test_default_limit_and_offset_echoed(client: TestClient) -> None:
 
 # 2. Optional knobs ---------------------------------------------------------
 
+
 def test_search_with_filters(client: TestClient) -> None:
-    response = client.get(SEARCH_URL, params=_params(
-        filters={"product_code": "DCL", "accepted": True},
-    ))
+    response = client.get(
+        SEARCH_URL,
+        params=_params(
+            filters={"product_code": "DCL", "accepted": True},
+        ),
+    )
     assert response.status_code == 200
 
 
@@ -96,17 +99,23 @@ def test_search_with_q_as_string(client: TestClient) -> None:
 
 def test_search_with_q_as_dict(client: TestClient) -> None:
     """CKAN's `q` accepts a per-column dict; we encode it as JSON in the URL."""
-    response = client.get(SEARCH_URL, params=_params(
-        q={"product_code": "DCL", "bidder_metadata": "DRAX"},
-    ))
+    response = client.get(
+        SEARCH_URL,
+        params=_params(
+            q={"product_code": "DCL", "bidder_metadata": "DRAX"},
+        ),
+    )
     assert response.status_code == 200
 
 
 def test_search_with_fields_and_sort(client: TestClient) -> None:
-    response = client.get(SEARCH_URL, params=_params(
-        fields=["auction_id", "product_code", "clearing_price_gbp_per_mwh"],
-        sort="delivery_start desc, clearing_price_gbp_per_mwh asc",
-    ))
+    response = client.get(
+        SEARCH_URL,
+        params=_params(
+            fields=["auction_id", "product_code", "clearing_price_gbp_per_mwh"],
+            sort="delivery_start desc, clearing_price_gbp_per_mwh asc",
+        ),
+    )
     assert response.status_code == 200
 
 
@@ -116,6 +125,7 @@ def test_search_with_distinct(client: TestClient) -> None:
 
 
 # 3. Pagination + include_total --------------------------------------------
+
 
 def test_include_total_returns_total(client: TestClient) -> None:
     response = client.get(SEARCH_URL, params=_params(include_total=True))
@@ -146,6 +156,7 @@ def test_pagination_echoes_limit_offset(client: TestClient) -> None:
 
 
 # 4. Validation -------------------------------------------------------------
+
 
 def test_missing_resource_id_returns_validation_error(client: TestClient) -> None:
     response = client.get(SEARCH_URL, params={})
@@ -183,10 +194,13 @@ def test_filters_malformed_json_returns_validation_error(client: TestClient) -> 
 
 
 def test_filters_must_be_object_not_array(client: TestClient) -> None:
-    response = client.get(SEARCH_URL, params={
-        "resource_id": _RESOURCE_ID,
-        "filters": json.dumps(["not", "an", "object"]),
-    })
+    response = client.get(
+        SEARCH_URL,
+        params={
+            "resource_id": _RESOURCE_ID,
+            "filters": json.dumps(["not", "an", "object"]),
+        },
+    )
 
     assert response.status_code == 400
     body = response.json()
@@ -196,10 +210,13 @@ def test_filters_must_be_object_not_array(client: TestClient) -> None:
 
 def test_q_starting_with_brace_must_be_valid_json(client: TestClient) -> None:
     """A `q` that looks like JSON (leading `{`) must actually parse."""
-    response = client.get(SEARCH_URL, params={
-        "resource_id": _RESOURCE_ID,
-        "q": "{not valid",
-    })
+    response = client.get(
+        SEARCH_URL,
+        params={
+            "resource_id": _RESOURCE_ID,
+            "q": "{not valid",
+        },
+    )
 
     assert response.status_code == 400
     body = response.json()
@@ -208,6 +225,7 @@ def test_q_starting_with_brace_must_be_valid_json(client: TestClient) -> None:
 
 
 # 5. Auth -------------------------------------------------------------------
+
 
 def test_unknown_resource_id_returns_404(client: TestClient) -> None:
     response = client.get(SEARCH_URL, params=_params(resource_id="does-not-exist"))
@@ -218,9 +236,7 @@ def test_unknown_resource_id_returns_404(client: TestClient) -> None:
     assert "does-not-exist" in body["error"]["message"]
 
 
-def test_denied_key_returns_403(
-    client: TestClient, fake_ckan: FakeCKAN
-) -> None:
+def test_denied_key_returns_403(client: TestClient, fake_ckan: FakeCKAN) -> None:
     fake_ckan.deny("test-token")
 
     response = client.get(SEARCH_URL, params=_params())
@@ -229,7 +245,25 @@ def test_denied_key_returns_403(
     assert response.json()["error"]["__type"] == "Authorization Error"
 
 
+def test_anonymous_read_calls_ckan_and_succeeds(
+    client: TestClient, fake_ckan: FakeCKAN,
+) -> None:
+    """No Authorization header on a read → we still call CKAN's
+    `datastore_authorize`. CKAN itself decides based on resource
+    visibility; on the FakeCKAN (no deny-list, no visibility flags)
+    that succeeds, so the request returns 200."""
+    before = fake_ckan.authorize_calls
+    # Drop the default Authorization header the conftest sets — we
+    # want a real "no header" request, not "header with empty value".
+    client.headers.pop("Authorization", None)
+    response = client.get(SEARCH_URL, params=_params())
+    assert response.status_code == 200
+    # Confirms the auth path actually reached CKAN (not short-circuited).
+    assert fake_ckan.authorize_calls - before == 1
+
+
 # 6. records_format ---------------------------------------------------------
+
 
 def test_default_records_format_is_json_objects(client: TestClient) -> None:
     """Default `records_format=objects` returns the CKAN JSON envelope."""
@@ -258,10 +292,13 @@ def test_records_format_csv_returns_json_envelope(client: TestClient) -> None:
     as a CSV-encoded string. Content-Type is application/json — clients
     parse the envelope, then read the records string as CSV. Column names
     live on `result.fields`, not in the records string."""
-    response = client.get(SEARCH_URL, params=_params(
-        fields=["auction_id", "product_code"],
-        records_format="csv",
-    ))
+    response = client.get(
+        SEARCH_URL,
+        params=_params(
+            fields=["auction_id", "product_code"],
+            records_format="csv",
+        ),
+    )
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
@@ -273,10 +310,13 @@ def test_records_format_csv_returns_json_envelope(client: TestClient) -> None:
 
 def test_records_format_tsv_returns_json_envelope(client: TestClient) -> None:
     """`records_format=tsv` — same envelope as csv but tab-separated."""
-    response = client.get(SEARCH_URL, params=_params(
-        fields=["auction_id", "product_code"],
-        records_format="tsv",
-    ))
+    response = client.get(
+        SEARCH_URL,
+        params=_params(
+            fields=["auction_id", "product_code"],
+            records_format="tsv",
+        ),
+    )
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
@@ -334,9 +374,11 @@ def _install_mock_search(
             consumed.append(r)
             yield r
 
+    schema = {"fields": [{"name": f["id"], "type": f["type"]} for f in fields]}
+
     def fake_search(self: BigQueryBackend, **kwargs: Any) -> SearchResult:
         return SearchResult(
-            fields=fields,
+            schema=schema,
             records=lazy_records(),
             total=len(rows),
             records_truncated=False,
@@ -395,9 +437,7 @@ def test_csv_format_streams_data_rows(
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
     assert body["result"]["records"] == (
-        "144,DCL,47.82\n"
-        "145,DCH,51.1\n"
-        "146,FFR,32.4\n"
+        "144,DCL,47.82\n" "145,DCH,51.1\n" "146,FFR,32.4\n"
     )
 
 
@@ -414,9 +454,7 @@ def test_tsv_format_streams_data_rows(
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
     assert body["result"]["records"] == (
-        "144\tDCL\t47.82\n"
-        "145\tDCH\t51.1\n"
-        "146\tFFR\t32.4\n"
+        "144\tDCL\t47.82\n" "145\tDCH\t51.1\n" "146\tFFR\t32.4\n"
     )
 
 
@@ -454,58 +492,62 @@ def test_csv_quotes_values_with_special_chars(
 
 
 def test_search_objects_response_includes_links(client: TestClient) -> None:
-    """`_links.start` (no offset) and `_links.next` (offset=limit) come back
-    with the same scheme + host as the request — TestClient uses
-    `http://testserver`."""
+    """Empty-table case (placeholder engine, total=0): only `start` is
+    emitted — `next` / `prev` don't apply and the page counters are
+    suppressed when there's nothing to page through. Scheme + host
+    carried from the request (TestClient uses `http://testserver`)."""
     response = client.get(SEARCH_URL, params=_params())
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    assert set(links) == {"start", "next"}
+    assert set(links) == {"start", "page_size"}
     assert links["start"].startswith("http://testserver/api/3/action/datastore_search")
-    assert links["next"].startswith("http://testserver/api/3/action/datastore_search")
-    # start: no offset (defaults to 0); next: offset = 0 + default limit (100)
     assert "offset" not in links["start"]
-    assert "offset=100" in links["next"]
     assert f"resource_id={_RESOURCE_ID}" in links["start"]
-    assert f"resource_id={_RESOURCE_ID}" in links["next"]
+    assert links["page_size"] == 100  # default limit
 
 
-def test_search_links_advance_by_limit(client: TestClient) -> None:
-    """`next` jumps by exactly `limit`, regardless of the caller's offset."""
+def test_search_links_prev_emitted_on_inner_page(client: TestClient) -> None:
+    """At `offset > 0`, `prev` lands at `max(0, offset - limit)`. No
+    `next` because placeholder total=0 means we're past the end."""
     response = client.get(SEARCH_URL, params=_params(limit=50, offset=25))
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    # start drops offset, keeps the rest
     assert "offset" not in links["start"]
     assert "limit=50" in links["start"]
-    # next advances offset by limit: 25 + 50 = 75
-    assert "offset=75" in links["next"]
-    assert "limit=50" in links["next"]
+    # prev clamps to 0 since offset (25) < limit (50).
+    assert "offset=0" in links["prev"]
+    assert "limit=50" in links["prev"]
+    assert "next" not in links
 
 
 def test_search_links_preserve_other_query_params(client: TestClient) -> None:
-    """Filters / sort / fields ride along on both `start` and `next`."""
-    response = client.get(SEARCH_URL, params=_params(
-        filters={"product_code": "DCL"},
-        sort="delivery_start desc",
-        fields=["auction_id", "product_code"],
-    ))
+    """Filters / sort / fields ride along on every emitted link."""
+    response = client.get(
+        SEARCH_URL,
+        params=_params(
+            filters={"product_code": "DCL"},
+            sort="delivery_start desc",
+            fields=["auction_id", "product_code"],
+        ),
+    )
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    for link in (links["start"], links["next"]):
-        assert "filters=" in link
-        assert "sort=" in link
-        assert "fields=" in link
+    for v in links.values():
+        if not isinstance(v, str):
+            continue  # `page` / `total_pages` are ints
+        assert "filters=" in v
+        assert "sort=" in v
+        assert "fields=" in v
 
 
 def test_search_lists_format_also_includes_links(client: TestClient) -> None:
-    """`records_format=lists` is still a JSON envelope, so `_links` is present."""
+    """`records_format=lists` is still a JSON envelope, so `_links` is
+    present (placeholder engine, empty table: `start` + `page_size`)."""
     response = client.get(SEARCH_URL, params=_params(records_format="lists"))
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    assert set(links) == {"start", "next"}
-
+    assert set(links) == {"start", "page_size"}

@@ -5,8 +5,10 @@ from typing import TYPE_CHECKING, Any
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.responses import (
     DatastoreCreateResponse,
+    DatastoreDeleteResponse,
     DatastoreUpsertResponse,
 )
+from datastore.schemas.validators import frictionless_schema_to_fields
 
 if TYPE_CHECKING:  # type-only — no runtime import from api/
     from datastore.api.context import RequestContext
@@ -17,14 +19,19 @@ async def create_datastore(
 ) -> DatastoreCreateResponse.Result:
     package = data_dict.get("package") or {}
     resource = data_dict.get("resource") or {}
-    fields = data_dict.get("fields") or []
+    schema = data_dict["schema"]
     records = data_dict.get("records") or []
-    primary_key = data_dict.get("primary_key") or []
     include_records = bool(data_dict.get("include_records", False))
     include_total = bool(data_dict.get("include_total", False))
 
-    is_new_resource = isinstance(resource, dict)
-    if is_new_resource:
+    fields, primary_key = frictionless_schema_to_fields(schema)
+
+    if isinstance(resource, dict):
+        # Endpoint gates this branch on AUTH_TYPE=ckan, so context.ckan is
+        # non-None here in practice; the assert keeps the type checker honest.
+        assert context.ckan is not None, (
+            "datastore_create `resource` dict path requires AUTH_TYPE=ckan"
+        )
         resource = await context.ckan.resource_create(resource=resource)
         resource_id = resource["id"]
     else:
@@ -34,8 +41,7 @@ async def create_datastore(
     engine = get_datastore_engine(context, mode="rw")
     write_result = engine.create(
         resource_id=resource_id,
-        fields=fields,
-        unique_keys=primary_key,
+        schema=schema,
         records=records,
         include_total=include_total,
     )
@@ -44,6 +50,7 @@ async def create_datastore(
         resource_id=resource_id,
         package_id=package.get("id"),
         fields=fields,
+        schema=schema,
         primary_key=primary_key,
         records=records if include_records else None,
         total=write_result.get("total") if include_total else None,
@@ -74,4 +81,24 @@ async def upsert_datastore(
         method=method,
         records=records if include_records else None,
         total=write_result.get("total") if include_total else None,
+    )
+
+
+async def delete_datastore(
+    context: RequestContext, data_dict: dict[str, Any]
+) -> DatastoreDeleteResponse.Result:
+    """Drop the table, delete rows, or drop columns. `filters` and
+    `fields` are passed through verbatim — schema layer enforces
+    mutual exclusivity."""
+    resource_id = data_dict["resource_id"]
+    filters = data_dict.get("filters")
+    fields = data_dict.get("fields")
+
+    engine = get_datastore_engine(context, mode="rw")
+    engine.delete(resource_id=resource_id, filters=filters, fields=fields)
+
+    return DatastoreDeleteResponse.Result(
+        resource_id=resource_id,
+        filters=filters,
+        fields=fields,
     )

@@ -11,7 +11,7 @@ it and adds an inner `Result` class plus a `result: Result` field.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,14 +48,32 @@ class StatusResponse(ResponseModel):
 
 # --- datastore --------------------------------------------------------------
 
+
 class DatastoreCreateResponse(ResponseModel):
-    """Response for `POST /api/3/datastore_create`."""
+    """Response for `POST /api/3/datastore_create`.
+
+    Returns both column shapes so clients on either side of the migration
+    see the form they expect:
+      - `fields` is the legacy `{id, type, info}` shape.
+      - `schema` is the  Frictionless Table Schema (`{fields,
+        primaryKey, ...}`).
+    Both describe the same columns; they're derived from whichever the
+    caller supplied. Legacy `fields` will be removed once callers move
+    over to `schema`.
+    """
 
     class Result(BaseModel):
         resource_id: str
         package_id: str | None = None
-        fields: list[FieldSpec]
-        primary_key: list[str] = Field(default_factory=list)
+        fields: Annotated[
+            list[FieldSpec],
+            Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+        ]
+        schema: dict[str, Any]
+        primary_key: Annotated[
+            list[str],
+            Field(deprecated="use 'schema.primaryKey' (Frictionless Table Schema) instead"),
+        ]
         # Echoed input rows when the request set `include_records=True`.
         records: list[dict[str, Any]] | None = None
         # Total row count after the write — set only when `include_total=True`.
@@ -76,8 +94,20 @@ class DatastoreUpsertResponse(ResponseModel):
     result: Result
 
 
+class DatastoreDeleteResponse(ResponseModel):
+    """Response for `POST /api/3/datastore_delete`."""
+
+    class Result(BaseModel):
+        resource_id: str
+        filters: dict[str, Any] | None = None
+        fields: list[str] | None = None
+
+    result: Result
+
+
 class DatastoreSearchResponse(ResponseModel):
-    """Response for `GET /api/3/datastore_search`."""
+    """Response for `GET /api/3/datastore_search` 
+    """
 
     class Result(BaseModel):
         # `_links` starts with an underscore, which pydantic treats as a
@@ -85,13 +115,46 @@ class DatastoreSearchResponse(ResponseModel):
         model_config = ConfigDict(populate_by_name=True)
 
         resource_id: str
-        fields: list[dict[str, Any]]
+        # Only set for `datastore_search_sql`: the original SQL string
+        # echoed back so callers can confirm what ran (especially after
+        # `_links.next` rewrites the OFFSET).
+        sql: str | None = None
+        schema: dict[str, Any]
+        fields: Annotated[
+            list[dict[str, Any]],
+            Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+        ]
         records: list[dict[str, Any]]
         limit: int
         offset: int
         total: int | None = None
-        links: dict[str, str] = Field(
-            alias="_links", default_factory=dict
-        )
+        # Carries URL strings (`start` / `prev` / `next`) plus integer
+        # page counters (`page` / `total_pages`); typed as `Any` for
+        # OpenAPI accuracy.
+        links: dict[str, Any] = Field(alias="_links", default_factory=dict)
+
+    result: Result
+
+
+class DatastoreInfoResponse(ResponseModel):
+    """Response for `GET /api/3/datastore_info`.
+
+    Returns column metadata in both shapes so clients on either side of
+    the migration see what they expect:
+      - `schema` is the canonical Frictionless Table Schema.
+      - `fields` is the legacy `{id, type, info}` list (marked
+        `deprecated`).
+    `meta` is a free-form dict that engines populate with whatever extras
+    they expose (row count, table size, last-modified, …) — piped
+    through verbatim so adding a new key doesn't need a schema change.
+    """
+
+    class Result(BaseModel):
+        meta: dict[str, Any]
+        schema: dict[str, Any]
+        fields: Annotated[
+            list[dict[str, Any]],
+            Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+        ]
 
     result: Result

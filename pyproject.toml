@@ -20,6 +20,7 @@ dependencies = [
     "uvloop>=0.21",
     "httptools>=0.6",
     "sqlglot>=25.0",
+    "pyjwt>=2.8,<3",
 ]
 
 [project.optional-dependencies]

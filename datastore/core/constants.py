@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 POSTGRES_TYPES: dict[str, str] = {
@@ -59,3 +58,77 @@ POSTGRES_TYPES: dict[str, str] = {
 }
 
 
+# Canonical Postgres type → Frictionless field type. Used when converting
+# the legacy `fields` shape into a Frictionless schema for `datastore_create`.
+# Many-to-one on purpose: all width-variants of integer map to `integer`,
+# all of timestamp to `datetime`, etc. Anything without a closer match
+# falls through to `string`.
+POSTGRES_TO_FRICTIONLESS: dict[str, str] = {
+    "int2": "integer",
+    "int4": "integer",
+    "int8": "integer",
+    "float4": "number",
+    "float8": "number",
+    "numeric": "number",
+    "bool": "boolean",
+    "text": "string",
+    "varchar": "string",
+    "char": "string",
+    "bytea": "string",
+    "date": "date",
+    "time": "time",
+    "timetz": "time",
+    "timestamp": "datetime",
+    "timestamptz": "datetime",
+    "json": "object",
+    "jsonb": "object",
+    "uuid": "string",
+    "inet": "string",
+    "cidr": "string",
+    "macaddr": "string",
+    "xml": "string",
+}
+
+
+# Frictionless field type → canonical Postgres type. Used when deriving the
+# legacy `fields` shape from a Frictionless schema. Lossy in the other
+# direction (e.g., a Frictionless `integer` could have been any width); we
+# pick the widest/most-permissive Postgres type so the column accepts
+# anything the Frictionless type implies.
+FRICTIONLESS_TO_POSTGRES: dict[str, str] = {
+    "integer": "int8",
+    "number": "numeric",
+    "boolean": "bool",
+    "string": "text",
+    "date": "date",
+    "time": "timetz",
+    "datetime": "timestamptz",
+    "object": "jsonb",
+    "array": "jsonb",
+    "geojson": "jsonb",
+    "geopoint": "text",
+    "any": "text",
+}
+
+
+# Frictionless field types the datastore accepts. A narrow, opinionated
+# subset of the full Frictionless vocabulary — values outside this set
+# (`duration`, `year`, `yearmonth`, …) are rejected at the request
+# boundary so storage layout stays predictable and engine type maps
+# don't need to grow ad-hoc.
+ALLOWED_FRICTIONLESS_TYPES: frozenset[str] = frozenset({
+    "integer", "number", "boolean", "string",
+    "date", "time", "datetime",
+    "object", "array",
+    "geojson", "geopoint",
+    "any",
+})
+
+
+# Field names reserved for engine-managed system columns. User schemas
+# that try to declare these must be rejected at the request boundary —
+# silently dropping them would leave the response advertising a column
+# the engine refuses to populate.
+RESERVED_SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset({
+    "_id", "_updated_at",
+})

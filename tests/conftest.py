@@ -4,11 +4,42 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from datastore.api.context import get_cache, get_ckan_client
+from datastore.api.context import get_auth_provider, get_ckan_client
+from datastore.auth.ckan import Provider as CKANAuthProvider
 from datastore.core.exceptions import AuthorizationError, NotFoundError
 from datastore.infrastructure.cache import InMemoryCache
 from datastore.main import create_app
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _isolate_bigquery_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the BigQuery engine into placeholder mode for every test.
+
+    The unit suite isn't allowed to contact real BigQuery — engine tests
+    mock `client.query` / `client.insert_rows_json` directly, and other
+    layers (write service, action endpoints) rely on the backend's
+    placeholder-echo branch (active when project/dataset are unset).
+
+    A developer .env that points at a live BQ project would otherwise
+    flip the engine into real mode, talk to GCP, and either hang the
+    suite on network calls or fail tests that expect echo semantics.
+    Clearing the four BQ envs (and resetting the engine cache so a
+    previously-built live instance doesn't survive between tests) keeps
+    the suite hermetic.
+    """
+    from datastore.core.config import get_config
+    from datastore.infrastructure.engines.registry import reset_engine_cache
+
+    for name in (
+        "BIGQUERY_PROJECT", "BIGQUERY_DATASET",
+        "BIGQUERY_CREDENTIALS", "BIGQUERY_CREDENTIALS_RO",
+    ):
+        monkeypatch.setenv(name, "")
+    # `Config` and engine instances are lru-cached / module-level
+    # singletons; invalidate so the cleared env actually takes effect.
+    get_config.cache_clear()
+    reset_engine_cache()
 
 
 class FakeCKAN:
@@ -46,7 +77,8 @@ class FakeCKAN:
         permission: str | None = None,
     ) -> dict[str, Any]:
         self.authorize_calls += 1
-        self._guard()
+        if self._api_key and self._api_key in self.deny_keys:
+            raise AuthorizationError(f"key '{self._api_key}' is not allowed")
 
         if resource_id is not None:
             existing = self.resources.get(resource_id)
@@ -116,7 +148,11 @@ def cache() -> InMemoryCache:
 def client(fake_ckan: FakeCKAN, cache: InMemoryCache) -> Iterator[TestClient]:
     app = create_app()
     app.dependency_overrides[get_ckan_client] = lambda: fake_ckan
-    app.dependency_overrides[get_cache] = lambda: cache
+    # Auth provider talks to the same FakeCKAN — tests don't go through
+    # the real HTTP CKAN client. Mirrors what the lifespan would build.
+    app.dependency_overrides[get_auth_provider] = lambda: CKANAuthProvider(
+        ckan=fake_ckan, cache=cache, cache_ttl=60,
+    )
     with TestClient(app) as c:
         c.headers["Authorization"] = "test-token"
         yield c

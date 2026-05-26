@@ -2,25 +2,38 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from datastore.api.context import Context
-from datastore.api.responses import ORJSONResponse, _success_response
+from datastore.api.responses import _deprecation_warnings, _success_response
+from datastore.core.exceptions import ValidationError
 from datastore.schemas.request import (
     DatastoreCreateRequest,
+    DatastoreDeleteRequest,
+    DatastoreInfoRequest,
     DatastoreSearchRequest,
     DatastoreSearchSQLRequest,
     DatastoreUpsertRequest,
 )
 from datastore.schemas.responses import (
     DatastoreCreateResponse,
+    DatastoreDeleteResponse,
+    DatastoreInfoResponse,
     DatastoreSearchResponse,
     DatastoreUpsertResponse,
 )
-from datastore.services.read import search_datastore, search_sql_datastore
-from datastore.services.write import create_datastore, upsert_datastore
+from datastore.services.read import (
+    info_datastore,
+    search_datastore,
+    search_sql_datastore,
+)
+from datastore.services.write import (
+    create_datastore,
+    delete_datastore,
+    upsert_datastore,
+)
 
 router = APIRouter(tags=["datastore"])
 
@@ -33,30 +46,37 @@ async def datastore_create(
 ):
     """`POST /api/3/datastore_create` — authorize, then run the create flow."""
 
+    if payload.resource is not None and context.config.AUTH_TYPE != "ckan":
+        raise ValidationError(
+            "`resource` dict is only supported for ckan auth; for other auth types,"
+            "use `resource_id` instead"
+        )
+
     if payload.resource_id:
-        data_dict = await context.auth.authorize(
+        data_dict = await context.authorize(
             resource_id=payload.resource_id,
             permission="create",
         )
     else:
-        data_dict = await context.auth.authorize(
+        data_dict = await context.authorize(
             package_id=payload.resource.get("package_id"),
             permission="create",
         )
-        
+
     data_dict.update(
         {
             "resource": payload.resource_id or payload.resource,
-            "fields": payload.fields,
+            "schema": payload.schema,
             "records": payload.records,
-            "primary_key": payload.primary_key,
             "include_records": payload.include_records,
             "include_total": payload.include_total,
         }
     )
 
     result = await create_datastore(context, data_dict)
-    return _success_response(request, result)
+    warnings = _deprecation_warnings(payload)
+
+    return _success_response(request, result, warnings=warnings or None)
 
 
 @router.post("/datastore_upsert", response_model=DatastoreUpsertResponse)
@@ -66,18 +86,13 @@ async def datastore_upsert(
     context: Context,
 ):
     """`POST /api/3/datastore_upsert` — authorize, then upsert / insert / update rows."""
-    data_dict = await context.auth.authorize(
+    data_dict = await context.authorize(
         resource_id=payload.resource_id,
         permission="update",
     )
     data_dict.update(payload.model_dump())
     result = await upsert_datastore(context, data_dict)
     return _success_response(request, result)
-
-
-@router.post("/datastore_delete")
-def datastore_delete() -> ORJSONResponse:
-    raise HTTPException(status_code=501, detail="datastore_delete is not implemented")
 
 
 @router.get("/datastore_search", response_model=DatastoreSearchResponse)
@@ -95,14 +110,12 @@ async def datastore_search(
     iterator in a `StreamingResponse` with a fixed `application/json`
     media type.
     """
-    data_dict = await context.auth.authorize(
+    data_dict = await context.authorize(
         resource_id=params.resource_id,
         permission="read",
     )
     data_dict.update(params.model_dump())
-    body_iter = await search_datastore(
-        context, data_dict, request_url=str(request.url)
-    )
+    body_iter = await search_datastore(context, data_dict, request_url=str(request.url))
     return StreamingResponse(body_iter, media_type="application/json")
 
 
@@ -113,23 +126,61 @@ async def datastore_search_sql(
     params: Annotated[DatastoreSearchSQLRequest, Query()],
 ):
     """`GET /api/3/datastore_search_sql` — execute a raw SQL SELECT and stream.
-    Accepts a single `sql` query parameter; 
+    Accepts a single `sql` query parameter;
     """
     for resource_id in params.resource_ids:
-        await context.auth.authorize(
-            resource_id=resource_id, permission="read"
-        )
+        await context.authorize(resource_id=resource_id, permission="read")
 
     data_dict = params.model_dump() | {
         "function_names": params.function_names,
+        "limit": params.limit,
+        "offset": params.offset,
     }
-    
-    body_iter = await search_sql_datastore(
-        context, data_dict, request_url=str(request.url)
-    )
+
+    body_iter = await search_sql_datastore(context, data_dict, request_url=str(request.url))
     return StreamingResponse(body_iter, media_type="application/json")
 
 
-@router.get("/datastore_info")
-def datastore_info() -> ORJSONResponse:
-    raise HTTPException(status_code=501, detail="datastore_info is not implemented")
+@router.get("/datastore_info", response_model=DatastoreInfoResponse)
+async def datastore_info(
+    request: Request,
+    context: Context,
+    params: Annotated[DatastoreInfoRequest, Query()],
+):
+    """`GET /api/3/datastore_info` — return table metadata.
+
+    Authorizes the caller on `resource_id` (same gate as `datastore_search`),
+    then asks the read-only engine for its `InfoResult`. The response is
+    small enough to skip streaming; we go through the standard
+    `_success_response` envelope.
+
+    Body shape:
+        result.fields  — column schema, list of {"id", "type", ...}
+        result.meta    — free-form dict (engine-specific extras)
+    """
+    await context.authorize(resource_id=params.resource_id, permission="read")
+    result = await info_datastore(context, params.model_dump())
+    return _success_response(request, result)
+
+
+@router.post("/datastore_delete", response_model=DatastoreDeleteResponse)
+async def datastore_delete(
+    request: Request,
+    payload: DatastoreDeleteRequest,
+    context: Context,
+):
+    """`POST /api/3/datastore_delete` — delete rows or drop the table.
+
+    Body:
+      `resource_id` / `id` (one required) — table to delete from.
+      `filters` (optional dict) — only rows matching every key/value
+         pair are deleted. Omit → whole table is dropped.
+      `force` (optional bool) — required to delete from a CKAN
+         read-only resource.
+
+    Returns the original `filters` echoed back (CKAN convention) so the
+    caller can confirm what the server actually applied.
+    """
+    await context.authorize(resource_id=payload.resource_id, permission="delete")
+    result = await delete_datastore(context, payload.model_dump())
+    return _success_response(request, result)

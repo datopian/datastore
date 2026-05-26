@@ -41,6 +41,7 @@ def stream_objects(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records: Iterator[tuple],
     limit: int,
@@ -48,12 +49,14 @@ def stream_objects(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """`records_format=objects` — `records` is a JSON array of `{col: value}`."""
     columns = [f["id"] for f in fields]
     return _stream_envelope(
         help_url=help_url,
         resource_id=resource_id,
+        schema=schema,
         fields=fields,
         records_chunks=_records_object_array(columns, records),
         limit=limit,
@@ -61,6 +64,7 @@ def stream_objects(
         total=total,
         include_total=include_total,
         links=links,
+        sql=sql,
     )
 
 
@@ -68,6 +72,7 @@ def stream_lists(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records: Iterator[tuple],
     limit: int,
@@ -75,11 +80,13 @@ def stream_lists(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """`records_format=lists` — `records` is a JSON array of `[v1, v2, ...]`."""
     return _stream_envelope(
         help_url=help_url,
         resource_id=resource_id,
+        schema=schema,
         fields=fields,
         records_chunks=_records_array_array(records),
         limit=limit,
@@ -87,6 +94,7 @@ def stream_lists(
         total=total,
         include_total=include_total,
         links=links,
+        sql=sql,
     )
 
 
@@ -94,6 +102,7 @@ def stream_csv(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records: Iterator[tuple],
     limit: int,
@@ -101,12 +110,14 @@ def stream_csv(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """`records_format=csv` — `records` is a JSON string of CSV text."""
     columns = [f["id"] for f in fields]
     return _stream_envelope(
         help_url=help_url,
         resource_id=resource_id,
+        schema=schema,
         fields=fields,
         records_chunks=_records_delimited_string(columns, records, delimiter=","),
         limit=limit,
@@ -114,6 +125,7 @@ def stream_csv(
         total=total,
         include_total=include_total,
         links=links,
+        sql=sql,
     )
 
 
@@ -121,6 +133,7 @@ def stream_tsv(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records: Iterator[tuple],
     limit: int,
@@ -128,12 +141,14 @@ def stream_tsv(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """`records_format=tsv` — `records` is a JSON string of TSV text."""
     columns = [f["id"] for f in fields]
     return _stream_envelope(
         help_url=help_url,
         resource_id=resource_id,
+        schema=schema,
         fields=fields,
         records_chunks=_records_delimited_string(columns, records, delimiter="\t"),
         limit=limit,
@@ -141,6 +156,7 @@ def stream_tsv(
         total=total,
         include_total=include_total,
         links=links,
+        sql=sql,
     )
 
 
@@ -148,6 +164,7 @@ def _stream_envelope(
     *,
     help_url: str,
     resource_id: str,
+    schema: dict[str, Any],
     fields: list[dict[str, Any]],
     records_chunks: Iterator[bytes],
     limit: int,
@@ -155,15 +172,26 @@ def _stream_envelope(
     total: int | None,
     include_total: bool,
     links: dict[str, str],
+    sql: str | None = None,
 ) -> Iterator[bytes]:
     """CKAN envelope skeleton. Each format passes its own `records_chunks`
     iterator that emits the JSON value for the `records` field — either
     a JSON array (objects / lists) or a JSON string (csv / tsv).
+
+    Column metadata is emitted in both shapes: `schema` (canonical
+    Frictionless) and `fields` (legacy `{id, type}` list, deprecated).
+    `sql` is emitted only when supplied (i.e. for `datastore_search_sql`);
+    `datastore_search` leaves it out.
     """
     yield b'{"help":'
     yield orjson.dumps(help_url)
     yield b',"success":true,"result":{"resource_id":'
     yield orjson.dumps(resource_id)
+    if sql is not None:
+        yield b',"sql":'
+        yield orjson.dumps(sql)
+    yield b',"schema":'
+    yield orjson.dumps(schema)
     yield b',"fields":'
     yield orjson.dumps(fields)
     yield b',"records":'
