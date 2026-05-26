@@ -21,6 +21,7 @@ dependencies = [
     "httptools>=0.6",
     "sqlglot>=25.0",
     "pyjwt>=2.8,<3",
+    "google-cloud-storage>=2.14",
 ]
 
 [project.optional-dependencies]

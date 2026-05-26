@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -65,7 +66,12 @@ async def search_datastore(
         )
 
     engine = get_datastore_engine(context, mode="ro")
-    result = engine.search(
+    # Off the event loop — `engine.search` submits the BigQuery query
+    # and fetches the first page. The streaming writer below is a sync
+    # generator that Starlette runs in its threadpool, so subsequent
+    # page fetches also happen off the loop.
+    result = await asyncio.to_thread(
+        engine.search,
         resource_id=data_dict["resource_id"],
         filters=to_json_object(data_dict["filters"]),
         q=to_str_or_json_object(data_dict["q"]),
@@ -144,7 +150,11 @@ async def search_sql_datastore(
         )
 
     engine = get_datastore_engine(context, mode="ro")
-    result = engine.search_sql(sql=data_dict["sql"], limit=limit)
+    # Off the event loop — submitting the query + fetching the first
+    # page blocks; streaming writer below picks up the rest in threadpool.
+    result = await asyncio.to_thread(
+        engine.search_sql, sql=data_dict["sql"], limit=limit,
+    )
     fields, _ = frictionless_schema_to_fields(result.schema)
     return stream_objects(
         help_url=request_url,
@@ -182,7 +192,9 @@ async def info_datastore(
     path.
     """
     engine = get_datastore_engine(context, mode="ro")
-    result = engine.info(resource_id=data_dict["resource_id"])
+    result = await asyncio.to_thread(
+        engine.info, resource_id=data_dict["resource_id"],
+    )
     fields, _ = frictionless_schema_to_fields(result.schema)
     return DatastoreInfoResponse.Result(
         meta=result.meta,
