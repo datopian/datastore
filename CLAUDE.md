@@ -424,13 +424,59 @@ Each endpoint takes a single `ContextDep`. The handler calls `context.authorize(
 | GET  | `/api/3/action/datastore_search` | **implemented** (streaming) | `DatastoreSearchRequest` | `DatastoreSearchResponse` |
 | GET  | `/api/3/action/datastore_search_sql` | **implemented** (streaming) | `DatastoreSearchSQLRequest` | `DatastoreSearchResponse` |
 | GET  | `/api/3/action/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
+| GET  | `/datastore/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 
-The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, parameterised search, `_table_metadata` for Frictionless schema + unique_key round-trip, and a row-count fast path via `INFORMATION_SCHEMA.TABLE_STORAGE`. The DuckLake engine is the next concrete adapter — see §7.
+The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, parameterised search, `_table_metadata` for Frictionless schema + unique_key round-trip, a row-count fast path via `INFORMATION_SCHEMA.TABLE_STORAGE`, and `EXPORT DATA`-backed dump with `table.modified`-keyed GCS caching. The DuckLake engine is the next concrete adapter — see §7.
 
 `datastore_create` accepts two shapes:
 
 - `resource_id` — table name only. Works under any `AUTH_TYPE`.
 - `resource` (dict) — calls `ckan.resource_create(...)` first to materialise a CKAN resource, then writes the datastore table. **Only valid under `AUTH_TYPE=ckan`**; the endpoint rejects this shape with a `Validation Error` under JWT / anonymous since there's no CKAN to land it.
+
+### 5.3 `GET /datastore/dump/{resource_id}`
+
+Full-table download, **one URL → one file** from the caller's point of view. Bytes never sit in API memory — small dumps redirect to GCS, large dumps stream-concat through async httpx.
+
+Pipeline:
+
+1. **Resolve cache key** — read `table.modified` from BigQuery, compute `rev = hex(microsec_epoch(modified))`, prefix becomes `dumps/<rid>/<fmt>/<rev>`.
+2. **GCS cache lookup** — `list_blobs(prefix=…)`. Non-empty → skip steps 3-5; log `cache HIT`.
+3. **Submit `EXPORT DATA`** — Parquet → single-file URI `gs://<bucket>/<prefix>.parquet`; CSV/NDJSON → wildcard URI `gs://<bucket>/<prefix>_*.<ext>` so BigQuery shards >1 GB exports. The SELECT casts `TIMESTAMP` + `DATETIME` columns to ISO 8601 for CSV/NDJSON; Parquet keeps native types.
+4. **Poll non-blockingly** — `await asyncio.to_thread(job.reload)` + `await asyncio.sleep(_DUMP_POLL_INTERVAL_SECONDS)` between iterations. Worker thread is held only during the brief `reload` call, not the wait.
+5. **GC stale revisions** — after a successful extract, sweep `dumps/<rid>/<fmt>/` and delete any blob that doesn't start with the current `prefix`. Best-effort, failures logged. Storage stays bounded to one rev per `(rid, fmt)`.
+6. **Sign URLs** — V4 signed URLs with `response-content-disposition: attachment; filename="<rid>.<ext>"` (single shard) or `<rid>_NN.<ext>` (multi-shard, 1-indexed, zero-padded). Signing offloaded to a thread (IAM round-trip under workload identity).
+7. **Return**:
+   - 1 URL → `RedirectResponse(302)`. Bytes flow GCS → client; server is **out of the byte path**.
+   - N URLs → `StreamingResponse` over `services.dump.stream_*_shards` (async httpx, 64 KiB chunks, serial shard walk, CSV header-dedup via `_skip_first_line`, NDJSON pure byte-concat).
+
+Per-stream resource profile (multi-shard branch): ~64 KiB resident memory, **0** worker threads, byte-copy CPU only, async cancellation propagates from client disconnect → httpx → GCS connection released.
+
+Errors:
+- Parquet >1 GB → `EXPORT DATA` job fails with a "single URI / wildcard" message; classifier in `_is_export_too_large` flips it to `PayloadTooLargeError` (413). Caller switches to `format=csv` or `format=ndjson`.
+- Any other BigQuery / GCS failure → `ServerError` (500) with the upstream message.
+- `BIGQUERY_EXPORT_BUCKET` unset → `ServerError` at request time (the lifespan doesn't fail-fast because dump is an optional capability).
+
+Required IAM. Dump follows a strict **ro for reading, rw for writing/updating** model — see [bigquery/client.py](datastore/infrastructure/engines/bigquery/client.py) `load_credentials` + `_build_bq_client` / `_build_storage_client` on the backend:
+
+| Step | Identity | Why |
+|---|---|---|
+| `get_table` | RO BQ (`self.client`) | Reading BigQuery metadata. |
+| `list_blobs` cache lookup | RO GCS | Reading GCS objects. |
+| `client.query("EXPORT DATA …")` | RW BQ (built on demand) | BigQuery writes shards to GCS under this SA's identity — it's a write op even though the SQL surface is `SELECT`. |
+| Post-extract `list_blobs` refresh | RW GCS | Blobs are passed straight to `generate_signed_url` next; we want them bound to the rw client. |
+| `delete` (GC) | RW GCS | Writing/deleting objects. |
+| `generate_signed_url` | RW GCS | Under workload identity this calls IAM `signBlob`, which typically only the rw SA holds via `iam.serviceAccountTokenCreator`. |
+
+Concrete perm sets:
+
+- **RO SA** (`BIGQUERY_CREDENTIALS_RO`) — `bigquery.tables.get` + `storage.objects.list`.
+- **RW SA** (`BIGQUERY_CREDENTIALS`) — `bigquery.jobs.create` + `bigquery.tables.export` + `bigquery.tables.getData` + `storage.objects.{create,list,delete}` + `iam.serviceAccountTokenCreator`.
+
+A single SA works if both perm sets land on the same identity — `BIGQUERY_CREDENTIALS_RO` empty falls through to ADC; same env var can drive both. `_build_bq_client` and `_build_storage_client` on the backend are deliberately small + stub-friendly so tests inject mocks without monkey-patching `google.cloud.*` globally.
+
+A 24h object-lifecycle rule on the bucket is a useful belt-and-braces: the engine GCs older revs already, but lifecycle catches anything stranded by a crashed dump.
+
+The GCS client is built with the same credentials as the BigQuery client for the active engine mode (`load_credentials(config, mode)` in [bigquery/client.py](datastore/infrastructure/engines/bigquery/client.py)). Without this shim, a service-account JSON loaded via `BIGQUERY_CREDENTIALS_RO` would drive BigQuery but `storage.Client(...)` would silently fall back to ADC — a near-invisible identity split. Workload identity / `GOOGLE_APPLICATION_CREDENTIALS`-style setups still work because `load_credentials` returns `None` for ADC and the storage client follows the same default-credentials path.
 
 ---
 

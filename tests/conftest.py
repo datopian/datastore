@@ -1,15 +1,29 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Any
+import os
 
-import pytest
-from datastore.api.context import get_auth_provider, get_ckan_client
-from datastore.auth.ckan import Provider as CKANAuthProvider
-from datastore.core.exceptions import AuthorizationError, NotFoundError
-from datastore.infrastructure.cache import InMemoryCache
-from datastore.main import create_app
-from fastapi.testclient import TestClient
+# Neutralise any developer .env before `datastore.main` is imported —
+# `create_app()` runs at module load and reads the live process env, so
+# fixtures can't intercept BigQuery vars in time. Clearing them here
+# keeps the suite hermetic against whatever happens to be in .env.
+for _name in (
+    "BIGQUERY_PROJECT", "BIGQUERY_DATASET",
+    "BIGQUERY_CREDENTIALS", "BIGQUERY_CREDENTIALS_RO",
+    "BIGQUERY_EXPORT_BUCKET",
+):
+    os.environ[_name] = ""
+os.environ["BIGQUERY_EXPORT_URL_EXPIRY_HOURS"] = "1"
+
+from collections.abc import Iterator  # noqa: E402
+from typing import Any  # noqa: E402
+
+import pytest  # noqa: E402
+from datastore.api.context import get_auth_provider, get_ckan_client  # noqa: E402
+from datastore.auth.ckan import Provider as CKANAuthProvider  # noqa: E402
+from datastore.core.exceptions import AuthorizationError, NotFoundError  # noqa: E402
+from datastore.infrastructure.cache import InMemoryCache  # noqa: E402
+from datastore.main import create_app  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -34,8 +48,12 @@ def _isolate_bigquery_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "BIGQUERY_PROJECT", "BIGQUERY_DATASET",
         "BIGQUERY_CREDENTIALS", "BIGQUERY_CREDENTIALS_RO",
+        "BIGQUERY_EXPORT_BUCKET",
     ):
         monkeypatch.setenv(name, "")
+    # Pydantic-Settings can't parse "" as int — give the dump-URL TTL a
+    # valid placeholder so a stray .env doesn't break startup in tests.
+    monkeypatch.setenv("BIGQUERY_EXPORT_URL_EXPIRY_HOURS", "1")
     # `Config` and engine instances are lru-cached / module-level
     # singletons; invalidate so the cleared env actually takes effect.
     get_config.cache_clear()

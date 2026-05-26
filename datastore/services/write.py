@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from datastore.infrastructure.engines import get_datastore_engine
@@ -37,9 +38,11 @@ async def create_datastore(
     else:
         resource_id = resource
 
-    # TODO: placeholder engine call — replace once the real backend lands.
     engine = get_datastore_engine(context, mode="rw")
-    write_result = engine.create(
+    # Off the event loop — BigQuery's sync client would otherwise block
+    # every other request on this worker for the duration of the call.
+    write_result = await asyncio.to_thread(
+        engine.create,
         resource_id=resource_id,
         schema=schema,
         records=records,
@@ -67,9 +70,9 @@ async def upsert_datastore(
     include_records = bool(data_dict.get("include_records", False))
     include_total = bool(data_dict.get("include_total", False))
 
-    # TODO: placeholder engine call — replace once the real backend lands.
     engine = get_datastore_engine(context, mode="rw")
-    write_result = engine.upsert(
+    write_result = await asyncio.to_thread(
+        engine.upsert,
         resource_id=resource_id,
         records=records,
         method=method,
@@ -95,7 +98,9 @@ async def delete_datastore(
     fields = data_dict.get("fields")
 
     engine = get_datastore_engine(context, mode="rw")
-    engine.delete(resource_id=resource_id, filters=filters, fields=fields)
+    await asyncio.to_thread(
+        engine.delete, resource_id=resource_id, filters=filters, fields=fields,
+    )
 
     return DatastoreDeleteResponse.Result(
         resource_id=resource_id,

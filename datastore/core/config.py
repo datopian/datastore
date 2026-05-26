@@ -129,6 +129,20 @@ class Config(BaseSettings):
             "force a fresh scan in tests."
         ),
     )
+    BIGQUERY_EXPORT_BUCKET: str = Field(
+        default="",
+        description=(
+            "GCS bucket name (no `gs://` prefix) that `/datastore/dump/<rid>` "
+        ),
+    )
+    BIGQUERY_EXPORT_URL_EXPIRY_HOURS: int = Field(
+        default=1,
+        ge=1,
+        le=168,
+        description=(
+            "Signed-URL TTL for dump manifest entries (hours). Defaults to 1h."
+        ),
+    )
 
     # Per-row system columns
     INCLUDE_UPDATED_AT: bool = Field(

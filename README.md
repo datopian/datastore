@@ -33,7 +33,8 @@ datastore/
 │   ├── error_handlers.py         # Exception handlers (APIError → CKAN error envelope)
 │   └── endpoints/                # Route handlers, one file per resource group
 │       ├── health.py             # /, /health, /ready
-│       └── datastore.py          # /api/3/action/datastore_*
+│       ├── datastore.py          # /api/3/action/datastore_*
+│       └── dump.py               # /datastore/dump/<resource_id> (302 single / stream multi)
 │
 ├── auth/                         # Pluggable auth providers — one subpackage per type
 │   ├── base.py                   # AuthProvider Protocol + Decision dataclass +
@@ -60,7 +61,9 @@ datastore/
 │   ├── write.py                  # create / upsert / delete orchestration
 │   ├── read.py                   # search / search_sql orchestration (engine call,
 │   │                             # format dispatch, pagination links)
-│   └── streaming.py              # per-format byte-yielding writers used by read.py
+│   ├── streaming.py              # per-format byte-yielding writers used by read.py
+│   └── dump.py                   # multi-shard stream-concat over async httpx
+│                                 # (drives /datastore/dump for >1 GB CSV/NDJSON)
 │
 └── infrastructure/               # Adapters to outside systems
     ├── cache.py                  # InMemoryCache + RedisCache (CachePort protocol)
@@ -124,7 +127,14 @@ What's shipped and what's next. Tick each box as the change set lands.
   - `datastore_search_sql` (sqlglot parses tables + functions; per-table
     CKAN authorize; per-engine function allow-list)
   - `datastore_info` (column schema + free-form `meta` dict)
-- [x] Health endpoints `/`, `/health`, `/ready` returning the CKAN envelope shape.
+- [x] `GET /datastore/dump/<resource_id>?format=csv|ndjson|parquet` — full-table download
+  via BigQuery `EXPORT DATA`. **1 shard** (≤1 GB CSV/NDJSON, or any Parquet ≤1 GB):
+  302 to a GCS signed URL (server out of the byte path). **N shards** (>1 GB CSV/NDJSON):
+  server stream-concats shards via async httpx (~64 KiB peak memory, no threadpool).
+  Parquet >1 GB returns 413 (parquet shards can't be byte-concatenated). Results are
+  cached in GCS keyed by `table.modified`; unchanged tables skip the extract entirely,
+  and stale revisions are GC'd on the next cache miss so storage stays bounded to one
+  rev per `(resource_id, format)`.
   `/ready` builds the rw + ro engine instances during lifespan and probes
   `engine.healthcheck()` on each — 503 with a `Service Unavailable` envelope
   if either fails (so k8s pulls the pod from the Service).
@@ -225,6 +235,8 @@ Every entry below maps 1:1 to a field on `datastore.core.config.Config`. See [.e
 | `BIGQUERY_CREDENTIALS` | _(empty)_ | Read-write service-account creds. Accepts a JSON blob (leading `{`), a path to a service-account JSON file, or empty (→ Application Default Credentials). |
 | `BIGQUERY_CREDENTIALS_RO` | _(empty)_ | Read-only service-account creds (same format). Empty → falls back to `BIGQUERY_CREDENTIALS` so single-credential deployments work. |
 | `BIGQUERY_USE_QUERY_CACHE` | `true` | Use BigQuery's 24h query-results cache on `datastore_search` / `datastore_search_sql` / `datastore_info`. Identical SELECTs return free + fast on cache hits. Set `false` to force a fresh scan. |
+| `BIGQUERY_EXPORT_BUCKET` | _(empty)_ | GCS bucket name (no `gs://` prefix) that `/datastore/dump/<rid>` writes `EXPORT DATA` shards into. Required when the dump endpoint is in use. **Credential model: ro reads, rw writes.** RO SA (`BIGQUERY_CREDENTIALS_RO`) does the BigQuery `get_table` and the initial GCS `list_blobs` cache lookup. RW SA (`BIGQUERY_CREDENTIALS`) runs `EXPORT DATA` (it writes shards under its own identity), does GC `delete`, and signs URLs. **RO SA perms:** `bigquery.tables.get` + `storage.objects.list`. **RW SA perms:** `bigquery.jobs.create` + `bigquery.tables.export` + `bigquery.tables.getData` + `storage.objects.{create,list,delete}` + `iam.serviceAccountTokenCreator` (for V4 signing under workload identity). A 24h object-lifecycle rule on the bucket is recommended as a safety net. |
+| `BIGQUERY_EXPORT_URL_EXPIRY_HOURS` | `1` | Signed-URL TTL for dump manifest entries (hours). |
 | `REDIS_URL` | _(empty)_ | Redis URL for cache; empty → in-process `InMemoryCache` |
 | `CKAN_URL` | _(empty)_ | Base URL of the CKAN instance (required when `AUTH_TYPE=ckan`) |
 | `HTTP_TIMEOUT_SECONDS` | `10` | Timeout for outbound CKAN calls (seconds) |

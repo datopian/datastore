@@ -38,6 +38,17 @@ class ConflictError(APIError):
     type_label = "Conflict Error"
 
 
+class PayloadTooLargeError(APIError):
+    """Raised when `/datastore/dump/<rid>?format=parquet` exceeds
+    BigQuery's 1 GB single-file limit. CSV / NDJSON dumps stitch
+    multiple shards into one download, but Parquet shards can't be
+    byte-concatenated (each shard has its own footer), so big tables
+    have to use CSV / NDJSON instead."""
+
+    status_code = 413
+    type_label = "Payload Too Large"
+
+
 class ServerError(APIError):
     status_code = 500
     type_label = "Internal Error"
@@ -50,7 +61,7 @@ HTTP_STATUS_TO_TYPE_LABEL: dict[int, str] = {
     404: "Not Found Error",
     405: "Not Found Error",
     409: "Conflict Error",
-    413: "Validation Error",
+    413: "Payload Too Large",
     422: "Validation Error",
     501: "Not Implemented",
 }

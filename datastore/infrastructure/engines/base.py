@@ -171,6 +171,11 @@ class DatastoreBackend(ABC):
         """Return table metadata: column schema + free-form `meta` dict."""
 
     @abstractmethod
+    async def dump(self, resource_id: str, fmt: str) -> list[str]:
+        """Download a table as CSV/NDJSON/Parquet. 
+        """
+
+    @abstractmethod
     def get_columns(self, resource_id: str) -> list[str]:
         """Return column names for a table (needed for full-text search across all columns)."""
 
