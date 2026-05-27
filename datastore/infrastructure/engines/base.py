@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 
 @dataclass
@@ -31,6 +31,10 @@ class SearchResult:
 class WriteResult:
     rows_written: int = 0
     total: int | None = None
+    # Resulting Frictionless schema after the write — populated by
+    # `delete()`'s column-drop path so the response can echo the table's
+    # shape minus the dropped columns. `None` for other write paths.
+    schema: dict[str, Any] | None = None
 
 
 @dataclass
@@ -42,52 +46,6 @@ class InfoResult:
 
     schema: dict[str, Any]
     meta: dict[str, Any]
-
-
-@runtime_checkable
-class MetadataStore(Protocol):
-    """Per-engine storage for table-level metadata.
-
-    Holds one row per `resource_id`, keyed by the resource_id itself. The
-    canonical column shape is `(resource_id, schema, created_at,
-    updated_at)` where `schema` is a Frictionless Table Schema dict.
-
-    Each engine subpackage provides a concrete implementation
-    (e.g. `bigquery/metadata.py: BigQueryMetadataStore`) so the SQL
-    dialect, connection management, and column types stay engine-private.
-    The backend constructs its store in `__init__`, calls `initialize()`
-    once at startup to create the underlying table, and calls `upsert`
-    from `create()` whenever a caller declares a new resource.
-
-    Adding a new engine = drop a sibling `metadata.py` implementing this
-    Protocol; the backend wires it in by holding `self.metadata`.
-    """
-
-    def initialize(self) -> None:
-        """Create the metadata table if it doesn't exist. Idempotent."""
-
-    def insert(self, resource_id: str, schema: dict[str, Any]) -> None:
-        """Insert a new metadata row for `resource_id`.
-
-        Sets `created_at` and `updated_at` to now. Fails if a row with
-        the same `resource_id` already exists — that's a real conflict
-        that callers should surface (a second `datastore_create` for an
-        already-declared resource).
-        """
-
-    def update(self, resource_id: str, schema: dict[str, Any]) -> None:
-        """Update the metadata row for `resource_id`.
-
-        Replaces `schema` and bumps `updated_at`; `created_at` is
-        preserved. Keyed on `resource_id`; no-op when the row is absent.
-        """
-
-    def get(self, resource_id: str) -> dict[str, Any] | None:
-        """Return the stored Frictionless schema for `resource_id`,
-        or `None` when no row exists."""
-
-    def delete(self, resource_id: str) -> None:
-        """Remove the metadata row for `resource_id`. No-op when absent."""
 
 
 class DatastoreBackend(ABC):

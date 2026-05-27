@@ -33,7 +33,12 @@ async def create_datastore(
         assert context.ckan is not None, (
             "datastore_create `resource` dict path requires AUTH_TYPE=ckan"
         )
-        resource = await context.ckan.resource_create(resource=resource)
+        # Tag the new resource as datastore-managed so CKAN (and our own
+        # read-only guard on subsequent writes) knows the datastore owns
+        # its data. Caller-supplied url_type is overridden on purpose.
+        resource = await context.ckan.resource_create(
+            resource={**resource, "url_type": "datastore"}
+        )
         resource_id = resource["id"]
     else:
         resource_id = resource
@@ -98,7 +103,7 @@ async def delete_datastore(
     fields = data_dict.get("fields")
 
     engine = get_datastore_engine(context, mode="rw")
-    await asyncio.to_thread(
+    result = await asyncio.to_thread(
         engine.delete, resource_id=resource_id, filters=filters, fields=fields,
     )
 
@@ -106,4 +111,7 @@ async def delete_datastore(
         resource_id=resource_id,
         filters=filters,
         fields=fields,
+        # Populated only on the column-drop path: the table's schema
+        # after the listed columns were removed.
+        schema=result.schema,
     )

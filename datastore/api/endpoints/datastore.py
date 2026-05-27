@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
+from datastore.api.auth import ensure_resource_writable
 from datastore.api.context import Context
 from datastore.api.responses import _deprecation_warnings, _success_response
 from datastore.core.exceptions import ValidationError
@@ -63,6 +64,14 @@ async def datastore_create(
             permission="create",
         )
 
+    # Refuse to re-declare a datastore-managed resource unless forced
+    # (CKAN auth only; no-op on the new-resource dict path).
+    ensure_resource_writable(
+        data_dict["resource"],
+        force=bool(payload.force),
+        auth_type=context.config.AUTH_TYPE,
+    )
+
     data_dict.update(
         {
             "resource": payload.resource_id or payload.resource,
@@ -89,6 +98,11 @@ async def datastore_upsert(
     data_dict = await context.authorize(
         resource_id=payload.resource_id,
         permission="update",
+    )
+    ensure_resource_writable(
+        data_dict["resource"],
+        force=payload.force,
+        auth_type=context.config.AUTH_TYPE,
     )
     data_dict.update(payload.model_dump())
     result = await upsert_datastore(context, data_dict)
@@ -181,6 +195,13 @@ async def datastore_delete(
     Returns the original `filters` echoed back (CKAN convention) so the
     caller can confirm what the server actually applied.
     """
-    await context.authorize(resource_id=payload.resource_id, permission="delete")
+    data_dict = await context.authorize(
+        resource_id=payload.resource_id, permission="delete"
+    )
+    ensure_resource_writable(
+        data_dict["resource"],
+        force=payload.force,
+        auth_type=context.config.AUTH_TYPE,
+    )
     result = await delete_datastore(context, payload.model_dump())
     return _success_response(request, result)

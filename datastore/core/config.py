@@ -100,9 +100,8 @@ class Config(BaseSettings):
     BIGQUERY_DATASET: str = Field(
         default="",
         description=(
-            "BigQuery dataset that holds the datastore tables. Both the "
-            "per-resource data tables and the internal `_table_metadata` "
-            "table live here. Required when DATASTORE_ENGINE=bigquery."
+            "BigQuery dataset that holds the per-resource datastore "
+            "tables. Required when DATASTORE_ENGINE=bigquery."
         ),
     )
     BIGQUERY_CREDENTIALS: str = Field(

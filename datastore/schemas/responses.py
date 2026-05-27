@@ -101,6 +101,9 @@ class DatastoreDeleteResponse(ResponseModel):
         resource_id: str
         filters: dict[str, Any] | None = None
         fields: list[str] | None = None
+        # Set only on the column-drop path: the resulting Frictionless
+        # Table Schema after the listed columns were removed.
+        schema: dict[str, Any] | None = None
 
     result: Result
 
