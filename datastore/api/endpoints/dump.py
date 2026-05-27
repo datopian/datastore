@@ -33,7 +33,7 @@ _MEDIA_TYPE: dict[str, str] = {
     "parquet": "application/vnd.apache.parquet",
 }
 
-router = APIRouter(tags=["dump"], responses=ERROR_RESPONSES)
+router = APIRouter(tags=["Datastore Download"], responses=ERROR_RESPONSES)
 
 
 @router.get(

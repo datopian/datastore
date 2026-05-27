@@ -39,7 +39,7 @@ from datastore.services.write import (
     upsert_datastore,
 )
 
-router = APIRouter(tags=["datastore"], responses=ERROR_RESPONSES)
+router = APIRouter(tags=["Datastore"], responses=ERROR_RESPONSES)
 
 
 @router.post(
@@ -104,6 +104,33 @@ async def datastore_upsert(
     )
     data_dict.update(payload.model_dump())
     result = await upsert_datastore(context, data_dict)
+    return _success_response(request, result)
+
+
+@router.post(
+    "/datastore_delete",
+    response_model=DatastoreDeleteResponse,
+    summary="Delete rows, drop columns, or drop the table",
+)
+async def datastore_delete(
+    request: Request,
+    payload: DatastoreDeleteRequest,
+    context: Context,
+):
+    """`POST /api/3/datastore_delete` — delete rows or drop the table.
+
+    Body:
+      `resource_id` / `id` (one required) — table to delete from.
+      `filters` (optional dict) — only rows matching every key/value
+         pair are deleted. Omit → whole table is dropped.
+      `force` (optional bool) — required to delete from a CKAN
+         read-only resource.
+
+    Returns the original `filters` echoed back (CKAN convention) so the
+    caller can confirm what the server actually applied.
+    """
+    await context.authorize(resource_id=payload.resource_id, permission="delete")
+    result = await delete_datastore(context, payload.model_dump())
     return _success_response(request, result)
 
 
@@ -186,29 +213,3 @@ async def datastore_info(
     result = await info_datastore(context, params.model_dump())
     return _success_response(request, result)
 
-
-@router.post(
-    "/datastore_delete",
-    response_model=DatastoreDeleteResponse,
-    summary="Delete rows, drop columns, or drop the table",
-)
-async def datastore_delete(
-    request: Request,
-    payload: DatastoreDeleteRequest,
-    context: Context,
-):
-    """`POST /api/3/datastore_delete` — delete rows or drop the table.
-
-    Body:
-      `resource_id` / `id` (one required) — table to delete from.
-      `filters` (optional dict) — only rows matching every key/value
-         pair are deleted. Omit → whole table is dropped.
-      `force` (optional bool) — required to delete from a CKAN
-         read-only resource.
-
-    Returns the original `filters` echoed back (CKAN convention) so the
-    caller can confirm what the server actually applied.
-    """
-    await context.authorize(resource_id=payload.resource_id, permission="delete")
-    result = await delete_datastore(context, payload.model_dump())
-    return _success_response(request, result)

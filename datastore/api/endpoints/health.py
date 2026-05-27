@@ -11,10 +11,10 @@ from datastore.core.config import get_config
 from datastore.infrastructure.engines.registry import get_datastore_engine
 from datastore.schemas.responses import StatusResponse, WelcomeResponse
 
-welcome_router = APIRouter(tags=["health"])
+welcome_router = APIRouter(tags=["Health"])
 
 
-probe_router = APIRouter(tags=["health"])
+probe_router = APIRouter(tags=["Health"])
 
 
 @welcome_router.get(

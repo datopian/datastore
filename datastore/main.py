@@ -25,50 +25,25 @@ from datastore.infrastructure.engines.registry import (
 
 log = logging.getLogger("uvicorn.error")
 
-API_DESCRIPTION = """\
-A **CKAN-compatible datastore API** — tabular CRUD + search over a pluggable
-storage backend (BigQuery today; DuckLake planned).
-
-### Response envelope
-Every `/api/3/action/*` response uses the CKAN envelope:
-
-```json
-{ "help": "<request URL>", "success": true, "result": { ... } }
-```
-
-On failure `success` is `false` and `error` carries a `__type` label
-(`Validation Error` · `Authorization Error` · `Not Found Error` ·
-`Conflict Error` · `Internal Error`) plus a human `message`.
-
-### Authentication
-Send your token in the **`Authorization`** header — click **Authorize** above
-to set it once for every call. The active provider is chosen by `AUTH_TYPE`
-(`ckan` / `jwt` / `anonymous`); under `anonymous` no header is required.
-
-### Search & streaming
-`datastore_search` and `datastore_search_sql` **stream** their response
-(peak memory ≈ one row, regardless of result size) and support
-`records_format` = `objects` · `lists` · `csv` · `tsv`. Page through results
-with the `_links.next` URL returned in `result`.
-"""
 
 OPENAPI_TAGS = [
-    {
-        "name": "datastore",
-        "description": (
-            "CKAN `datastore_*` actions — create, upsert, delete, search, "
-            "search_sql, and info."
-        ),
-    },
-    {
-        "name": "health",
+     {
+        "name": "Health",
         "description": (
             "Liveness (`/health`) and readiness (`/ready`) probes for "
             "orchestration."
         ),
     },
     {
-        "name": "dump",
+        "name": "Datastore",
+        "description": (
+            "A `datastore` API endpoint - create, upsert, delete, search, "
+            "search_sql, and info."
+        ),
+    },
+
+    {
+        "name": "Datastore Download",
         "description": "Bulk download of an entire resource (CSV / JSON / Parquet).",
     },
 ]
@@ -153,12 +128,11 @@ def create_app() -> FastAPI:
         title="Datastore API",
         version=_api_version(),
         summary=(
-            "CKAN-compatible tabular CRUD + search over a pluggable storage "
-            "backend."
+            "A Datasore API endpoint for managing tabular data resources. "
         ),
-        description=API_DESCRIPTION,
+        description="",
         openapi_tags=OPENAPI_TAGS,
-        contact={"name": "Datopian", "url": "https://github.com/datopian/datastore"},
+        contact={"name": "Datopian", "url": "https://www.datopian.com/"},
         lifespan=lifespan,
         default_response_class=ORJSONResponse,
     )
