@@ -431,7 +431,9 @@ The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, pa
 `datastore_create` accepts two shapes:
 
 - `resource_id` — table name only. Works under any `AUTH_TYPE`.
-- `resource` (dict) — calls `ckan.resource_create(...)` first to materialise a CKAN resource, then writes the datastore table. **Only valid under `AUTH_TYPE=ckan`**; the endpoint rejects this shape with a `Validation Error` under JWT / anonymous since there's no CKAN to land it.
+- `resource` (dict) — calls `ckan.resource_create(...)` first to materialise a CKAN resource, then writes the datastore table. The resource is created with `url_type="datastore"` so CKAN (and the read-only guard below) knows the datastore owns its data. **Only valid under `AUTH_TYPE=ckan`**; the endpoint rejects this shape with a `Validation Error` under JWT / anonymous since there's no CKAN to land it.
+
+**Read-only guard (CKAN auth).** `datastore_create`, `datastore_upsert`, and `datastore_delete` refuse to write a resource whose CKAN record carries `url_type="datastore"` unless the request sets `force: true` — a `Validation Error` ("Cannot update a read-only resource. Use \"force\" to force update.") otherwise. This mirrors CKAN's protection against clobbering datastore-managed data by accident. Non-CKAN auth has no resource record, so the guard is a no-op there.
 
 ### 5.3 `GET /datastore/dump/{resource_id}`
 

@@ -166,3 +166,36 @@ def test_denied_key_returns_403(
 
     assert response.status_code == 403
     assert response.json()["error"]["__type"] == "Authorization Error"
+
+
+# 5. Read-only resource guard (url_type="datastore") ------------------------
+
+
+def test_delete_on_readonly_resource_requires_force(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    fake_ckan.add_resource(
+        "ro-res", package_id="pkg-balancing-2025", url_type="datastore"
+    )
+
+    response = client.post(DELETE_URL, json={"resource_id": "ro-res"})
+
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["__type"] == "Validation Error"
+    assert "read-only" in error["message"]
+
+
+def test_delete_on_readonly_resource_with_force_succeeds(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    fake_ckan.add_resource(
+        "ro-res", package_id="pkg-balancing-2025", url_type="datastore"
+    )
+
+    response = client.post(
+        DELETE_URL, json={"resource_id": "ro-res", "force": True}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True

@@ -359,3 +359,56 @@ def test_create_with_invalid_schema_returns_validation_error(
     error = response.json()["error"]
     assert error["__type"] == "Validation Error"
     assert "schema" in error["fields"]
+
+
+# Read-only resource guard (url_type="datastore") ---------------------------
+
+
+def test_create_with_resource_dict_tags_url_type_datastore(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    """The resource-dict path marks the new CKAN resource datastore-managed."""
+    response = client.post(CREATE_URL, json=_valid_payload_with_resource())
+
+    assert response.status_code == 200
+    created = fake_ckan.resources["balancing_auction_results_2025"]
+    assert created["url_type"] == "datastore"
+
+
+def test_create_on_readonly_resource_requires_force(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    fake_ckan.add_resource(
+        "ro-res", package_id="pkg-balancing-2025", url_type="datastore"
+    )
+    payload = {
+        "resource_id": "ro-res",
+        "fields": [{"id": "auction_id", "type": "int4"}],
+        "records": [],
+    }
+
+    response = client.post(CREATE_URL, json=payload)
+
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["__type"] == "Validation Error"
+    assert "read-only" in error["message"]
+
+
+def test_create_on_readonly_resource_with_force_succeeds(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    fake_ckan.add_resource(
+        "ro-res", package_id="pkg-balancing-2025", url_type="datastore"
+    )
+    payload = {
+        "resource_id": "ro-res",
+        "force": True,
+        "fields": [{"id": "auction_id", "type": "int4"}],
+        "records": [],
+    }
+
+    response = client.post(CREATE_URL, json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True

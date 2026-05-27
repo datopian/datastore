@@ -33,7 +33,12 @@ async def create_datastore(
         assert context.ckan is not None, (
             "datastore_create `resource` dict path requires AUTH_TYPE=ckan"
         )
-        resource = await context.ckan.resource_create(resource=resource)
+        # Tag the new resource as datastore-managed so CKAN (and our own
+        # read-only guard on subsequent writes) knows the datastore owns
+        # its data. Caller-supplied url_type is overridden on purpose.
+        resource = await context.ckan.resource_create(
+            resource={**resource, "url_type": "datastore"}
+        )
         resource_id = resource["id"]
     else:
         resource_id = resource

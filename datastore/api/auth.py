@@ -61,3 +61,18 @@ async def authorize(
         permission=permission,
     )
     return {"resource": decision.resource or {}, "package": decision.package or {}}
+
+
+def ensure_resource_writable(resource: dict[str, Any], *, force: bool) -> None:
+    """Block writes to a CKAN datastore-managed resource unless `force`.
+
+    CKAN tags resources whose data the datastore owns with
+    `url_type="datastore"`; editing one through datastore_create /
+    _upsert / _delete requires an explicit `force` so managed data isn't
+    clobbered by accident. Non-CKAN auth yields no resource (`{}`), so
+    this is a no-op there.
+    """
+    if not force and resource.get("url_type") == "datastore":
+        raise ValidationError(
+            'Cannot update a read-only resource. Use "force" to force update.'
+        )
