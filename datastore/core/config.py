@@ -237,17 +237,6 @@ class Config(BaseSettings):
         description="Logging level",
     )
 
-    # Per-request profiling. When True, sending `X-Profile: 1` (or `text`)
-    # on any request replaces the response body with a pyinstrument
-    # flamegraph of that request. Dev/staging only — leave False in prod.
-    PERF_PROFILE_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Enable on-demand pyinstrument profiling via the `X-Profile` "
-            "request header. Dev-only; leave off in production."
-        ),
-    )
-
     @model_validator(mode="after")
     def _check_ckan_url_required_for_ckan_auth(self) -> Config:
         if self.AUTH_TYPE == "ckan" and not self.CKAN_URL:
