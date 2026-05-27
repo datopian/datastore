@@ -54,7 +54,7 @@ class CKANClient:
         permission: str | None = None,
     ) -> dict[str, Any]:
         """`/api/3/action/datastore_authorize`.
-        Authorize resource and package. 
+        Authorize resource and package.
         """
         if (resource_id is None) == (package_id is None):
             raise ValidationError(

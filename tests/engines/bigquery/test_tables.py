@@ -83,30 +83,49 @@ def test_data_table_ref_uses_backticks(mock_client: MagicMock) -> None:
     )
 
 
-def test_create_data_table_emits_create_table_if_not_exists(
+def test_create_table_sql_emits_ddl_with_options(
     mock_client: MagicMock,
 ) -> None:
+    """`_create_table_sql` renders `CREATE TABLE` DDL carrying the
+    table-level OPTIONS block with the user's full schema verbatim —
+    `fields`, `primaryKey`, and any per-field keys (`title`,
+    `description`, `unit`, custom extensions) all stored on the table
+    itself rather than scattered across column descriptions."""
     backend = _backend(mock_client)
-    backend._create_data_table(
+    sql = backend._create_table_sql(
         "res-1",
-        {"fields": [
-            {"name": "id", "type": "integer"},
-            {"name": "label", "type": "string"},
-        ]},
+        {
+            "fields": [
+                {"name": "id",    "type": "integer", "title": "ID"},
+                {"name": "label", "type": "string"},
+            ],
+            "primaryKey": ["id"],
+        },
     )
-    sql = mock_client.query.call_args[0][0]
-    assert "CREATE TABLE IF NOT EXISTS `proj-1.ds-1.res-1`" in sql
-    # User columns.
-    assert "`id` INT64" in sql
+    assert sql is not None
+    assert "CREATE TABLE `proj-1.ds-1.res-1`" in sql
+    # User columns (plain DDL, no per-column OPTIONS).
+    assert "`id` INT64," in sql
     assert "`label` STRING" in sql
+    assert " OPTIONS(" not in sql.split(") OPTIONS")[0]  # nothing pre-table-OPTIONS
     # System columns auto-prepended.
     assert "`_id` INT64" in sql
     assert "`_updated_at` TIMESTAMP" in sql
+    # Table-level OPTIONS contains the full user schema, verbatim.
+    assert '"title":"ID"' in sql
+    assert '"primaryKey":["id"]' in sql
+    assert sql.endswith(
+        ', labels = [("datastore_managed", "true")])'
+    )
 
 
-def test_alter_adds_new_columns_and_widens_supported_types(
+def test_alter_adds_new_columns_widens_types_then_refreshes_options(
     mock_client: MagicMock,
 ) -> None:
+    """`_alter_data_table` issues two statements: the column ADD / ALTER
+    actions first, then `ALTER TABLE … SET OPTIONS(...)` to refresh the
+    table-level metadata block (BQ refuses to mix the two in one
+    statement)."""
     backend = _backend(mock_client)
     old = {"fields": [{"name": "a", "type": "integer"}]}
     new = {"fields": [
@@ -116,10 +135,37 @@ def test_alter_adds_new_columns_and_widens_supported_types(
 
     backend._alter_data_table("res-1", old, new)
 
+    assert mock_client.query.call_count == 2
+    col_sql = mock_client.query.call_args_list[0].args[0]
+    opts_sql = mock_client.query.call_args_list[1].args[0]
+    assert "ALTER TABLE `proj-1.ds-1.res-1`" in col_sql
+    assert "ADD COLUMN IF NOT EXISTS `b` STRING" in col_sql
+    assert "ALTER COLUMN `a` SET DATA TYPE FLOAT64" in col_sql
+    assert opts_sql.startswith(
+        "ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS("
+    )
+    # Refreshed table OPTIONS carries the new schema verbatim.
+    assert '"name":"a","type":"number"' in opts_sql
+    assert '"name":"b","type":"string"' in opts_sql
+
+
+def test_alter_refreshes_options_even_when_no_column_changes(
+    mock_client: MagicMock,
+) -> None:
+    """Re-declaring the same schema (e.g. to change `primaryKey` on
+    the same column set) still refreshes the table-level OPTIONS so
+    the reader sees the new primaryKey on the next `tables.get`."""
+    backend = _backend(mock_client)
+    schema = {
+        "fields": [{"name": "a", "type": "integer"}],
+        "primaryKey": ["a"],
+    }
+    backend._alter_data_table("res-1", schema, schema)
+
+    assert mock_client.query.call_count == 1
     sql = mock_client.query.call_args[0][0]
-    assert "ALTER TABLE `proj-1.ds-1.res-1`" in sql
-    assert "ADD COLUMN IF NOT EXISTS `b` STRING" in sql
-    assert "ALTER COLUMN `a` SET DATA TYPE FLOAT64" in sql
+    assert sql.startswith("ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS(")
+    assert '"primaryKey":["a"]' in sql
 
 
 def test_alter_rejects_unsupported_type_change_before_any_ddl(
@@ -197,8 +243,9 @@ def test_client_query_errors_surface_as_server_error_with_context(
     )
     backend = _backend(mock_client)
     with pytest.raises(ServerError) as exc:
-        backend._create_data_table(
-            "res-1", {"fields": [{"name": "a", "type": "integer"}]}
+        backend._run_query(
+            "CREATE TABLE foo (x INT64)",
+            op="CREATE TABLE", resource_id="res-1",
         )
     assert "CREATE TABLE" in str(exc.value)
     assert "'res-1'" in str(exc.value)
@@ -207,20 +254,15 @@ def test_client_query_errors_surface_as_server_error_with_context(
 # --- create() orchestration -----------------------------------------------
 
 
-def test_create_new_resource_runs_ddl_records_then_metadata_in_order(
+def test_create_new_resource_runs_combined_create_and_insert_script(
     mock_client: MagicMock,
 ) -> None:
-    """New resource path: CREATE TABLE → INSERT INTO → metadata.insert.
-    Two BigQuery round-trips (`MAX(_id)` is inlined into the INSERT
-    statement). Metadata is the last write so any failure earlier
-    leaves it untouched."""
+    """New resource path: CREATE TABLE + INSERT INTO travel as a single
+    multi-statement BigQuery script (one `client.query` submission,
+    one polling cycle). Saves ~1s of job overhead vs running them
+    separately."""
     backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None
-
-    parent = MagicMock()
-    parent.attach_mock(mock_client.query, "query")
-    parent.attach_mock(backend.metadata.insert, "metadata_insert")
+    backend._read_schema = MagicMock(return_value=None)
 
     backend.create(
         "res-1",
@@ -229,33 +271,88 @@ def test_create_new_resource_runs_ddl_records_then_metadata_in_order(
         include_total=False,
     )
 
-    sql_calls = [c for c in parent.mock_calls if c[0] == "query"]
-    assert len(sql_calls) == 2  # no separate MAX(_id) probe
-    assert sql_calls[0].args[0].startswith("CREATE TABLE IF NOT EXISTS")
-    assert sql_calls[1].args[0].startswith("INSERT INTO ")
-    # The inlined MAX(_id) subquery rides inside the INSERT itself.
-    assert "SELECT IFNULL(MAX(`_id`), 0)" in sql_calls[1].args[0]
-    # metadata.insert came last.
-    assert parent.mock_calls[-1][0] == "metadata_insert"
+    assert mock_client.query.call_count == 1
+    script = mock_client.query.call_args[0][0]
+    assert script.startswith("CREATE TABLE ")
+    # Table-level OPTIONS lives on the CREATE — no follow-up metadata write.
+    assert ") OPTIONS(description = '" in script
+    # The INSERT statement comes after the CREATE, separated by `;`.
+    assert ";\nINSERT INTO " in script
+    # `MAX(_id)` is inlined into the INSERT — no separate probe.
+    assert "SELECT IFNULL(MAX(`_id`), 0)" in script
+    # @rows parameter rides on the same job_config.
+    params = mock_client.query.call_args.kwargs["job_config"].query_parameters
+    assert [p.name for p in params] == ["rows"]
 
 
-def test_create_skips_metadata_when_records_insert_fails(
+def test_create_with_no_records_on_new_resource_runs_create_only(
     mock_client: MagicMock,
 ) -> None:
-    """Atomicity: a DML INSERT failure leaves metadata untouched.
-
-    Create flow: CREATE TABLE → INSERT. Fail the second query (the
-    INSERT); the first (CREATE TABLE) succeeds.
-    """
+    """When `records` is empty and the resource is new, the engine
+    issues just `CREATE TABLE` (no INSERT) — but it still reads the
+    existing schema first so a re-declare with new columns on an
+    existing table can ALTER them in (see the alter-path tests)."""
     backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None
+    backend._read_schema = MagicMock(return_value=None)
 
-    success_job = MagicMock()
-    success_job.result.return_value = []
+    backend.create(
+        "res-1",
+        schema={"fields": [{"name": "a", "type": "integer"}]},
+        records=None,
+        include_total=False,
+    )
+
+    backend._read_schema.assert_called_once_with("res-1")
+    assert mock_client.query.call_count == 1
+    sql = mock_client.query.call_args[0][0]
+    assert sql.startswith("CREATE TABLE ")
+    assert "INSERT" not in sql
+
+
+def test_create_with_no_records_on_existing_resource_alters_columns(
+    mock_client: MagicMock,
+) -> None:
+    """Re-declaring an existing resource with NEW columns and no
+    records still adds the columns — `_read_schema` runs unconditionally
+    so the diff fires whether or not the caller had rows to insert."""
+    backend = _backend(mock_client)
+    backend._read_schema = MagicMock(return_value={
+        "fields": [{"name": "a", "type": "integer"}],
+    })
+
+    backend.create(
+        "res-1",
+        schema={"fields": [
+            {"name": "a", "type": "integer"},
+            {"name": "b", "type": "string"},
+        ]},
+        records=None,
+        include_total=False,
+    )
+
+    # Column ALTER + table-level SET OPTIONS, no INSERT.
+    assert mock_client.query.call_count == 2
+    col_sql = mock_client.query.call_args_list[0].args[0]
+    opts_sql = mock_client.query.call_args_list[1].args[0]
+    assert "ADD COLUMN IF NOT EXISTS `b` STRING" in col_sql
+    assert opts_sql.startswith(
+        "ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS("
+    )
+
+
+def test_create_propagates_insert_failure_as_server_error(
+    mock_client: MagicMock,
+) -> None:
+    """If the combined CREATE+INSERT script fails (e.g. type coercion
+    error on a row), the error surfaces as `ServerError` carrying the
+    resource_id. The CREATE half is idempotent, so a retry with fixed
+    records re-runs the whole script and lands the table."""
+    backend = _backend(mock_client)
+    backend._read_schema = MagicMock(return_value=None)
+
     fail_job = MagicMock()
     fail_job.result.side_effect = RuntimeError("insert failed")
-    mock_client.query.side_effect = [success_job, fail_job]
+    mock_client.query.return_value = fail_job
 
     with pytest.raises(ServerError):
         backend.create(
@@ -264,8 +361,6 @@ def test_create_skips_metadata_when_records_insert_fails(
             records=[{"a": 1}],
             include_total=False,
         )
-    backend.metadata.insert.assert_not_called()
-    backend.metadata.update.assert_not_called()
 
 
 def test_create_placeholder_mode_skips_everything(
@@ -274,7 +369,7 @@ def test_create_placeholder_mode_skips_everything(
     """No metadata store → no DDL, no metadata calls. Lets the unit
     suite run without GCP creds."""
     backend = _backend(mock_client)
-    backend.metadata = None
+    backend.client = None
 
     backend.create(
         "res-1",
@@ -365,8 +460,7 @@ def _backend_with_schema(
     mock_client: MagicMock, schema: dict[str, Any]
 ) -> BigQueryBackend:
     backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = schema
+    backend._read_schema = MagicMock(return_value=schema)
     return backend
 
 
@@ -475,8 +569,7 @@ def test_upsert_undeclared_resource_raises_not_found(
     """`upsert` before `create` → NotFoundError. Metadata store is the
     source of truth for whether a resource exists."""
     backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None
+    backend._read_schema = MagicMock(return_value=None)
 
     with pytest.raises(NotFoundError, match="not declared"):
         backend.upsert(
@@ -582,19 +675,18 @@ def test_insert_translates_bigquery_bad_double_value_to_type_mismatch(
     a non-numeric string for a `number` column) is translated to a
     clear ValidationError naming the bad value and the expected type.
 
-    The create-flow runs CREATE TABLE → INSERT INTO — only the INSERT
-    (2nd call) should fail. The first (CREATE TABLE) succeeds.
+    The create-flow runs CREATE TABLE + INSERT INTO as a single
+    multi-statement script; BigQuery aborts the script on the INSERT
+    statement and surfaces the type error to the single
+    `client.query` caller.
     """
-    success_job = MagicMock()
-    success_job.result.return_value = []
     fail_job = MagicMock()
     fail_job.result.side_effect = RuntimeError(
         "400 Bad double value: jk; reason: invalidQuery, location: query"
     )
-    mock_client.query.side_effect = [success_job, fail_job]
+    mock_client.query.return_value = fail_job
     backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None
+    backend._read_schema = MagicMock(return_value=None)
 
     with pytest.raises(ValidationError) as exc:
         backend.create(
@@ -814,16 +906,16 @@ def test_backend_propagates_config_flag_into_ddl(
     mock_client: MagicMock,
 ) -> None:
     """`BigQueryBackend._include_updated_at` reads `INCLUDE_UPDATED_AT`
-    off the attached config; `_create_data_table` honours it."""
+    off the attached config; `_create_table_sql` honours it."""
     backend = _backend(mock_client)
     backend.config.INCLUDE_UPDATED_AT = False
 
-    backend._create_data_table(
+    sql = backend._create_table_sql(
         "res-1",
         {"fields": [{"name": "id", "type": "integer"}]},
     )
 
-    sql = mock_client.query.call_args[0][0]
+    assert sql is not None
     assert "`_id` INT64" in sql
     assert "_updated_at" not in sql
 
@@ -869,8 +961,7 @@ def test_info_raises_not_found_for_undeclared_resource(
     out-of-band but the engine treats `_table_metadata` as the
     declaration source of truth."""
     backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None
+    backend._read_schema = MagicMock(return_value=None)
 
     with pytest.raises(NotFoundError, match="not declared"):
         backend.info("ghost")
@@ -903,7 +994,7 @@ def test_info_placeholder_mode_returns_stub(mock_client: MagicMock) -> None:
     """No metadata store → return an empty stub so the unit suite can
     exercise the call path without GCP creds."""
     backend = _backend(mock_client)
-    backend.metadata = None
+    backend.client = None
 
     result = backend.info("res-1")
 
@@ -1181,8 +1272,7 @@ def test_search_raises_not_found_for_undeclared_resource(
     mock_client: MagicMock,
 ) -> None:
     backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None
+    backend._read_schema = MagicMock(return_value=None)
 
     with pytest.raises(NotFoundError, match="not declared"):
         backend.search(
@@ -1215,26 +1305,27 @@ def test_search_translates_builder_error_to_validation_error(
 # --- delete() -------------------------------------------------------------
 
 
-def test_delete_with_no_filters_or_fields_drops_table_and_metadata(
+def test_delete_with_no_filters_or_fields_drops_table(
     mock_client: MagicMock,
 ) -> None:
-    """Both `filters` and `fields` omitted → `DROP TABLE` + the
-    metadata row is removed. Resource disappears entirely."""
+    """Both `filters` and `fields` omitted → `DROP TABLE`. Metadata
+    lives on the table itself, so the drop removes both at once —
+    no follow-up metadata cleanup needed."""
     schema = {"fields": [{"name": "id", "type": "integer"}]}
     backend = _backend_with_schema(mock_client, schema)
 
     backend.delete("res-1", filters=None, fields=None)
 
+    assert mock_client.query.call_count == 1
     sql = mock_client.query.call_args[0][0]
     assert sql == "DROP TABLE IF EXISTS `proj-1.ds-1.res-1`"
-    backend.metadata.delete.assert_called_once_with("res-1")
 
 
 def test_delete_with_empty_filters_deletes_all_rows(
     mock_client: MagicMock,
 ) -> None:
-    """`filters={}` → `DELETE FROM … WHERE TRUE`. Table + metadata
-    survive; only rows go."""
+    """`filters={}` → `DELETE FROM … WHERE TRUE`. Table (and its
+    metadata) survive; only rows go."""
     schema = {"fields": [{"name": "id", "type": "integer"}]}
     backend = _backend_with_schema(mock_client, schema)
 
@@ -1242,7 +1333,6 @@ def test_delete_with_empty_filters_deletes_all_rows(
 
     sql = mock_client.query.call_args[0][0]
     assert sql == "DELETE FROM `proj-1.ds-1.res-1` WHERE TRUE"
-    backend.metadata.delete.assert_not_called()
 
 
 def test_delete_with_filters_binds_typed_parameters(
@@ -1273,11 +1363,13 @@ def test_delete_with_filters_binds_typed_parameters(
     assert params == {"f0": (144, "INT64"), "f1": (False, "BOOL")}
 
 
-def test_delete_with_fields_drops_columns_and_updates_metadata(
+def test_delete_with_fields_drops_columns_and_refreshes_options(
     mock_client: MagicMock,
 ) -> None:
     """`fields=[…]` → `ALTER TABLE DROP COLUMN …` (one ALTER, multiple
-    clauses) and the stored schema is rewritten without those fields."""
+    clauses) followed by a `SET OPTIONS` that rewrites the table-level
+    metadata without the dropped column names. Two SQL calls total —
+    BigQuery refuses to mix column actions and SET OPTIONS."""
     schema = {
         "fields": [
             {"name": "id", "type": "integer"},
@@ -1288,17 +1380,30 @@ def test_delete_with_fields_drops_columns_and_updates_metadata(
     }
     backend = _backend_with_schema(mock_client, schema)
 
-    backend.delete("res-1", filters=None, fields=["extra", "obsolete"])
+    result = backend.delete("res-1", filters=None, fields=["extra", "obsolete"])
 
-    sql = mock_client.query.call_args[0][0]
-    assert sql == (
+    # The resulting schema (minus the dropped columns) is returned so the
+    # response can echo the table's shape after the drop.
+    assert result.schema == {
+        "fields": [{"name": "id", "type": "integer"}],
+        "primaryKey": ["id"],
+    }
+
+    assert mock_client.query.call_count == 2
+    drop_sql = mock_client.query.call_args_list[0].args[0]
+    opts_sql = mock_client.query.call_args_list[1].args[0]
+    assert drop_sql == (
         "ALTER TABLE `proj-1.ds-1.res-1` "
         "DROP COLUMN `extra`, DROP COLUMN `obsolete`"
     )
-    # Stored schema shrinks to just the surviving fields.
-    new_schema = backend.metadata.update.call_args[0][1]
-    assert [f["name"] for f in new_schema["fields"]] == ["id"]
-    assert new_schema["primaryKey"] == ["id"]
+    assert opts_sql.startswith(
+        "ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS("
+    )
+    # Refreshed table metadata only references surviving fields + PK.
+    assert '"primaryKey":["id"]' in opts_sql
+    assert '"name":"id"' in opts_sql
+    assert '"extra"' not in opts_sql
+    assert '"obsolete"' not in opts_sql
 
 
 def test_delete_rejects_dropping_primary_key_columns(
@@ -1366,8 +1471,7 @@ def test_delete_raises_not_found_for_undeclared_resource(
     mock_client: MagicMock,
 ) -> None:
     backend = _backend(mock_client)
-    backend.metadata = MagicMock()
-    backend.metadata.get.return_value = None
+    backend._read_schema = MagicMock(return_value=None)
 
     with pytest.raises(NotFoundError, match="not declared"):
         backend.delete("ghost", filters=None, fields=None)

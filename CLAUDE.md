@@ -426,12 +426,14 @@ Each endpoint takes a single `ContextDep`. The handler calls `context.authorize(
 | GET  | `/api/3/action/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
 | GET  | `/datastore/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 
-The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, parameterised search, `_table_metadata` for Frictionless schema + unique_key round-trip, a row-count fast path via `INFORMATION_SCHEMA.TABLE_STORAGE`, and `EXPORT DATA`-backed dump with `table.modified`-keyed GCS caching. The DuckLake engine is the next concrete adapter — see §7.
+The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, parameterised search, native table-level metadata (the Frictionless schema + unique_key are JSON-encoded into the table's own `description` OPTION) for the schema round-trip, a row-count fast path via `INFORMATION_SCHEMA.TABLE_STORAGE`, and `EXPORT DATA`-backed dump with `table.modified`-keyed GCS caching. The DuckLake engine is the next concrete adapter — see §7.
 
 `datastore_create` accepts two shapes:
 
 - `resource_id` — table name only. Works under any `AUTH_TYPE`.
-- `resource` (dict) — calls `ckan.resource_create(...)` first to materialise a CKAN resource, then writes the datastore table. **Only valid under `AUTH_TYPE=ckan`**; the endpoint rejects this shape with a `Validation Error` under JWT / anonymous since there's no CKAN to land it.
+- `resource` (dict) — calls `ckan.resource_create(...)` first to materialise a CKAN resource, then writes the datastore table. The resource is created with `url_type="datastore"` so CKAN (and the read-only guard below) knows the datastore owns its data. **Only valid under `AUTH_TYPE=ckan`**; the endpoint rejects this shape with a `Validation Error` under JWT / anonymous since there's no CKAN to land it.
+
+**Read-only guard (`AUTH_TYPE=ckan` only).** `datastore_create`, `datastore_upsert`, and `datastore_delete` refuse to write a resource whose CKAN record carries `url_type="datastore"` unless the request sets `force: true` — a `Validation Error` ("Cannot update a read-only resource. Use \"force\" to force update.") otherwise. This mirrors CKAN's protection against clobbering datastore-managed data by accident. The guard is gated on `AUTH_TYPE=ckan` and skipped entirely under any other provider (only the CKAN provider attaches a resource record).
 
 ### 5.3 `GET /datastore/dump/{resource_id}`
 
@@ -483,6 +485,434 @@ The GCS client is built with the same credentials as the BigQuery client for the
 ## 6. Request / Response Contracts
 
 Every response is the CKAN envelope — `help`, `success`, and either `result` or `error`. The full per-endpoint reference (request bodies, query params, worked examples, and error shapes) lives in **[API.md](API.md)**.
+CKAN-style envelope: every response has `help`, `success`, and either `result` or `error`.
+
+### 6.1 `POST /api/3/datastore_create`
+
+Running example: an electricity balancing-market auction-results table. Used
+consistently across the rest of §6 so the request → search → info round-trip
+is easy to follow.
+
+**Request**
+```json
+{
+  "resource_id": "balancing_auction_results_2025",
+  "fields": [
+    {
+      "id": "auction_id",
+      "type": "integer",
+      "info": {
+        "title": "Auction ID",
+        "description": "Unique auction identifier. Stable across all products auctioned in the same market window.",
+        "comment": "MANDATORY",
+        "example": "144",
+        "unit": "N/A"
+      }
+    },
+    {
+      "id": "product_code",
+      "type": "string",
+      "info": {
+        "title": "Product Code",
+        "description": "Product mnemonic for the balancing service (e.g. DCL, DCH, FFR).",
+        "example": "DCL"
+      }
+    },
+    {
+      "id": "delivery_start",
+      "type": "datetime",
+      "info": {
+        "title": "Delivery Start (UTC)",
+        "description": "First instant of the delivery window. Stored as UTC; clients render local time.",
+        "example": "2025-11-04T16:00:00Z"
+      }
+    },
+    {
+      "id": "duration_minutes",
+      "type": "integer",
+      "info": {
+        "title": "Delivery Duration",
+        "description": "Length of the delivery window.",
+        "unit": "minutes",
+        "example": "30"
+      }
+    },
+    {
+      "id": "clearing_price_gbp_per_mwh",
+      "type": "number",
+      "info": {
+        "title": "Clearing Price",
+        "description": "Pay-as-cleared price for the auction. Negative values are possible during oversupply.",
+        "unit": "GBP/MWh",
+        "example": "47.82"
+      }
+    },
+    {
+      "id": "volume_mwh",
+      "type": "number",
+      "info": {
+        "title": "Cleared Volume",
+        "description": "Total volume cleared in this auction.",
+        "unit": "MWh",
+        "example": "120.0"
+      }
+    },
+    {
+      "id": "accepted",
+      "type": "boolean",
+      "info": {
+        "title": "Accepted",
+        "description": "Whether the bid cleared (true) or was rejected (false)."
+      }
+    },
+    {
+      "id": "bidder_metadata",
+      "type": "object",
+      "info": {
+        "title": "Bidder Metadata",
+        "description": "Free-form provider-specific metadata captured at submission time.",
+        "comment": "Schema not enforced; kept opaque for downstream analytics."
+      }
+    }
+  ],
+  "unique_key": ["auction_id", "product_code"],
+  "records": [
+    {
+      "auction_id": 144,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-04T16:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 47.82,
+      "volume_mwh": 120.0,
+      "accepted": true,
+      "bidder_metadata": {"unit_id": "DRAX-1", "submission_lag_ms": 412}
+    },
+    {
+      "auction_id": 144,
+      "product_code": "DCH",
+      "delivery_start": "2025-11-04T16:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 51.10,
+      "volume_mwh": 75.5,
+      "accepted": true,
+      "bidder_metadata": {"unit_id": "EDF-COTT-2", "submission_lag_ms": 280}
+    }
+  ]
+}
+```
+
+- `resource_id` — SQL identifier, required.
+- `fields` — non-empty; each entry contains:
+  - `id` (or alias `name`) — column identifier; SQL-safe.
+  - `type` — column type. Accepts Frictionless canonical (`integer`, `number`, `string`, `boolean`, `date`, `datetime`, `time`, `object`, `array`, `geopoint`, `geojson`, `any`) or SQL aliases (`int4`, `int8`, `bigint`, `varchar`, `text`, `float`, `double`, `numeric`, `bool`, `timestamp`, `json`, …) which are normalised to canonical on storage.
+  - `info` — optional **data dictionary** for documentation. Free-form object; recognised keys: `title`, `description`, `comment`, `example`, `unit`, plus any custom metadata. Stored verbatim and round-tripped on `datastore_info`. The outer `type` is canonical; any `info.type` is treated as a hint and ignored. Whitespace in string values is trimmed.
+- `unique_key` — string or list of strings; all entries must reference declared field ids. The example uses a composite key (`auction_id` + `product_code`) since one auction clears multiple products.
+- `records` — optional; each record's keys must be a subset of declared field ids.
+- `primary_key` — accepted for back-compat; emits deprecation warning.
+
+**Response — 200**
+```json
+{
+  "help": "<request URL>",
+  "success": true,
+  "result": {
+    "resource_id": "balancing_auction_results_2025",
+    "fields": [
+      {"id": "auction_id",                 "type": "integer",  "info": {"title": "Auction ID", "...": "..."}},
+      {"id": "product_code",               "type": "string",   "info": {"...": "..."}},
+      {"id": "delivery_start",             "type": "datetime", "info": {"...": "..."}},
+      {"id": "duration_minutes",           "type": "integer",  "info": {"...": "..."}},
+      {"id": "clearing_price_gbp_per_mwh", "type": "number",   "info": {"...": "..."}},
+      {"id": "volume_mwh",                 "type": "number",   "info": {"...": "..."}},
+      {"id": "accepted",                   "type": "boolean",  "info": {"...": "..."}},
+      {"id": "bidder_metadata",            "type": "object",   "info": {"...": "..."}}
+    ],
+    "primary_key": ["auction_id", "product_code"],
+    "unique_key": ["auction_id", "product_code"]
+  }
+}
+```
+
+Optional response fields (omitted from the body when not requested):
+- `records` — echoes the input rows back when the request sets `include_records: true`.
+- `total` — total row count after the write, populated when `include_total: true`.
+
+### 6.2 `GET /api/3/datastore_search`
+
+**Query params**
+| Name | Type | Default | Notes |
+|---|---|---|---|
+| `resource_id` | str | — | required unless `q` supplied |
+| `filters` | JSON-encoded object | `null` | `{"col": value}` or `{"col": [v1, v2]}` |
+| `q` | str / JSON | `null` | full-text or per-column |
+| `distinct` | bool | `false` | |
+| `plain` | bool | `true` | |
+| `language` | str | `"english"` | reserved |
+| `limit` | int | `1000` | clamped to `[0, 10000]` |
+| `offset` | int | `0` | |
+| `fields` | comma-separated list | all | |
+| `sort` | str | `null` | `"col asc, col2 desc"` |
+| `include_total` | bool | `true` | runs `COUNT(*)` if true |
+| `records_format` | str | `"objects"` | `objects` / `lists` / `csv` / `tsv` |
+
+**Example request**
+
+```
+GET /api/3/datastore_search
+    ?resource_id=balancing_auction_results_2025
+    &filters={"product_code": "DCL", "accepted": true}
+    &sort=delivery_start desc, clearing_price_gbp_per_mwh asc
+    &fields=auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh
+    &limit=100
+    &offset=0
+```
+
+**Response (records_format=objects) — streamed**
+```json
+{
+  "help": "...",
+  "success": true,
+  "result": {
+    "fields": [
+      {"id": "auction_id",                 "type": "integer"},
+      {"id": "product_code",               "type": "string"},
+      {"id": "delivery_start",             "type": "datetime"},
+      {"id": "clearing_price_gbp_per_mwh", "type": "number"},
+      {"id": "volume_mwh",                 "type": "number"}
+    ],
+    "records": [
+      {"auction_id": 152, "product_code": "DCL", "delivery_start": "2025-11-05T18:30:00Z", "clearing_price_gbp_per_mwh": 39.40, "volume_mwh": 95.0},
+      {"auction_id": 144, "product_code": "DCL", "delivery_start": "2025-11-04T16:00:00Z", "clearing_price_gbp_per_mwh": 47.82, "volume_mwh": 120.0}
+    ],
+    "total": 2,
+    "_links": {
+      "start": "https://example.com/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100",
+      "next":  "https://example.com/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=100"
+    }
+  }
+}
+```
+
+`_links` carries the same scheme + host as the request URL, with all
+non-`offset` params preserved. `start` omits `offset` (it defaults to 0);
+`next` advances `offset` by `limit`. Clients detect end-of-data by an
+empty `records` array on the next page — there's no `prev` field today.
+
+`records_format=lists` returns each record as a positional array (column order matches `fields`).
+`records_format=csv` / `tsv` return a streaming text body with the header row first.
+
+### 6.3 `POST /api/3/datastore_upsert`
+
+**Request — late-arriving correction to an auction result**
+```json
+{
+  "resource_id": "balancing_auction_results_2025",
+  "method": "upsert",
+  "unique_key": ["auction_id", "product_code"],
+  "records": [
+    {
+      "auction_id": 144,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-04T16:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 48.05,
+      "volume_mwh": 120.0,
+      "accepted": true,
+      "bidder_metadata": {"unit_id": "DRAX-1", "submission_lag_ms": 412, "revision": 2}
+    },
+    {
+      "auction_id": 153,
+      "product_code": "FFR",
+      "delivery_start": "2025-11-05T19:00:00Z",
+      "duration_minutes": 60,
+      "clearing_price_gbp_per_mwh": 32.40,
+      "volume_mwh": 200.0,
+      "accepted": false,
+      "bidder_metadata": {"unit_id": "SSE-PEH-3", "rejection_reason": "above_cap"}
+    }
+  ],
+  "include_records": false,
+  "include_total": false,
+  "force": false
+}
+```
+
+- `method`: `upsert` | `insert` | `update`. The table's stored `unique_key` (set at `datastore_create`) decides which rows match — the request body itself never carries it.
+- `include_records`: if `true`, echoes the written rows back in the response.
+- `include_total`: if `true`, the engine runs a `COUNT(*)` after the write and populates `result.total`. Off by default.
+- `force`: bypasses optional client-side guards (reserved; backend-specific).
+
+**Response**
+```json
+{
+  "help": "...",
+  "success": true,
+  "result": {
+    "resource_id": "balancing_auction_results_2025",
+    "method": "upsert"
+  }
+}
+```
+
+Optional fields appear in `result` only when requested:
+
+- `records` — echoes input rows when `include_records: true`.
+- `total` — total row count after the write when `include_total: true`.
+
+`null` is never serialised — fields that aren't populated are simply omitted (see `_orjson_default` in `api/responses.py`).
+
+### 6.4 `GET /api/3/datastore_search_sql`
+
+**Query params**: `sql` (required), `limit` (default 32000).
+
+**Example request — daily clearing-price summary**
+```
+GET /api/3/datastore_search_sql?sql=
+  SELECT
+    DATE(delivery_start)            AS delivery_date,
+    product_code,
+    AVG(clearing_price_gbp_per_mwh) AS avg_price,
+    SUM(volume_mwh)                 AS total_volume
+  FROM balancing_auction_results_2025
+  WHERE accepted = true
+    AND delivery_start >= '2025-11-01'
+  GROUP BY delivery_date, product_code
+  ORDER BY delivery_date DESC, product_code
+&limit=10000
+```
+
+**Response — streamed**
+```json
+{
+  "help": "...",
+  "success": true,
+  "result": {
+    "fields": [
+      {"id": "delivery_date", "type": "date"},
+      {"id": "product_code",  "type": "string"},
+      {"id": "avg_price",     "type": "number"},
+      {"id": "total_volume",  "type": "number"}
+    ],
+    "records": [
+      {"delivery_date": "2025-11-05", "product_code": "DCL", "avg_price": 41.20, "total_volume": 1840.0},
+      {"delivery_date": "2025-11-05", "product_code": "DCH", "avg_price": 49.75, "total_volume":  720.5},
+      {"delivery_date": "2025-11-04", "product_code": "DCL", "avg_price": 47.82, "total_volume": 1200.0}
+    ],
+    "records_truncated": false
+  }
+}
+```
+
+### 6.5 `POST /api/3/datastore_delete`
+
+**Request — purge rejected bids for a single auction window**
+```json
+{
+  "resource_id": "balancing_auction_results_2025",
+  "filters": {
+    "auction_id": 144,
+    "accepted": false
+  },
+  "force": false
+}
+```
+Empty `filters` (or omitted) → the entire table is dropped. Passing `fields`
+(mutually exclusive with `filters`) drops those columns instead of rows.
+
+**Response**
+```json
+{
+  "help": "...",
+  "success": true,
+  "result": {"resource_id": "balancing_auction_results_2025"}
+}
+```
+
+When `fields` is supplied (column drop), `result` also carries `schema` — the
+Frictionless Table Schema after the listed columns were removed — so the caller
+can confirm the table's new shape without a follow-up `datastore_info`:
+
+```json
+{
+  "help": "...",
+  "success": true,
+  "result": {
+    "resource_id": "balancing_auction_results_2025",
+    "fields": ["bidder_metadata"],
+    "schema": {"fields": [{"id": "auction_id", "type": "integer"}, "..."], "primaryKey": ["auction_id", "product_code"]}
+  }
+}
+```
+
+### 6.6 `GET /api/3/datastore_info`
+
+Returns the same field shape that was supplied to `datastore_create`, including
+the `info` data dictionary verbatim — clients can use this as a column-level
+metadata catalog (titles, descriptions, units, examples) without a side store.
+
+**Response**
+```json
+{
+  "help": "...",
+  "success": true,
+  "result": {
+    "resource_id": "balancing_auction_results_2025",
+    "fields": [
+      {
+        "id": "auction_id",
+        "type": "integer",
+        "info": {
+          "title": "Auction ID",
+          "description": "Unique auction identifier. Stable across all products auctioned in the same market window.",
+          "comment": "MANDATORY",
+          "example": "144",
+          "unit": "N/A"
+        }
+      },
+      {
+        "id": "product_code",
+        "type": "string",
+        "info": {
+          "title": "Product Code",
+          "description": "Product mnemonic for the balancing service (e.g. DCL, DCH, FFR).",
+          "example": "DCL"
+        }
+      },
+      {
+        "id": "delivery_start",
+        "type": "datetime",
+        "info": {
+          "title": "Delivery Start (UTC)",
+          "description": "First instant of the delivery window. Stored as UTC; clients render local time.",
+          "example": "2025-11-04T16:00:00Z"
+        }
+      },
+      {"id": "duration_minutes",           "type": "integer", "info": {"title": "Delivery Duration", "unit": "minutes"}},
+      {"id": "clearing_price_gbp_per_mwh", "type": "number",  "info": {"title": "Clearing Price",    "unit": "GBP/MWh"}},
+      {"id": "volume_mwh",                 "type": "number",  "info": {"title": "Cleared Volume",    "unit": "MWh"}},
+      {"id": "accepted",                   "type": "boolean", "info": {"title": "Accepted"}},
+      {"id": "bidder_metadata",            "type": "object",  "info": {"title": "Bidder Metadata"}}
+    ],
+    "unique_key": ["auction_id", "product_code"],
+    "primary_key": ["auction_id", "product_code"],
+    "total": 18420
+  }
+}
+```
+
+### 6.7 Error envelope (all 4xx / 5xx)
+
+```json
+{
+  "help": "<request URL>",
+  "success": false,
+  "error": {
+    "__type": "Validation Error",
+    "message": "fields[0].id is not a valid identifier: '1bad'",
+    "fields": {"fields": ["..."]}    // optional, present on validation errors
+  }
+}
+```
 
 `__type` taxonomy: `Validation Error` (400), `Authorization Error` (403), `Not Found Error` (404), `Conflict Error` (409), `Internal Error` (500).
 
@@ -495,7 +925,7 @@ The original phase plan that used to live here has mostly shipped. This section 
 
 - [x] **Foundation** — `pyproject.toml`, `Dockerfile`, `Makefile`, `.env.example`, `docker-compose.yml`. App factory + lifespan in [datastore/main.py](datastore/main.py); body-size middleware in [datastore/api/middleware.py](datastore/api/middleware.py); startup log line via `uvicorn.error` showing the active engine + auth provider + cache backend.
 - [x] **All six `datastore_*` actions wired** — `create`, `upsert`, `delete`, `search`, `search_sql`, `info` mounted via [datastore/api/routes.py](datastore/api/routes.py). Every endpoint authorizes via `context.authorize(...)` and delegates to a service.
-- [x] **Real BigQuery backend** — [datastore/infrastructure/engines/bigquery/](datastore/infrastructure/engines/bigquery/) implements DDL, parameterised `search`, MERGE-based `upsert` (`method=upsert` / `insert` / `update`), DML `delete` (whole-table drop, row delete, column drop), parameterised `search_sql`, and `info`. Frictionless schema + `unique_key` round-trip via the `_table_metadata` table. Row counts use the cheap `INFORMATION_SCHEMA.TABLE_STORAGE` fast path when filters don't apply.
+- [x] **Real BigQuery backend** — [datastore/infrastructure/engines/bigquery/](datastore/infrastructure/engines/bigquery/) implements DDL, parameterised `search`, MERGE-based `upsert` (`method=upsert` / `insert` / `update`), DML `delete` (whole-table drop, row delete, column drop), parameterised `search_sql`, and `info`. Frictionless schema + `unique_key` round-trip via native table-level metadata — JSON-encoded into the table's own `description` OPTION (no separate metadata table). Row counts use the cheap `INFORMATION_SCHEMA.TABLE_STORAGE` fast path when filters don't apply.
 - [x] **Streaming search** — [datastore/services/streaming.py](datastore/services/streaming.py) yields the CKAN envelope chunk-by-chunk for all four `records_format` values (`objects`, `lists`, `csv`, `tsv`); CSV/TSV ride the same JSON envelope (records is a multi-line string). Peak memory ≈ 1 row regardless of N. `_links.start` / `_links.next` carry full scheme + host with all non-`offset` params preserved.
 - [x] **`datastore_search_sql` SQL safety** — schema rejects non-SELECT / multi-statement / unparseable SQL (sqlglot). [datastore/schemas/validators.py](datastore/schemas/validators.py)'s `parse_sql_references` pulls table + function names; endpoint authorizes each table as a `resource_id`; service rejects functions outside the engine's allow-list at `engines/<name>/allowed_functions.txt` (overridable via `SQL_FUNCTIONS_ALLOW_FILE`).
 - [x] **Request validation** — Pydantic models in [datastore/schemas/request.py](datastore/schemas/request.py) with `extra="forbid"`. `datastore_info` / `datastore_delete` accept `resource_id` or `id` (normalised). Pydantic errors → CKAN error envelope with a `fields` map.

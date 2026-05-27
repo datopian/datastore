@@ -349,7 +349,6 @@ def _engine_with_storage(storage_blobs: list[Any]) -> tuple[BigQueryBackend, Any
     # ADC (which we've stubbed via sys.modules below).
     backend.config.BIGQUERY_CREDENTIALS = ""
     backend.config.BIGQUERY_CREDENTIALS_RO = ""
-    backend.metadata = None
 
     table = MagicMock()
     table.schema = []
