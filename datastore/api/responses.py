@@ -7,6 +7,19 @@ from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from datastore.schemas.responses import ErrorEnvelope
+
+# Shared OpenAPI doc for the CKAN error envelope, attached at router level
+# so every action documents the real 4xx / 5xx shape instead of FastAPI's
+# default 422. The taxonomy matches `core.exceptions.APIError`.
+ERROR_RESPONSES: dict[int, dict[str, Any]] = {
+    400: {"model": ErrorEnvelope, "description": "Validation Error"},
+    403: {"model": ErrorEnvelope, "description": "Authorization Error"},
+    404: {"model": ErrorEnvelope, "description": "Not Found Error"},
+    409: {"model": ErrorEnvelope, "description": "Conflict Error"},
+    500: {"model": ErrorEnvelope, "description": "Internal Error"},
+}
+
 
 def _orjson_default(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):

@@ -39,26 +39,81 @@ class DatastoreCreateRequest(BaseModel):
     `primaryKey` is the single source of truth for the unique key.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "resource_id": "balancing_auction_results_2025",
+                    "schema": {
+                        "fields": [
+                            {"name": "auction_id", "type": "integer"},
+                            {"name": "product_code", "type": "string"},
+                            {"name": "clearing_price_gbp_per_mwh", "type": "number"},
+                        ],
+                        "primaryKey": ["auction_id", "product_code"],
+                    },
+                    "records": [
+                        {
+                            "auction_id": 144,
+                            "product_code": "DCL",
+                            "clearing_price_gbp_per_mwh": 47.82,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
 
-    resource_id: str | None = None
-    resource: dict[str, Any] | None = None
+    resource_id: str | None = Field(
+        default=None,
+        description="Target table name. Provide this **or** `resource`, not both.",
+    )
+    resource: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "CKAN resource dict — materialises a CKAN resource first, then the "
+            "table. Only valid under `AUTH_TYPE=ckan`."
+        ),
+    )
     # `deprecated=` must ride on `Annotated` metadata, not as a `Field()`
     # default — Pydantic silently drops it on union- / Annotated-aliased
     # fields when supplied via `Field(default=..., deprecated=...)`.
     fields: Annotated[
         list[FieldSpec] | None,
-        Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
+        Field(
+            deprecated="use 'schema' (Frictionless Table Schema) instead",
+            description="Legacy column list `[{id, type, info}]`. Prefer `schema`.",
+        ),
     ] = None
-    schema: dict[str, Any] | None = None
+    schema: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Frictionless Table Schema: "
+            "`{fields: [{name, type, ...}], primaryKey: [...]}`. The native "
+            "shape; `primaryKey` is the source of truth for the unique key."
+        ),
+    )
     primary_key: Annotated[
         StringOrList,
-        Field(deprecated="use 'schema.primaryKey' instead"),
+        Field(
+            deprecated="use 'schema.primaryKey' instead",
+            description="Legacy unique key. Prefer `schema.primaryKey`.",
+        ),
     ] = None
-    records: list[dict[str, Any]] | None = None
-    include_records: bool = False
-    include_total: bool = False
-    force: bool | None = None
+    records: list[dict[str, Any]] | None = Field(
+        default=None, description="Optional rows to seed the new table with."
+    )
+    include_records: bool = Field(
+        default=False, description="Echo the written rows back in `result.records`."
+    )
+    include_total: bool = Field(
+        default=False,
+        description="Run `COUNT(*)` after the write and return `result.total`.",
+    )
+    force: bool | None = Field(
+        default=None, description="Bypass optional client-side guards (reserved)."
+    )
 
     _check_schema = field_validator("schema")(validate_frictionless_schema)
 
@@ -113,14 +168,49 @@ class DatastoreCreateRequest(BaseModel):
 class DatastoreUpsertRequest(BaseModel):
     """Request body for `POST /api/3/datastore_upsert`."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "resource_id": "balancing_auction_results_2025",
+                    "method": "upsert",
+                    "records": [
+                        {
+                            "auction_id": 144,
+                            "product_code": "DCL",
+                            "clearing_price_gbp_per_mwh": 48.05,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
 
-    resource_id: str
-    records: list[dict[str, Any]] | None = None
-    method: UpsertMethod = "upsert"
-    include_records: bool = False
-    include_total: bool = False
-    force: bool = False
+    resource_id: str = Field(
+        description="Target table — must already exist (call `datastore_create` first)."
+    )
+    records: list[dict[str, Any]] | None = Field(
+        default=None, description="Rows to write."
+    )
+    method: UpsertMethod = Field(
+        default="upsert",
+        description=(
+            "`upsert` — MERGE on the table's `primaryKey` (match→update, "
+            "miss→insert); `insert` — append, no key check; `update` — every "
+            "row must match an existing key (else 404)."
+        ),
+    )
+    include_records: bool = Field(
+        default=False, description="Echo the written rows back in `result.records`."
+    )
+    include_total: bool = Field(
+        default=False,
+        description="Run `COUNT(*)` after the write and return `result.total`.",
+    )
+    force: bool = Field(
+        default=False, description="Bypass optional client-side guards (reserved)."
+    )
 
 
 class DatastoreSearchRequest(BaseModel):
@@ -144,20 +234,59 @@ class DatastoreSearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    resource_id: str
-    filters: str | None = None
-    q: str | None = None
-    distinct: bool = False
-    plain: bool = True
-    language: str = "english"
+    resource_id: str = Field(description="Resource (table) to search.")
+    filters: str | None = Field(
+        default=None,
+        description=(
+            "JSON object of `column → value` (or `column → [values]` for IN). "
+            "Matches rows where every pair holds."
+        ),
+        examples=['{"product_code": "DCL", "accepted": true}'],
+    )
+    q: str | None = Field(
+        default=None,
+        description=(
+            "Full-text query. A plain string scans every column; a JSON object "
+            "`{column: term}` searches per column."
+        ),
+        examples=["DCL"],
+    )
+    distinct: bool = Field(default=False, description="Return only distinct rows.")
+    plain: bool = Field(
+        default=True, description="Treat `q` as plain text (reserved; CKAN-compat)."
+    )
+    language: str = Field(
+        default="english",
+        description="Full-text language (reserved; CKAN-compat).",
+    )
     # Engine enforces `Config.SEARCH_RESULT_ROWS_MAX` (default 32000).
     # No `le` here so ops can lift the cap via env without a schema change.
-    limit: int = Field(default=100, ge=0)
-    offset: int = Field(default=0, ge=0)
-    fields: str | None = None
-    sort: str | None = None
-    include_total: bool = True
-    records_format: RecordsFormat = "objects"
+    limit: int = Field(
+        default=100,
+        ge=0,
+        description="Max rows to return (capped by `SEARCH_RESULT_ROWS_MAX`).",
+    )
+    offset: int = Field(
+        default=0, ge=0, description="Rows to skip — pagination offset."
+    )
+    fields: str | None = Field(
+        default=None,
+        description="Comma-separated columns to project. Default: all columns.",
+        examples=["auction_id,product_code,clearing_price_gbp_per_mwh"],
+    )
+    sort: str | None = Field(
+        default=None,
+        description='Sort spec: `"col [asc|desc], col2 [asc|desc]"`.',
+        examples=["delivery_start desc, auction_id asc"],
+    )
+    include_total: bool = Field(
+        default=True,
+        description="Include `result.total` (row count). Set `false` to skip the COUNT.",
+    )
+    records_format: RecordsFormat = Field(
+        default="objects",
+        description="Shape of `result.records`: `objects` · `lists` · `csv` · `tsv`.",
+    )
 
     @field_validator("filters")
     @classmethod
@@ -198,7 +327,17 @@ class DatastoreSearchSQLRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    sql: str
+    sql: str = Field(
+        description=(
+            "A single read-only `SELECT` / `WITH` statement. Reference "
+            "resources by their id and include a `LIMIT` (required — used for "
+            "pagination + the streaming cap)."
+        ),
+        examples=[
+            'SELECT * FROM "balancing_auction_results_2025" '
+            "WHERE accepted = true LIMIT 100"
+        ],
+    )
 
     # Set by `_extract_sql_references` after sql validates. Private so
     # they're not user-settable from the URL and don't show in OpenAPI;
@@ -294,8 +433,12 @@ class DatastoreInfoRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    resource_id: str | None = None
-    id: str | None = None
+    resource_id: str | None = Field(
+        default=None, description="Resource (table) to describe."
+    )
+    id: str | None = Field(
+        default=None, description="CKAN alias for `resource_id`. Send exactly one."
+    )
 
     @model_validator(mode="after")
     def _require_resource_id_or_id(self) -> DatastoreInfoRequest:
@@ -321,13 +464,40 @@ class DatastoreDeleteRequest(BaseModel):
     delete when `filters` is set; column drop when `fields` is set.
     `filters` and `fields` are mutually exclusive."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "resource_id": "balancing_auction_results_2025",
+                    "filters": {"auction_id": 144, "accepted": False},
+                }
+            ]
+        },
+    )
 
-    resource_id: str | None = None
-    id: str | None = None
-    filters: dict[str, Any] | None = None
-    fields: list[str] | None = None
-    force: bool = False
+    resource_id: str | None = Field(
+        default=None, description="Resource (table) to delete from / drop."
+    )
+    id: str | None = Field(
+        default=None, description="CKAN alias for `resource_id`. Send exactly one."
+    )
+    filters: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Delete only rows matching every `column: value` pair. Omit both "
+            "`filters` and `fields` to drop the whole table."
+        ),
+    )
+    fields: list[str] | None = Field(
+        default=None,
+        description=(
+            "Drop these columns instead of rows. Mutually exclusive with `filters`."
+        ),
+    )
+    force: bool = Field(
+        default=False, description="Required to delete from a CKAN read-only resource."
+    )
 
     @model_validator(mode="after")
     def _require_resource_id_or_id(self) -> DatastoreDeleteRequest:

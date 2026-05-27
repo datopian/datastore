@@ -7,7 +7,11 @@ from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from datastore.api.context import Context
-from datastore.api.responses import _deprecation_warnings, _success_response
+from datastore.api.responses import (
+    ERROR_RESPONSES,
+    _deprecation_warnings,
+    _success_response,
+)
 from datastore.core.exceptions import ValidationError
 from datastore.schemas.request import (
     DatastoreCreateRequest,
@@ -35,10 +39,14 @@ from datastore.services.write import (
     upsert_datastore,
 )
 
-router = APIRouter(tags=["datastore"])
+router = APIRouter(tags=["datastore"], responses=ERROR_RESPONSES)
 
 
-@router.post("/datastore_create", response_model=DatastoreCreateResponse)
+@router.post(
+    "/datastore_create",
+    response_model=DatastoreCreateResponse,
+    summary="Declare a resource (and optionally seed rows)",
+)
 async def datastore_create(
     request: Request,
     payload: DatastoreCreateRequest,
@@ -79,7 +87,11 @@ async def datastore_create(
     return _success_response(request, result, warnings=warnings or None)
 
 
-@router.post("/datastore_upsert", response_model=DatastoreUpsertResponse)
+@router.post(
+    "/datastore_upsert",
+    response_model=DatastoreUpsertResponse,
+    summary="Insert / update / upsert rows",
+)
 async def datastore_upsert(
     request: Request,
     payload: DatastoreUpsertRequest,
@@ -95,7 +107,11 @@ async def datastore_upsert(
     return _success_response(request, result)
 
 
-@router.get("/datastore_search", response_model=DatastoreSearchResponse)
+@router.get(
+    "/datastore_search",
+    response_model=DatastoreSearchResponse,
+    summary="Search a resource (streaming)",
+)
 async def datastore_search(
     request: Request,
     context: Context,
@@ -119,7 +135,11 @@ async def datastore_search(
     return StreamingResponse(body_iter, media_type="application/json")
 
 
-@router.get("/datastore_search_sql", response_model=DatastoreSearchResponse)
+@router.get(
+    "/datastore_search_sql",
+    response_model=DatastoreSearchResponse,
+    summary="Run a read-only SQL SELECT (streaming)",
+)
 async def datastore_search_sql(
     request: Request,
     context: Context,
@@ -141,7 +161,11 @@ async def datastore_search_sql(
     return StreamingResponse(body_iter, media_type="application/json")
 
 
-@router.get("/datastore_info", response_model=DatastoreInfoResponse)
+@router.get(
+    "/datastore_info",
+    response_model=DatastoreInfoResponse,
+    summary="Get a resource's schema + row stats",
+)
 async def datastore_info(
     request: Request,
     context: Context,
@@ -163,7 +187,11 @@ async def datastore_info(
     return _success_response(request, result)
 
 
-@router.post("/datastore_delete", response_model=DatastoreDeleteResponse)
+@router.post(
+    "/datastore_delete",
+    response_model=DatastoreDeleteResponse,
+    summary="Delete rows, drop columns, or drop the table",
+)
 async def datastore_delete(
     request: Request,
     payload: DatastoreDeleteRequest,

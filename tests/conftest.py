@@ -13,6 +13,11 @@ for _name in (
 ):
     os.environ[_name] = ""
 os.environ["BIGQUERY_EXPORT_URL_EXPIRY_HOURS"] = "1"
+# `AUTH_TYPE` defaults to `ckan`, whose validator requires a non-empty
+# `CKAN_URL`. `create_app()` runs at import (module-level `app`), so give
+# it a dummy when the env doesn't carry one — tests override the CKAN
+# client via DI, so this URL is never contacted.
+os.environ.setdefault("CKAN_URL", "http://test-ckan.local")
 
 from collections.abc import Iterator  # noqa: E402
 from typing import Any  # noqa: E402

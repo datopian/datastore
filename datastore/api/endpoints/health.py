@@ -17,7 +17,9 @@ welcome_router = APIRouter(tags=["health"])
 probe_router = APIRouter(tags=["health"])
 
 
-@welcome_router.get("/", response_model=WelcomeResponse)
+@welcome_router.get(
+    "/", response_model=WelcomeResponse, summary="Service welcome message"
+)
 def welcome(request: Request):
     return _success_response(
         request,
@@ -25,13 +27,20 @@ def welcome(request: Request):
     )
 
 
-@probe_router.get("/health", response_model=StatusResponse)
+@probe_router.get(
+    "/health", response_model=StatusResponse, summary="Liveness probe"
+)
 def health(request: Request):
     """Liveness — always 200 while the process is up."""
     return _success_response(request, StatusResponse.Result(status="ok"))
 
 
-@probe_router.get("/ready", response_model=StatusResponse)
+@probe_router.get(
+    "/ready",
+    response_model=StatusResponse,
+    summary="Readiness probe",
+    responses={503: {"model": StatusResponse, "description": "One or more engines unavailable"}},
+)
 def ready(request: Request):
     """Readiness — 200 when both rw and ro engines pass `healthcheck()`,
     503 otherwise. Probes both modes because the credential split means
