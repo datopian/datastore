@@ -98,7 +98,7 @@ async def delete_datastore(
     fields = data_dict.get("fields")
 
     engine = get_datastore_engine(context, mode="rw")
-    await asyncio.to_thread(
+    result = await asyncio.to_thread(
         engine.delete, resource_id=resource_id, filters=filters, fields=fields,
     )
 
@@ -106,4 +106,7 @@ async def delete_datastore(
         resource_id=resource_id,
         filters=filters,
         fields=fields,
+        # Populated only on the column-drop path: the table's schema
+        # after the listed columns were removed.
+        schema=result.schema,
     )

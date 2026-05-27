@@ -31,6 +31,10 @@ class SearchResult:
 class WriteResult:
     rows_written: int = 0
     total: int | None = None
+    # Resulting Frictionless schema after the write — populated by
+    # `delete()`'s column-drop path so the response can echo the table's
+    # shape minus the dropped columns. `None` for other write paths.
+    schema: dict[str, Any] | None = None
 
 
 @dataclass

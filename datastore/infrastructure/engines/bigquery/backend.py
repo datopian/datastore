@@ -749,8 +749,8 @@ class BigQueryBackend(DatastoreBackend):
             )
 
         if fields is not None:
-            self._drop_columns(resource_id, schema, fields)
-            return WriteResult()
+            new_schema = self._drop_columns(resource_id, schema, fields)
+            return WriteResult(schema=new_schema)
 
         if filters is None:
             # Metadata lives on the table itself, so DROP removes both.
@@ -799,10 +799,11 @@ class BigQueryBackend(DatastoreBackend):
         resource_id: str,
         schema: dict[str, Any],
         fields: list[str],
-    ) -> None:
+    ) -> dict[str, Any]:
         """`ALTER TABLE DROP COLUMN …` + refresh table OPTIONS.
 
         Rejects system columns, unknown columns, and PK columns up front.
+        Returns the resulting Frictionless schema (minus the dropped columns).
         """
         existing = {
             f["name"]
@@ -848,6 +849,7 @@ class BigQueryBackend(DatastoreBackend):
         log.info(
             "BigQuery columns dropped: %s (%s)", resource_id, sorted(fields),
         )
+        return new_schema
 
     def info(self, resource_id: str) -> InfoResult:
         """Return the table schema + row stats for a resource.

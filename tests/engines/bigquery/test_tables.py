@@ -1380,7 +1380,14 @@ def test_delete_with_fields_drops_columns_and_refreshes_options(
     }
     backend = _backend_with_schema(mock_client, schema)
 
-    backend.delete("res-1", filters=None, fields=["extra", "obsolete"])
+    result = backend.delete("res-1", filters=None, fields=["extra", "obsolete"])
+
+    # The resulting schema (minus the dropped columns) is returned so the
+    # response can echo the table's shape after the drop.
+    assert result.schema == {
+        "fields": [{"name": "id", "type": "integer"}],
+        "primaryKey": ["id"],
+    }
 
     assert mock_client.query.call_count == 2
     drop_sql = mock_client.query.call_args_list[0].args[0]

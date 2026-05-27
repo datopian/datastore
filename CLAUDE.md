@@ -813,7 +813,8 @@ GET /api/3/datastore_search_sql?sql=
   "force": false
 }
 ```
-Empty `filters` (or omitted) → the entire table is dropped.
+Empty `filters` (or omitted) → the entire table is dropped. Passing `fields`
+(mutually exclusive with `filters`) drops those columns instead of rows.
 
 **Response**
 ```json
@@ -821,6 +822,22 @@ Empty `filters` (or omitted) → the entire table is dropped.
   "help": "...",
   "success": true,
   "result": {"resource_id": "balancing_auction_results_2025"}
+}
+```
+
+When `fields` is supplied (column drop), `result` also carries `schema` — the
+Frictionless Table Schema after the listed columns were removed — so the caller
+can confirm the table's new shape without a follow-up `datastore_info`:
+
+```json
+{
+  "help": "...",
+  "success": true,
+  "result": {
+    "resource_id": "balancing_auction_results_2025",
+    "fields": ["bidder_metadata"],
+    "schema": {"fields": [{"id": "auction_id", "type": "integer"}, "..."], "primaryKey": ["auction_id", "product_code"]}
+  }
 }
 ```
 
