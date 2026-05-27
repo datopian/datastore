@@ -76,18 +76,19 @@ def test_table_to_schema_returns_stored_block_verbatim() -> None:
 def test_table_to_schema_infers_from_columns_for_unmanaged_table() -> None:
     table = _table(columns=[("_id", "INT64"), ("name", "STRING"), ("age", "INT64")])
     schema = table_to_schema(table)
-    # System columns dropped; raw BQ field types preserved.
+    # System columns dropped; BQ field types mapped to canonical
+    # Frictionless names so downstream filter type maps understand them.
     assert schema == {
         "fields": [
-            {"name": "name", "type": "STRING"},
-            {"name": "age", "type": "INT64"},
+            {"name": "name", "type": "string"},
+            {"name": "age", "type": "integer"},
         ]
     }
 
 
 def test_table_to_schema_ignores_malformed_description() -> None:
     assert table_to_schema(_table(description="not json", columns=[("a", "STRING")])) == {
-        "fields": [{"name": "a", "type": "STRING"}]
+        "fields": [{"name": "a", "type": "string"}]
     }
 
 

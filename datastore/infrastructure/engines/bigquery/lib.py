@@ -11,6 +11,7 @@ from datastore.core.exceptions import ConflictError
 from datastore.infrastructure.engines.bigquery.types import (
     bigquery_type,
     can_widen,
+    frictionless_type_from_bigquery,
 )
 
 if TYPE_CHECKING:
@@ -39,9 +40,10 @@ _FILTER_PARAM_TYPE: dict[str, str] = {
 }
 
 # Native-metadata: sentinel under which the engine namespaces its own
-# metadata in the table-level `description`. Anything else in the
-# description is left alone so manual edits in the BQ console survive
-# a round-trip.
+# metadata in the table-level `description`. NOTE: the description is
+# engine-owned — each write (`set_table_options_sql`) rewrites it wholesale
+# from the schema, so any human-authored description text or non-datastore
+# labels set in the BQ console are NOT preserved across a refresh.
 DATASTORE_KEY = "datastore"
 
 # Bumped when the JSON shape under `DATASTORE_KEY` changes in a way
@@ -521,7 +523,10 @@ def _infer_schema_from_bq(table: "bigquery.Table") -> dict[str, Any]:
     fields: list[dict[str, Any]] = [
         {
             "name": col.name,
-            "type": col.field_type,
+            # Map to canonical Frictionless names — downstream helpers
+            # (filter type maps in delete_sql / search) only understand
+            # those, not raw BigQuery type names.
+            "type": frictionless_type_from_bigquery(col.field_type),
         }
         for col in table.schema
         if col.name not in SYSTEM_COLUMN_NAMES

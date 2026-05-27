@@ -549,7 +549,8 @@ class BigQueryBackend(DatastoreBackend):
         # Fire both jobs before waiting on either: BigQuery's
         # `client.query()` is non-blocking, so the count and the page
         # query run in parallel — wall time ≈ max(both).
-        count_job = None
+        count_cfg = None
+        count_sql = ""
         if include_total and needs_count_query(
             filters=filters, q=q, distinct=distinct,
         ):
@@ -563,11 +564,16 @@ class BigQueryBackend(DatastoreBackend):
                 distinct=distinct,
             )
             count_cfg = self._read_job_config(params=count_params)
-            count_job = self.client.query(count_sql, job_config=count_cfg)
 
-        search_job = self.client.query(sql, job_config=job_config)
-
+        # Submit both jobs before waiting on either, so the COUNT and the
+        # page query run in parallel. The submits sit inside the try too —
+        # submit-time failures (auth, quota, bad config) map to ServerError
+        # just like a result() failure, never a raw google exception.
+        count_job = None
         try:
+            if count_cfg is not None:
+                count_job = self.client.query(count_sql, job_config=count_cfg)
+            search_job = self.client.query(sql, job_config=job_config)
             row_iter = search_job.result()
         except Exception as e:
             raise ServerError(
@@ -927,11 +933,6 @@ class BigQueryBackend(DatastoreBackend):
                 "/datastore/dump cannot run without an export bucket."
             )
 
-        if self.metadata is not None and self.metadata.get(resource_id) is None:
-            raise NotFoundError(
-                f"resource {resource_id!r} is not declared; nothing to dump"
-            )
-
         from google.cloud import bigquery
 
         # Clients: ro for reads (BQ get_table, GCS list); rw for the
@@ -945,8 +946,14 @@ class BigQueryBackend(DatastoreBackend):
             f"{self.config.BIGQUERY_PROJECT}"
             f".{self.config.BIGQUERY_DATASET}.{resource_id}"
         )
+        from google.api_core.exceptions import NotFound
+
         try:
             table = await asyncio.to_thread(self.client.get_table, table_ref)
+        except NotFound as e:
+            raise NotFoundError(
+                f"resource {resource_id!r} is not declared; nothing to dump"
+            ) from e
         except Exception as e:
             raise ServerError(
                 f"BigQuery get_table failed for resource {resource_id!r}: {e}"
