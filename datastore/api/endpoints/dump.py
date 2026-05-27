@@ -38,7 +38,7 @@ router = APIRouter(tags=["Datastore Download"], responses=ERROR_RESPONSES)
 
 @router.get(
     "/datastore/dump/{resource_id}",
-    summary="Download a whole resource",
+    summary="Download an entire table (CSV / NDJSON / Parquet)",
     responses={
         302: {"description": "Single-shard export — redirect to a signed GCS URL."},
         200: {"description": "Multi-shard export — streamed CSV / NDJSON body."},

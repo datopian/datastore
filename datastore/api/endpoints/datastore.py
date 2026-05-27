@@ -45,7 +45,7 @@ router = APIRouter(tags=["Datastore"], responses=ERROR_RESPONSES)
 @router.post(
     "/datastore_create",
     response_model=DatastoreCreateResponse,
-    summary="Declare a resource (and optionally seed rows)",
+    summary="Create a datastore table and optionally insert rows",
 )
 async def datastore_create(
     request: Request,
@@ -90,7 +90,7 @@ async def datastore_create(
 @router.post(
     "/datastore_upsert",
     response_model=DatastoreUpsertResponse,
-    summary="Insert / update / upsert rows",
+    summary="Insert / update / upsert records in a datastore table",
 )
 async def datastore_upsert(
     request: Request,
@@ -110,7 +110,7 @@ async def datastore_upsert(
 @router.post(
     "/datastore_delete",
     response_model=DatastoreDeleteResponse,
-    summary="Delete rows, drop columns, or drop the table",
+    summary="Delete rows, drop columns, or drop the datastore table",
 )
 async def datastore_delete(
     request: Request,
@@ -137,7 +137,7 @@ async def datastore_delete(
 @router.get(
     "/datastore_search",
     response_model=DatastoreSearchResponse,
-    summary="Search a resource (streaming)",
+    summary="Search a datastore table (filters, full-text, sort, paging)",
 )
 async def datastore_search(
     request: Request,
@@ -165,7 +165,7 @@ async def datastore_search(
 @router.get(
     "/datastore_search_sql",
     response_model=DatastoreSearchResponse,
-    summary="Run a read-only SQL SELECT (streaming)",
+    summary="Query datastore tables with a read-only SQL SELECT",
 )
 async def datastore_search_sql(
     request: Request,
@@ -191,7 +191,7 @@ async def datastore_search_sql(
 @router.get(
     "/datastore_info",
     response_model=DatastoreInfoResponse,
-    summary="Get a resource's schema + row stats",
+    summary="Get a resource's schema and metadata",
 )
 async def datastore_info(
     request: Request,
