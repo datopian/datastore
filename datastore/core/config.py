@@ -100,9 +100,8 @@ class Config(BaseSettings):
     BIGQUERY_DATASET: str = Field(
         default="",
         description=(
-            "BigQuery dataset that holds the datastore tables. Both the "
-            "per-resource data tables and the internal `_table_metadata` "
-            "table live here. Required when DATASTORE_ENGINE=bigquery."
+            "BigQuery dataset that holds the per-resource datastore "
+            "tables. Required when DATASTORE_ENGINE=bigquery."
         ),
     )
     BIGQUERY_CREDENTIALS: str = Field(
@@ -236,6 +235,17 @@ class Config(BaseSettings):
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         default="INFO",
         description="Logging level",
+    )
+
+    # Per-request profiling. When True, sending `X-Profile: 1` (or `text`)
+    # on any request replaces the response body with a pyinstrument
+    # flamegraph of that request. Dev/staging only — leave False in prod.
+    PERF_PROFILE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable on-demand pyinstrument profiling via the `X-Profile` "
+            "request header. Dev-only; leave off in production."
+        ),
     )
 
     @model_validator(mode="after")
