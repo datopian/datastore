@@ -65,8 +65,12 @@ async def datastore_create(
         )
 
     # Refuse to re-declare a datastore-managed resource unless forced
-    # (no-op on the new-resource dict path and under non-CKAN auth).
-    ensure_resource_writable(data_dict["resource"], force=bool(payload.force))
+    # (CKAN auth only; no-op on the new-resource dict path).
+    ensure_resource_writable(
+        data_dict["resource"],
+        force=bool(payload.force),
+        auth_type=context.config.AUTH_TYPE,
+    )
 
     data_dict.update(
         {
@@ -95,7 +99,11 @@ async def datastore_upsert(
         resource_id=payload.resource_id,
         permission="update",
     )
-    ensure_resource_writable(data_dict["resource"], force=payload.force)
+    ensure_resource_writable(
+        data_dict["resource"],
+        force=payload.force,
+        auth_type=context.config.AUTH_TYPE,
+    )
     data_dict.update(payload.model_dump())
     result = await upsert_datastore(context, data_dict)
     return _success_response(request, result)
@@ -190,6 +198,10 @@ async def datastore_delete(
     data_dict = await context.authorize(
         resource_id=payload.resource_id, permission="delete"
     )
-    ensure_resource_writable(data_dict["resource"], force=payload.force)
+    ensure_resource_writable(
+        data_dict["resource"],
+        force=payload.force,
+        auth_type=context.config.AUTH_TYPE,
+    )
     result = await delete_datastore(context, payload.model_dump())
     return _success_response(request, result)

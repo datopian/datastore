@@ -16,7 +16,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from datastore.api.auth import authorize
+from datastore.api.auth import authorize, ensure_resource_writable
 from datastore.auth.base import Decision
 from datastore.core.exceptions import AuthorizationError, ValidationError
 
@@ -145,3 +145,33 @@ def test_provider_authorization_error_propagates() -> None:
             api_key="tok", provider=provider,
             resource_id="res-1", package_id=None, permission="read",
         ))
+
+
+# --- ensure_resource_writable (read-only force guard) -----------------------
+
+
+def test_readonly_guard_blocks_datastore_resource_under_ckan() -> None:
+    with pytest.raises(ValidationError, match="read-only"):
+        ensure_resource_writable(
+            {"url_type": "datastore"}, force=False, auth_type="ckan",
+        )
+
+
+def test_readonly_guard_allows_with_force() -> None:
+    ensure_resource_writable(
+        {"url_type": "datastore"}, force=True, auth_type="ckan",
+    )
+
+
+def test_readonly_guard_is_ckan_only() -> None:
+    """Non-CKAN auth never trips the guard, even if a resource somehow
+    carries `url_type="datastore"`."""
+    for auth_type in ("anonymous", "jwt"):
+        ensure_resource_writable(
+            {"url_type": "datastore"}, force=False, auth_type=auth_type,
+        )
+
+
+def test_readonly_guard_ignores_non_datastore_resources() -> None:
+    ensure_resource_writable({"url_type": "upload"}, force=False, auth_type="ckan")
+    ensure_resource_writable({}, force=False, auth_type="ckan")
