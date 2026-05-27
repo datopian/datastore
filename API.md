@@ -114,7 +114,7 @@ round-tripped by `datastore_info`.
 
 ```json
 {
-  "resource_id": "balancing_auction_results_2025",
+  "resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937",
   "schema": {
     "fields": [
       {"name": "auction_id", "type": "integer", "info": {"title": "Auction ID"}},
@@ -141,7 +141,7 @@ round-tripped by `datastore_info`.
   "help": "...",
   "success": true,
   "result": {
-    "resource_id": "balancing_auction_results_2025",
+    "resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937",
     "fields": [{"id": "auction_id", "type": "integer", "info": {"...": "..."}}, "..."],
     "schema": {"fields": ["..."], "primaryKey": ["auction_id", "product_code"]},
     "primary_key": ["auction_id", "product_code"]
@@ -179,7 +179,7 @@ never carries it.
 
 ```json
 {
-  "resource_id": "balancing_auction_results_2025",
+  "resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937",
   "method": "upsert",
   "records": [
     {"auction_id": 144, "product_code": "DCL", "clearing_price_gbp_per_mwh": 48.05, "accepted": true}
@@ -191,7 +191,7 @@ never carries it.
 
 ```json
 { "help": "...", "success": true,
-  "result": {"resource_id": "balancing_auction_results_2025", "method": "upsert"} }
+  "result": {"resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937", "method": "upsert"} }
 ```
 
 ---
@@ -216,7 +216,7 @@ Three modes (`filters` and `fields` are mutually exclusive):
 ### Request
 
 ```json
-{ "resource_id": "balancing_auction_results_2025",
+{ "resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937",
   "filters": {"auction_id": 144, "accepted": false} }
 ```
 
@@ -224,7 +224,7 @@ Three modes (`filters` and `fields` are mutually exclusive):
 
 ```json
 { "help": "...", "success": true,
-  "result": {"resource_id": "balancing_auction_results_2025"} }
+  "result": {"resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937"} }
 ```
 
 On a **column drop**, `result` also carries `schema` — the Frictionless schema
@@ -234,7 +234,7 @@ follow-up `datastore_info`:
 ```json
 { "help": "...", "success": true,
   "result": {
-    "resource_id": "balancing_auction_results_2025",
+    "resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937",
     "fields": ["bidder_metadata"],
     "schema": {"fields": [{"name": "auction_id", "type": "integer"}, "..."],
                "primaryKey": ["auction_id", "product_code"]}
@@ -268,7 +268,7 @@ Parameterised search; the response is **streamed** (peak memory ≈ one row).
 
 ```
 GET /api/3/action/datastore_search
-    ?resource_id=balancing_auction_results_2025
+    ?resource_id=c6153a74-43cb-4edf-8bdf-bb664feca937
     &filters={"product_code":"DCL","accepted":true}
     &sort=delivery_start desc
     &limit=100
@@ -318,7 +318,7 @@ are checked against the engine's allow-list. Include a `LIMIT` (required).
 ```
 GET /api/3/action/datastore_search_sql?sql=
   SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price
-  FROM "balancing_auction_results_2025"
+  FROM "c6153a74-43cb-4edf-8bdf-bb664feca937"
   WHERE accepted = true
   GROUP BY product_code
   LIMIT 1000
@@ -367,7 +367,7 @@ row stats — a column-level metadata catalog without a side store.
     ],
     "schema": {"fields": ["..."], "primaryKey": ["auction_id", "product_code"]},
     "meta": {
-      "resource_id": "balancing_auction_results_2025",
+      "resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937",
       "primary_key": ["auction_id", "product_code"],
       "total": 18420
     }
