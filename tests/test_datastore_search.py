@@ -492,19 +492,21 @@ def test_csv_quotes_values_with_special_chars(
 
 
 def test_search_objects_response_includes_links(client: TestClient) -> None:
-    """Empty-table case (placeholder engine, total=0): only `start` is
-    emitted — `next` / `prev` don't apply and the page counters are
-    suppressed when there's nothing to page through. Scheme + host
-    carried from the request (TestClient uses `http://testserver`)."""
+    """Empty-table case (placeholder engine, total=0): `start` and
+    `page_size` are emitted; `page` / `total_pages` come through as
+    explicit `null` so clients can tell "no current page" from "field
+    missing". `next` / `prev` don't apply."""
     response = client.get(SEARCH_URL, params=_params())
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    assert set(links) == {"start", "page_size"}
+    assert set(links) == {"start", "page_size", "page", "total_pages"}
     assert links["start"].startswith("http://testserver/api/3/action/datastore_search")
     assert "offset" not in links["start"]
     assert f"resource_id={_RESOURCE_ID}" in links["start"]
     assert links["page_size"] == 100  # default limit
+    assert links["page"] is None
+    assert links["total_pages"] is None
 
 
 def test_search_links_prev_emitted_on_inner_page(client: TestClient) -> None:
@@ -537,7 +539,7 @@ def test_search_links_preserve_other_query_params(client: TestClient) -> None:
     links = response.json()["result"]["_links"]
     for v in links.values():
         if not isinstance(v, str):
-            continue  # `page` / `total_pages` are ints
+            continue  # `page_size` is int; `page`/`total_pages` may be null
         assert "filters=" in v
         assert "sort=" in v
         assert "fields=" in v
@@ -545,9 +547,12 @@ def test_search_links_preserve_other_query_params(client: TestClient) -> None:
 
 def test_search_lists_format_also_includes_links(client: TestClient) -> None:
     """`records_format=lists` is still a JSON envelope, so `_links` is
-    present (placeholder engine, empty table: `start` + `page_size`)."""
+    present (placeholder engine, empty table: `start` + `page_size` +
+    null page counters)."""
     response = client.get(SEARCH_URL, params=_params(records_format="lists"))
 
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
-    assert set(links) == {"start", "page_size"}
+    assert set(links) == {"start", "page_size", "page", "total_pages"}
+    assert links["page"] is None
+    assert links["total_pages"] is None
