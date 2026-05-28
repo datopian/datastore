@@ -148,30 +148,47 @@ def test_provider_authorization_error_propagates() -> None:
 
 
 # --- ensure_resource_writable (read-only force guard) -----------------------
+#
+# Mirrors CKAN's datastore_create check: refuse to write a resource whose
+# `url_type` is anything other than "datastore" (e.g. "upload" / "link" —
+# externally-managed data), unless `force=True`. Datastore-managed
+# resources (`url_type == "datastore"`) are freely writable. Skipped
+# entirely outside CKAN auth, and skipped when no resource record is
+# present (e.g. the dict-create path that materialises the resource).
 
 
-def test_readonly_guard_blocks_datastore_resource_under_ckan() -> None:
+def test_readonly_guard_blocks_non_datastore_resource_under_ckan() -> None:
     with pytest.raises(ValidationError, match="read-only"):
         ensure_resource_writable(
-            {"url_type": "datastore"}, force=False, auth_type="ckan",
+            {"url_type": "upload"}, force=False, auth_type="ckan",
         )
 
 
 def test_readonly_guard_allows_with_force() -> None:
     ensure_resource_writable(
-        {"url_type": "datastore"}, force=True, auth_type="ckan",
+        {"url_type": "upload"}, force=True, auth_type="ckan",
+    )
+
+
+def test_readonly_guard_allows_datastore_managed_resources() -> None:
+    """`url_type="datastore"` means the datastore owns it — writes are fine."""
+    ensure_resource_writable(
+        {"url_type": "datastore"}, force=False, auth_type="ckan",
+    )
+
+
+def test_readonly_guard_skips_when_no_resource_record() -> None:
+    """Empty / missing `url_type` means there's no existing CKAN resource
+    (e.g. the dict-form of datastore_create) — nothing to guard."""
+    ensure_resource_writable({}, force=False, auth_type="ckan")
+    ensure_resource_writable(
+        {"package_id": "pkg-1"}, force=False, auth_type="ckan",
     )
 
 
 def test_readonly_guard_is_ckan_only() -> None:
-    """Non-CKAN auth never trips the guard, even if a resource somehow
-    carries `url_type="datastore"`."""
+    """Non-CKAN auth never trips the guard, even on a non-datastore resource."""
     for auth_type in ("anonymous", "jwt"):
         ensure_resource_writable(
-            {"url_type": "datastore"}, force=False, auth_type=auth_type,
+            {"url_type": "upload"}, force=False, auth_type=auth_type,
         )
-
-
-def test_readonly_guard_ignores_non_datastore_resources() -> None:
-    ensure_resource_writable({"url_type": "upload"}, force=False, auth_type="ckan")
-    ensure_resource_writable({}, force=False, auth_type="ckan")

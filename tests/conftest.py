@@ -153,6 +153,9 @@ def fake_ckan() -> FakeCKAN:
         "balancing_auction_results_2025",
         package_id="pkg-balancing-2025",
         name="balancing-auction-results-2025",
+        # Seed mirrors a real datastore-managed resource: `url_type` is
+        # the marker the read-only-guard checks (see api/auth.py).
+        url_type="datastore",
     )
     ckan.add_package(
         "pkg-balancing-2025",

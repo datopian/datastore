@@ -66,20 +66,27 @@ async def authorize(
 def ensure_resource_writable(
     resource: dict[str, Any], *, force: bool, auth_type: str
 ) -> None:
-    """Block writes to a CKAN datastore-managed resource unless `force`.
+    """Block writes to a CKAN resource the datastore doesn't own, unless
+    `force` is set.
 
     CKAN tags resources whose data the datastore owns with
-    `url_type="datastore"`; editing one through datastore_create /
-    _upsert / _delete requires an explicit `force` so managed data isn't
-    clobbered by accident.
+    `url_type="datastore"`. Calling `datastore_create` / `_upsert` /
+    `_delete` on a resource whose `url_type` is anything else (upload,
+    link, …) would clobber externally-managed data, so we require
+    `force=true` for that case — mirroring CKAN's own datastore_create
+    check.
 
-    Applies under `AUTH_TYPE="ckan"` only — that's the sole provider that
-    attaches a CKAN resource record. Other providers carry no such record,
-    so the guard is skipped entirely.
+    Only applies under `AUTH_TYPE="ckan"` (other providers carry no CKAN
+    resource record). Also skipped when `url_type` is absent — that
+    means there's no existing CKAN resource yet (e.g. the dict-form of
+    `datastore_create`, which materialises the resource on the fly).
     """
     if auth_type != "ckan":
         return
-    if not force and resource.get("url_type") == "datastore":
+    url_type = resource.get("url_type")
+    if url_type is None:
+        return
+    if not force and url_type != "datastore":
         raise ValidationError(
             'Cannot update a read-only resource. Use "force" to force update.'
         )
