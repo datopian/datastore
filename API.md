@@ -5,7 +5,7 @@ pluggable storage backend. Every action lives under `/api/3/action/` and returns
 the CKAN envelope, so existing CKAN datastore clients work unchanged — whether
 this runs alongside CKAN or independently.
 
-- **Interactive docs:** `GET /docs` (Swagger UI) · `GET /redoc` · `GET /openapi.json`
+- **Interactive docs:** `GET /datastore/docs` (Swagger UI) · `GET /datastore/redoc` · `GET /datastore/openapi.json`
 - **Postman:** import [postman/collection.json](postman/collection.json) — one worked request per endpoint.
 
 ---
@@ -266,7 +266,7 @@ Parameterised search; the response is **streamed** (peak memory ≈ one row).
 
 ### Example
 
-```
+```http
 GET /api/3/action/datastore_search
     ?resource_id=c6153a74-43cb-4edf-8bdf-bb664feca937
     &filters={"product_code":"DCL","accepted":true}
@@ -315,7 +315,7 @@ are checked against the engine's allow-list. Include a `LIMIT` (required).
 
 ### Example
 
-```
+```http
 GET /api/3/action/datastore_search_sql?sql=
   SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price
   FROM "c6153a74-43cb-4edf-8bdf-bb664feca937"

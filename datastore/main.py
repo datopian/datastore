@@ -127,12 +127,15 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Datastore API",
         version=_api_version(),
-        summary=(
-            "A Datasore API endpoint for managing tabular data resources. "
-        ),
+        summary="A datastore API for managing tabular data resources.",
         description="",
         openapi_tags=OPENAPI_TAGS,
         contact={"name": "Datopian", "url": "https://www.datopian.com/"},
+        # Mount the interactive docs under the service's path prefix so this
+        # API doesn't fight an upstream proxy / sibling service for `/docs`.
+        docs_url="/datastore/docs",
+        redoc_url="/datastore/redoc",
+        openapi_url="/datastore/openapi.json",
         lifespan=lifespan,
         default_response_class=ORJSONResponse,
     )
