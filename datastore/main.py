@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib.metadata
 import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any
 
 import httpx
 from fastapi import FastAPI
@@ -22,6 +24,60 @@ from datastore.infrastructure.engines.registry import (
 )
 
 log = logging.getLogger("uvicorn.error")
+
+
+OPENAPI_TAGS = [
+     {
+        "name": "Health",
+        "description": (
+            "Liveness (`/health`) and readiness (`/ready`) probes for "
+            "orchestration."
+        ),
+    },
+    {
+        "name": "Datastore",
+        "description": (
+            "A `datastore` API endpoint - create, upsert, delete, search, "
+            "search_sql, and info."
+        ),
+    },
+
+    {
+        "name": "Datastore Download",
+        "description": "Bulk download of an entire resource (CSV / JSON / Parquet).",
+    },
+]
+
+
+def _api_version() -> str:
+    """Installed package version, so `/docs` tracks releases automatically."""
+    try:
+        return importlib.metadata.version("datastore")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0"
+
+
+def _strip_default_422(app: FastAPI) -> None:
+    """Drop FastAPI's auto-generated 422 from the schema.
+
+    `RequestValidationError` is remapped to a 400 CKAN error envelope (see
+    `error_handlers`), so a documented 422 never actually occurs — the real
+    4xx shapes are declared via `ERROR_RESPONSES`.
+    """
+    default_openapi = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        schema = default_openapi()
+        for path_item in schema.get("paths", {}).values():
+            for operation in path_item.values():
+                if isinstance(operation, dict):
+                    operation.get("responses", {}).pop("422", None)
+        components = schema.get("components", {}).get("schemas", {})
+        components.pop("HTTPValidationError", None)
+        components.pop("ValidationError", None)
+        return schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
 
 
 @asynccontextmanager
@@ -69,7 +125,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     config = get_config()
     app = FastAPI(
-        title=config.APP_MESSAGE,
+        title="Datastore API",
+        version=_api_version(),
+        summary=(
+            "A Datasore API endpoint for managing tabular data resources. "
+        ),
+        description="",
+        openapi_tags=OPENAPI_TAGS,
+        contact={"name": "Datopian", "url": "https://www.datopian.com/"},
         lifespan=lifespan,
         default_response_class=ORJSONResponse,
     )
@@ -82,6 +145,7 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router)
+    _strip_default_422(app)
     return app
 
 

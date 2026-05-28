@@ -484,6 +484,7 @@ The GCS client is built with the same credentials as the BigQuery client for the
 
 ## 6. Request / Response Contracts
 
+Every response is the CKAN envelope — `help`, `success`, and either `result` or `error`. The full per-endpoint reference (request bodies, query params, worked examples, and error shapes) lives in **[API.md](API.md)**.
 CKAN-style envelope: every response has `help`, `success`, and either `result` or `error`.
 
 ### 6.1 `POST /api/3/datastore_create`
@@ -913,8 +914,7 @@ metadata catalog (titles, descriptions, units, examples) without a side store.
 }
 ```
 
-`__type` taxonomy: `Validation Error` (400), `Authorization Error` (403),
-`Not Found Error` (404), `Conflict Error` (409), `Internal Error` (500).
+`__type` taxonomy: `Validation Error` (400), `Authorization Error` (403), `Not Found Error` (404), `Conflict Error` (409), `Internal Error` (500).
 
 
 ## 7. Roadmap

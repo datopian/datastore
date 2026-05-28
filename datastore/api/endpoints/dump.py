@@ -21,6 +21,7 @@ from fastapi import APIRouter, Query
 from starlette.responses import RedirectResponse, StreamingResponse
 
 from datastore.api.context import Context
+from datastore.api.responses import ERROR_RESPONSES
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.services.dump import stream_csv_shards, stream_ndjson_shards
 
@@ -32,15 +33,27 @@ _MEDIA_TYPE: dict[str, str] = {
     "parquet": "application/vnd.apache.parquet",
 }
 
-router = APIRouter(tags=["dump"])
+router = APIRouter(tags=["Datastore Download"], responses=ERROR_RESPONSES)
 
 
-@router.get("/datastore/dump/{resource_id}")
+@router.get(
+    "/datastore/dump/{resource_id}",
+    summary="Download an entire table (CSV / NDJSON / Parquet)",
+    responses={
+        302: {"description": "Single-shard export — redirect to a signed GCS URL."},
+        200: {"description": "Multi-shard export — streamed CSV / NDJSON body."},
+    },
+)
 async def dump(
     context: Context,
     resource_id: str,
     fmt: Annotated[DumpFormat, Query(alias="format")] = "csv",
 ):
+    """Download an entire resource as `csv` (default), `ndjson`, or `parquet`.
+
+    Small exports redirect (302) straight to a signed GCS URL; large ones
+    stream a concatenated body. Select the format with `?format=`.
+    """
     await context.authorize(resource_id=resource_id, permission="read")
     engine = get_datastore_engine(context, mode="ro")
 

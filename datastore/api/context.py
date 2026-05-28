@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
-from fastapi import Depends, Header
+from fastapi import Depends
+from fastapi.security import APIKeyHeader
 from starlette.requests import Request
 
 from datastore.api import auth as auth_fns
@@ -14,6 +15,21 @@ from datastore.core.helper import parse_authorization_header
 from datastore.infrastructure.ckan_client import CKANClient
 
 ConfigDep = Annotated[Config, Depends(get_config)]
+
+# Declared as a security scheme (not a plain `Header`) so OpenAPI renders
+# an "Authorize" button and the token is set once for every operation
+# instead of leaking as a parameter on each. `auto_error=False` keeps the
+# header optional — `anonymous` auth needs no token.
+_auth_header = APIKeyHeader(
+    name="Authorization",
+    scheme_name="Authorization",
+    auto_error=False,
+    description=(
+        "API token, per the active `AUTH_TYPE`: a CKAN API key (`ckan`) or a "
+        "signed JWT (`jwt`). Accepts a raw token or `Bearer <token>`. Not "
+        "required under `anonymous`."
+    ),
+)
 
 
 def get_ckan_client(request: Request) -> CKANClient | None:
@@ -74,7 +90,7 @@ def get_context(
     config: ConfigDep,
     ckan: Annotated[CKANClient | None, Depends(get_ckan_client)],
     provider: Annotated[AuthProvider, Depends(get_auth_provider)],
-    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+    authorization: Annotated[str | None, Depends(_auth_header)] = None,
 ) -> RequestContext:
     api_key = parse_authorization_header(authorization)
     return RequestContext(

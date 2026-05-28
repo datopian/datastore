@@ -25,6 +25,39 @@ class ResponseModel(BaseModel):
     success: bool = True
 
 
+class ErrorEnvelope(BaseModel):
+    """CKAN-shaped error body returned for every 4xx / 5xx response."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        json_schema_extra={
+            "example": {
+                "help": "https://example.com/api/3/action/datastore_search",
+                "success": False,
+                "error": {
+                    "__type": "Validation Error",
+                    "message": "resource 'foo' is not declared",
+                },
+            }
+        },
+    )
+
+    class Error(BaseModel):
+        type_: str = Field(
+            alias="__type",
+            description="Error class: `Validation Error` · `Authorization Error` "
+            "· `Not Found Error` · `Conflict Error` · `Internal Error`.",
+        )
+        message: str = Field(description="Human-readable explanation.")
+        fields: dict[str, Any] | None = Field(
+            default=None, description="Per-field detail, present on validation errors."
+        )
+
+    help: str
+    success: bool = False
+    error: Error
+
+
 # --- health -----------------------------------------------------------------
 
 
