@@ -153,14 +153,17 @@ def test_tsv_records_string_is_empty_when_engine_yields_no_rows() -> None:
 
 
 def test_links_present_on_every_format() -> None:
-    """Placeholder engine returns total=0 → no rows, so `page` and
-    `total_pages` are suppressed. `page_size` is always present when
-    `limit > 0` since a UI can render it even on an empty page."""
+    """Placeholder engine returns total=0 → no rows on the page.
+    `page` / `total_pages` come through as explicit `null` so clients
+    can distinguish "no current page" from "field missing".
+    `page_size` is always present when `limit > 0`."""
     for fmt in ("objects", "lists", "csv", "tsv"):
         body = _call(data_dict_overrides={"records_format": fmt})
         links = body["result"]["_links"]
-        assert set(links) == {"start", "page_size"}, fmt
+        assert set(links) == {"start", "page_size", "page", "total_pages"}, fmt
         assert links["page_size"] == 100  # default limit
+        assert links["page"] is None
+        assert links["total_pages"] is None
 
 
 # --- _build_pagination_links: URL surgery + presence rules -----------------
@@ -258,27 +261,27 @@ def test_links_omit_prev_at_first_page() -> None:
     assert "next" in links
 
 
-def test_links_drop_page_counters_on_empty_resource() -> None:
-    """No rows on the current page (empty resource) → suppress `page`
-    and `total_pages`. `page_size` rides along since a UI can still
-    render it; `start` is the only meaningful nav URL."""
+def test_links_null_page_counters_on_empty_resource() -> None:
+    """Empty resource → `page` / `total_pages` are explicit `null`
+    (not omitted). `page_size` and `start` are present as usual."""
     links = _build_pagination_links(
         "/path", limit=10, offset=0, total=0,
     )
-    assert set(links) == {"start", "page_size"}
+    assert set(links) == {"start", "page_size", "page", "total_pages"}
     assert links["page_size"] == 10
+    assert links["page"] is None
+    assert links["total_pages"] is None
 
 
-def test_links_drop_page_counters_when_offset_past_total() -> None:
-    """Caller paged past the end (`offset >= total`) → counters lie
-    about position, so they're dropped. `prev` remains so the UI can
-    walk back to a real page; the empty `records` array signals the
-    overshoot."""
+def test_links_null_page_counters_when_offset_past_total() -> None:
+    """Caller paged past the end (`offset >= total`) → counters would
+    lie about position, so they're emitted as explicit `null`. `prev`
+    remains so the UI can walk back to a real page."""
     links = _build_pagination_links(
         "/path", limit=100, offset=400, total=302,
     )
-    assert "page" not in links
-    assert "total_pages" not in links
+    assert links["page"] is None
+    assert links["total_pages"] is None
     assert "prev" in links  # offset > 0
     assert "next" not in links  # nothing past the end
 

@@ -226,19 +226,14 @@ def _build_pagination_links(
     Counter keys (added alongside the URL keys, 1-indexed):
       - ``page_size``   — rows per page = ``limit``; emitted whenever
         ``limit > 0`` (a UI can always render it, even on empty pages).
-      - ``page``        — current page = ``offset // limit + 1``.
-      - ``total_pages`` — ``ceil(total / limit)``; omitted when total
-        is unknown.
-
-    ``page`` and ``total_pages`` are dropped whenever the current page
-    has no rows — either because the resource is empty
-    (``total == 0``) or because the caller paged past the end
-    (``offset >= total > 0``). Reporting ``page=5 / total_pages=4``
-    would be incoherent (no such page exists); the absence + the
-    empty `records` array + `prev` are what let a UI recover. When
-    ``total`` is unknown (caller didn't request `include_total`) we
-    keep ``page`` since position is still meaningful for single-page
-    pickers.
+      - ``page``        — current page = ``offset // limit + 1``, or
+        ``null`` when the current page has no rows (empty resource or
+        ``offset >= total``). Reporting ``page=5 / total_pages=4``
+        would be incoherent, so we emit explicit `null` instead — UI
+        can distinguish "no current page" from "field missing".
+      - ``total_pages`` — ``ceil(total / limit)``, or ``null`` in the
+        same no-rows case. Omitted entirely when ``total`` is unknown
+        (``include_total=False``) so we don't fabricate a count.
 
     All non-`offset` query params ride along on every emitted URL.
 
@@ -269,16 +264,18 @@ def _build_pagination_links(
         out["next"] = _qs(base_pairs + [("offset", str(offset + limit))])
     if limit > 0:
         out["page_size"] = limit
-    # Drop `page` / `total_pages` whenever the current page has no
-    # rows: empty resource or past-end pagination. `total is None`
-    # means "unknown → assume there might be rows" so we still emit
-    # `page`.
+    # `total is None` → unknown, assume there might be rows → real ints.
+    # Empty resource / past-end → emit explicit `null` so clients can
+    # distinguish "no current page exists" from "field forgotten".
     has_rows_on_page = total is None or (total > 0 and offset < total)
-    if limit > 0 and has_rows_on_page:
-        out["page"] = offset // limit + 1
-        if total is not None:
-            # ceil division without importing math
-            out["total_pages"] = (total + limit - 1) // limit
+    if limit > 0:
+        if has_rows_on_page:
+            out["page"] = offset // limit + 1
+            if total is not None:
+                out["total_pages"] = (total + limit - 1) // limit  # ceil div
+        elif total is not None:
+            out["page"] = None
+            out["total_pages"] = None
     return out
 
 
@@ -323,8 +320,12 @@ def _build_sql_pagination_links(
     if limit > 0:
         out["page_size"] = limit
     has_rows_on_page = total is None or (total > 0 and offset < total)
-    if limit > 0 and has_rows_on_page:
-        out["page"] = offset // limit + 1
-        if total is not None:
-            out["total_pages"] = (total + limit - 1) // limit
+    if limit > 0:
+        if has_rows_on_page:
+            out["page"] = offset // limit + 1
+            if total is not None:
+                out["total_pages"] = (total + limit - 1) // limit
+        elif total is not None:
+            out["page"] = None
+            out["total_pages"] = None
     return out
