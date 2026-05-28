@@ -18,7 +18,7 @@ uvicorn datastore.main:app --reload   # run dev server
 pytest                            # run tests
 ```
 
-Open `http://localhost:8000/datastore/docs` for interactive API docs.
+Open `http://localhost:8000/datastore/api/docs` for interactive API docs.
 
 ## Configuration
 
@@ -36,7 +36,7 @@ Copy [.env.example](.env.example) and fill it in. The essentials:
 ## Documentation
 
 - **[API.md](API.md)** — full API reference (endpoints, request/response, examples).
-- **`GET /datastore/docs`** — interactive Swagger UI (also `/datastore/redoc` and `/datastore/openapi.json`).
+- **`GET /datastore/api/docs`** — interactive Swagger UI (also `/datastore/api/redoc` and `/datastore/api/openapi.json`).
 - **[CLAUDE.md](CLAUDE.md)** — architecture, design decisions, and layout.
 
 ## License

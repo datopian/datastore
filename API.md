@@ -5,7 +5,7 @@ pluggable storage backend. Every action lives under `/api/3/action/` and returns
 the CKAN envelope, so existing CKAN datastore clients work unchanged — whether
 this runs alongside CKAN or independently.
 
-- **Interactive docs:** `GET /datastore/docs` (Swagger UI) · `GET /datastore/redoc` · `GET /datastore/openapi.json`
+- **Interactive docs:** `GET /datastore/api/docs` (Swagger UI) · `GET /datastore/api/redoc` · `GET /datastore/api/openapi.json`
 - **Postman:** import [postman/collection.json](postman/collection.json) — one worked request per endpoint.
 
 ---

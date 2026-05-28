@@ -131,11 +131,12 @@ def create_app() -> FastAPI:
         description="",
         openapi_tags=OPENAPI_TAGS,
         contact={"name": "Datopian", "url": "https://www.datopian.com/"},
-        # Mount the interactive docs under the service's path prefix so this
-        # API doesn't fight an upstream proxy / sibling service for `/docs`.
-        docs_url="/datastore/docs",
-        redoc_url="/datastore/redoc",
-        openapi_url="/datastore/openapi.json",
+        # Mount the interactive docs (and the spec they fetch) under the
+        # service's path prefix so this API doesn't compete with an upstream
+        # proxy or sibling service for the bare `/docs`.
+        docs_url="/datastore/api/docs",
+        redoc_url="/datastore/api/redoc",
+        openapi_url="/datastore/api/openapi.json",
         lifespan=lifespan,
         default_response_class=ORJSONResponse,
     )
