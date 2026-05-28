@@ -957,7 +957,7 @@ Apply to every change, current and future:
 |---|---|
 | App starts | `uvicorn datastore.main:app` exits 0 |
 | Health always works | `GET /health` → 200 |
-| OpenAPI loads | `GET /docs` renders without error |
+| OpenAPI loads | `GET /datastore/api/docs` renders without error |
 | Tests stay green | `pytest` passes |
 | Layer arrow holds | `rg "from (fastapi\|starlette)" datastore/services datastore/infrastructure datastore/core` returns nothing |
 

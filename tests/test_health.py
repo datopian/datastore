@@ -46,14 +46,12 @@ def test_welcome_not_mounted_under_action_prefix(client: TestClient) -> None:
 # 2. /health ----------------------------------------------------------------
 
 def test_health_returns_ok(client: TestClient) -> None:
-    """Liveness — always 200. Mounted at both root and under
-    `/api/3/action` so k8s probes and CKAN clients can both reach it."""
-    for path in ("/health", "/api/3/action/health"):
-        response = client.get(path)
-        assert response.status_code == 200, path
-        body = response.json()
-        assert body["success"] is True
-        assert body["result"]["status"] == "ok"
+    """Liveness — always 200 while the process is up."""
+    response = client.get("/datastore/api/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["result"]["status"] == "ok"
 
 
 # 3. /ready -----------------------------------------------------------------
@@ -64,7 +62,7 @@ def test_ready_503_when_engine_unhealthy(client: TestClient) -> None:
     fail → 503 in the StatusResponse envelope shape (`result.status` =
     "not_ready"); the HTTP code + `success: false` carry the signal so
     mode names don't leak into the response."""
-    response = client.get("/ready")
+    response = client.get("/datastore/api/ready")
 
     assert response.status_code == 503
     body = response.json()
@@ -77,20 +75,18 @@ def test_ready_200_when_engines_healthy(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Force every engine instance's healthcheck to True — the same
-    pattern other endpoint tests use to swap engine behaviour. /ready
-    is mounted at both root and `/api/3/action`."""
+    pattern other endpoint tests use to swap engine behaviour."""
     from datastore.infrastructure.engines.bigquery.backend import (
         BigQueryBackend,
     )
 
     monkeypatch.setattr(BigQueryBackend, "healthcheck", lambda self: True)
 
-    for path in ("/ready", "/api/3/action/ready"):
-        response = client.get(path)
-        assert response.status_code == 200, path
-        body = response.json()
-        assert body["success"] is True
-        assert body["result"]["status"] == "ready"
+    response = client.get("/datastore/api/ready")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["result"]["status"] == "ready"
 
 
 def test_ready_503_when_only_rw_fails(
@@ -108,7 +104,7 @@ def test_ready_503_when_only_rw_fails(
 
     monkeypatch.setattr(BigQueryBackend, "healthcheck", fake_healthcheck)
 
-    response = client.get("/ready")
+    response = client.get("/datastore/api/ready")
 
     assert response.status_code == 503
     body = response.json()
@@ -128,7 +124,7 @@ def test_ready_handles_engine_construction_error(
         "datastore.api.endpoints.health.get_datastore_engine", boom
     )
 
-    response = client.get("/ready")
+    response = client.get("/datastore/api/ready")
 
     assert response.status_code == 503
     body = response.json()
