@@ -361,7 +361,7 @@ def test_create_with_invalid_schema_returns_validation_error(
     assert "schema" in error["fields"]
 
 
-# Read-only resource guard (url_type="datastore") ---------------------------
+# Read-only resource guard (url_type != "datastore") ------------------------
 
 
 def test_create_with_resource_dict_tags_url_type_datastore(
@@ -379,7 +379,7 @@ def test_create_on_readonly_resource_requires_force(
     client: TestClient, fake_ckan: FakeCKAN
 ) -> None:
     fake_ckan.add_resource(
-        "ro-res", package_id="pkg-balancing-2025", url_type="datastore"
+        "ro-res", package_id="pkg-balancing-2025", url_type="upload"
     )
     payload = {
         "resource_id": "ro-res",
@@ -399,7 +399,7 @@ def test_create_on_readonly_resource_with_force_succeeds(
     client: TestClient, fake_ckan: FakeCKAN
 ) -> None:
     fake_ckan.add_resource(
-        "ro-res", package_id="pkg-balancing-2025", url_type="datastore"
+        "ro-res", package_id="pkg-balancing-2025", url_type="upload"
     )
     payload = {
         "resource_id": "ro-res",
