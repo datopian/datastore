@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+from decimal import Decimal
 from typing import Any
 
 import orjson
@@ -24,6 +26,16 @@ ERROR_RESPONSES: dict[int, dict[str, Any]] = {
 def _orjson_default(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):
         return obj.model_dump(exclude_none=True)
+    # BigQuery `NUMERIC` / `BIGNUMERIC` columns come back as Decimal —
+    # JSON has no native form, and orjson refuses by default. Stringify
+    # to preserve full precision (NUMERIC = 38 digits, BIGNUMERIC = 76+,
+    # both beyond IEEE-754 double).
+    if isinstance(obj, Decimal):
+        return str(obj)
+    # `BYTES` columns come back as raw `bytes`; base64-encode so the
+    # response stays UTF-8 and round-trippable.
+    if isinstance(obj, bytes):
+        return base64.b64encode(obj).decode("ascii")
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 

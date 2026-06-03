@@ -29,12 +29,37 @@ between the records field's opening / closing `"` quotes.
 
 from __future__ import annotations
 
+import base64
 import csv
 import io
 from collections.abc import Iterator
+from decimal import Decimal
 from typing import Any
 
 import orjson
+
+
+def _json_default(obj: Any) -> Any:
+    """Serialise types `orjson` refuses out of the box.
+
+    BigQuery `NUMERIC` / `BIGNUMERIC` columns come back as
+    `decimal.Decimal`, which has no native JSON representation.
+    Stringifying preserves full precision (NUMERIC is 38 digits,
+    BIGNUMERIC is 76+ — beyond what a JSON number / IEEE-754 double
+    can represent without loss) and matches CKAN's datastore
+    convention of returning high-precision numerics as strings.
+
+    `bytes` (BigQuery `BYTES` columns) are base64-encoded so the
+    response stays UTF-8 and round-trippable.
+    """
+    if isinstance(obj, Decimal):
+        return str(obj)
+    if isinstance(obj, bytes):
+        return base64.b64encode(obj).decode("ascii")
+    raise TypeError(
+        f"orjson cannot serialise {type(obj).__name__}; "
+        "extend `_json_default` if a new BigQuery type comes through."
+    )
 
 
 def stream_objects(
@@ -219,7 +244,7 @@ def _records_object_array(
             first = False
         else:
             yield b","
-        yield orjson.dumps(dict(zip(columns, row)))
+        yield orjson.dumps(dict(zip(columns, row)), default=_json_default)
     yield b"]"
 
 
@@ -232,7 +257,7 @@ def _records_array_array(records: Iterator[tuple]) -> Iterator[bytes]:
             first = False
         else:
             yield b","
-        yield orjson.dumps(list(row))
+        yield orjson.dumps(list(row), default=_json_default)
     yield b"]"
 
 
