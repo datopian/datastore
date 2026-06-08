@@ -571,7 +571,7 @@ def test_upsert_undeclared_resource_raises_not_found(
     backend = _backend(mock_client)
     backend._read_schema = MagicMock(return_value=None)
 
-    with pytest.raises(NotFoundError, match="not declared"):
+    with pytest.raises(NotFoundError, match="not found"):
         backend.upsert(
             "ghost", [{"a": 1}], method="upsert", include_total=False
         )
@@ -963,7 +963,7 @@ def test_info_raises_not_found_for_undeclared_resource(
     backend = _backend(mock_client)
     backend._read_schema = MagicMock(return_value=None)
 
-    with pytest.raises(NotFoundError, match="not declared"):
+    with pytest.raises(NotFoundError, match="not found"):
         backend.info("ghost")
     # No COUNT runs when the resource isn't declared.
     mock_client.query.assert_not_called()
@@ -1050,7 +1050,10 @@ def test_build_search_renders_full_param_set() -> None:
     assert sql.startswith("SELECT `auction_id`, `product_code` FROM `p.d.r` AS t")
     assert "WHERE `product_code` = @f0 AND `accepted` = @f1" in sql
     assert "SEARCH(t, @f2)" in sql
-    assert "ORDER BY `auction_id` DESC" in sql
+    # ORDER BY references the underlying table column (`t.<col>`) so the
+    # FORMAT_TIMESTAMP projection alias for datetime columns doesn't shadow
+    # the native value at sort time.
+    assert "ORDER BY t.`auction_id` DESC" in sql
     assert sql.rstrip().endswith("LIMIT 100 OFFSET 25")
     # Parameter types track the schema (STRING / BOOL / STRING for q).
     by_name = {p.name: p for p in params}
@@ -1106,7 +1109,7 @@ def test_build_search_default_sort_is_id_asc() -> None:
         limit=10,
         offset=0,
     )
-    assert "ORDER BY `_id` ASC" in sql
+    assert "ORDER BY t.`_id` ASC" in sql
 
 
 def test_build_search_rejects_unknown_columns() -> None:
@@ -1257,8 +1260,13 @@ def test_search_unfiltered_uses_cheap_row_count(
     sqls = [call.args[0] for call in mock_client.query.call_args_list]
     # `_updated_at` rides along in default projection because the
     # MagicMock config returns truthy for `INCLUDE_UPDATED_AT`.
+    # `_updated_at` is a `datetime` column → projection now wraps it in
+    # FORMAT_TIMESTAMP (UTC, no fractional, no offset) so the search
+    # response matches the dump endpoint's timestamp shape.
     assert sqls[0].startswith(
-        "SELECT `_id`, `a`, `_updated_at` FROM `proj-1.ds-1.res-1` AS t"
+        "SELECT `_id`, `a`, "
+        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `_updated_at`, 'UTC') "
+        "AS `_updated_at` FROM `proj-1.ds-1.res-1` AS t"
     )
     assert sqls[1] == (
         "SELECT COUNT(*) AS n FROM `proj-1.ds-1.res-1`"
@@ -1274,7 +1282,7 @@ def test_search_raises_not_found_for_undeclared_resource(
     backend = _backend(mock_client)
     backend._read_schema = MagicMock(return_value=None)
 
-    with pytest.raises(NotFoundError, match="not declared"):
+    with pytest.raises(NotFoundError, match="not found"):
         backend.search(
             resource_id="ghost",
             filters=None, q=None, distinct=False, plain=True,

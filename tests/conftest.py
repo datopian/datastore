@@ -18,6 +18,14 @@ os.environ["BIGQUERY_EXPORT_URL_EXPIRY_HOURS"] = "1"
 # it a dummy when the env doesn't carry one — tests override the CKAN
 # client via DI, so this URL is never contacted.
 os.environ.setdefault("CKAN_URL", "http://test-ckan.local")
+# Force CKAN auth for the suite: the endpoint tests are built around
+# `CKANAuthProvider` + `FakeCKAN`, and the dict-resource create branch +
+# the read-only force guard are explicitly gated on `AUTH_TYPE == "ckan"`.
+# A developer .env that flips this to `anonymous` would otherwise reroute
+# those code paths and silently break ~7 endpoint tests locally (CI is
+# fine because it has no .env). `os.environ[...] =` forces an override,
+# unlike `setdefault` above which respects a CI-supplied value.
+os.environ["AUTH_TYPE"] = "ckan"
 
 from collections.abc import Iterator  # noqa: E402
 from typing import Any  # noqa: E402

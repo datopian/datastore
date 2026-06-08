@@ -42,6 +42,7 @@ from datastore.infrastructure.engines.bigquery.lib import (
     column_defs,
     delete_sql,
     drop_columns_sql,
+    format_select_column,
     insert_sql,
     merge_sql,
     normalize_pk,
@@ -448,8 +449,7 @@ class BigQueryBackend(DatastoreBackend):
         schema = self._read_schema(resource_id)
         if schema is None:
             raise NotFoundError(
-                f"resource {resource_id!r} is not declared; call "
-                "datastore_create before upsert"
+                f"resource {resource_id!r} not found."
             )
 
         rows = records or []
@@ -521,8 +521,7 @@ class BigQueryBackend(DatastoreBackend):
         schema = self._read_schema(resource_id)
         if schema is None:
             raise NotFoundError(
-                f"resource {resource_id!r} is not declared; call "
-                "datastore_create first"
+                f"resource {resource_id!r} not found."
             )
 
         try:
@@ -867,8 +866,7 @@ class BigQueryBackend(DatastoreBackend):
         schema = self._read_schema(resource_id)
         if schema is None:
             raise NotFoundError(
-                f"resource {resource_id!r} is not declared; call "
-                "datastore_create first"
+                f"resource {resource_id!r} not found."
             )
 
         total = self._count_rows(resource_id)
@@ -1284,30 +1282,15 @@ def _build_export_select(schema: Any, fmt: str) -> str:
     """SELECT column list for EXPORT DATA.
 
     Parquet preserves native logical types → `*` is enough. For CSV /
-    NDJSON, cast TIMESTAMP and DATETIME columns to ISO 8601 (BigQuery's
-    default text format uses a space separator and `UTC` suffix, which
-    most clients reject as non-ISO). DATE and TIME already serialise as
-    ISO and pass through.
+    NDJSON, every column goes through `format_select_column` (in
+    `bigquery/lib.py`) — the same helper `datastore_search` uses — so a
+    given column renders identically in a dump and in a search response.
     """
     if fmt == "parquet":
         return "*"
-    parts: list[str] = []
-    for field in schema:
-        ftype = (field.field_type or "").upper()
-        if ftype == "TIMESTAMP":
-            # `%E*S` keeps all fractional seconds; trailing Z marks UTC.
-            parts.append(
-                f"FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', "
-                f"`{field.name}`, 'UTC') AS `{field.name}`"
-            )
-        elif ftype == "DATETIME":
-            parts.append(
-                f"FORMAT_DATETIME('%Y-%m-%dT%H:%M:%E*S', `{field.name}`) "
-                f"AS `{field.name}`"
-            )
-        else:
-            parts.append(f"`{field.name}`")
-    return ", ".join(parts)
+    return ", ".join(
+        format_select_column(f.name, f.field_type) for f in schema
+    )
 
 
 def _is_export_too_large(exc: BaseException) -> bool:
