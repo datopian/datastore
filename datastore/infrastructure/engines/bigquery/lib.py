@@ -66,6 +66,30 @@ def _system_col_insert_list(include_updated_at: bool) -> str:
     return "`_id`, `_updated_at`" if include_updated_at else "`_id`"
 
 
+def format_select_column(name: str, bq_type: str | None) -> str:
+    """Render a SELECT-list expression for one column, casting TIMESTAMP /
+    DATETIME values to a fixed-shape ISO 8601 string
+    (`YYYY-MM-DDTHH:MM:SS` — UTC implicit, no offset, no fractional).
+    Other types pass through unchanged.
+
+    Shared by `datastore_search` (engine-built projection) and the
+    `datastore_dump` `EXPORT DATA` SELECT, so both read paths emit the
+    same timestamp shape from BigQuery's side. TIMESTAMP is rendered in
+    UTC; the resulting string carries no offset, so consumers must treat
+    any timestamp value as UTC.
+    """
+    bq = (bq_type or "").upper()
+    if bq == "TIMESTAMP":
+        return (
+            f"FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `{name}`, 'UTC') AS `{name}`"
+        )
+    if bq == "DATETIME":
+        return (
+            f"FORMAT_DATETIME('%Y-%m-%dT%H:%M:%S', `{name}`) AS `{name}`"
+        )
+    return f"`{name}`"
+
+
 def normalize_pk(schema: dict) -> list[str]:
     """`schema.primaryKey` as a list (str → 1-elem, missing → empty)."""
     pk = schema.get("primaryKey")

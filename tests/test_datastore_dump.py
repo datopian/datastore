@@ -157,6 +157,10 @@ def test_dump_with_denied_key_returns_403(
 
 
 def test_build_export_select_iso_casts_timestamp_and_datetime() -> None:
+    """TIMESTAMP / DATETIME columns render as `YYYY-MM-DDTHH:MM:SS` —
+    no timezone suffix, no fractional seconds. TIMESTAMP is formatted
+    in UTC (clients should assume UTC even though the string carries
+    no offset)."""
     schema = [
         _bq_field("auction_id", "INT64"),
         _bq_field("delivery_start", "TIMESTAMP"),
@@ -165,13 +169,16 @@ def test_build_export_select_iso_casts_timestamp_and_datetime() -> None:
     ]
     select = _build_export_select(schema, fmt="csv")
     assert (
-        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', `delivery_start`, 'UTC')"
+        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `delivery_start`, 'UTC')"
         in select
     )
     assert (
-        "FORMAT_DATETIME('%Y-%m-%dT%H:%M:%E*S', `delivery_local`)"
+        "FORMAT_DATETIME('%Y-%m-%dT%H:%M:%S', `delivery_local`)"
         in select
     )
+    # No `Z` suffix and no `%E*S` (which would re-introduce fractional seconds).
+    assert "Z'," not in select
+    assert "%E*S" not in select
     assert "`auction_id`" in select
     assert "`delivery_day`" in select
 

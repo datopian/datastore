@@ -14,7 +14,9 @@ from typing import TYPE_CHECKING, Any
 from datastore.infrastructure.engines.bigquery.lib import (
     JSON_FRICTIONLESS_TYPES,
     SYSTEM_COLUMN_NAMES,
+    format_select_column,
 )
+from datastore.infrastructure.engines.bigquery.types import bigquery_type
 
 if TYPE_CHECKING:
     from google.cloud import bigquery
@@ -203,6 +205,19 @@ def _build_where(
     return " AND ".join(clauses)
 
 
+def _project_column(col: str, type_map: dict[str, str]) -> str:
+    """Render a projected column for `datastore_search` / `build_count`.
+
+    Translates the Frictionless type to BigQuery's name (via
+    `bigquery_type`) and delegates to `lib.format_select_column` — the
+    same helper `datastore_dump` uses for `EXPORT DATA`. Net effect:
+    TIMESTAMP / DATETIME columns come back as the fixed ISO 8601 string
+    `2026-06-08T00:00:00` (UTC implicit) in both endpoints; other
+    columns pass through as the native type.
+    """
+    return format_select_column(col, bigquery_type(type_map.get(col)))
+
+
 def build_search(
     *,
     table_ref: str,
@@ -265,7 +280,7 @@ def build_search(
     )
 
     parts: list[str] = []
-    projection = ", ".join(f"`{c}`" for c in projected)
+    projection = ", ".join(_project_column(c, type_map) for c in projected)
     parts.append(
         f"SELECT {'DISTINCT ' if distinct else ''}{projection} "
         f"FROM {table_ref} AS t"
@@ -273,8 +288,14 @@ def build_search(
     if where:
         parts.append(f"WHERE {where}")
     if sort_pairs:
+        # Sort against the underlying table column (`t.<col>`) rather than
+        # the projected alias — the datetime projection rewrites
+        # `col` → `FORMAT_TIMESTAMP(...) AS col`, and we want ORDER BY to
+        # operate on the native TIMESTAMP, not the formatted string. (The
+        # ISO format happens to sort lexicographically the same way, but
+        # the explicit reference future-proofs us if the format changes.)
         parts.append(
-            "ORDER BY " + ", ".join(f"`{c}` {d}" for c, d in sort_pairs)
+            "ORDER BY " + ", ".join(f"t.`{c}` {d}" for c, d in sort_pairs)
         )
     parts.append(f"LIMIT {int(limit)} OFFSET {int(offset)}")
 
@@ -322,7 +343,11 @@ def build_count(
         table_alias="t", params=params,
     )
 
-    projection = ", ".join(f"`{c}`" for c in projected)
+    # Same projection rewrite as `build_search` — datetime columns are
+    # FORMAT_TIMESTAMP-wrapped. Matters when `distinct=True`: the COUNT
+    # then dedupes on the formatted (second-precision) string, matching
+    # what the user sees in the data response.
+    projection = ", ".join(_project_column(c, type_map) for c in projected)
     inner_parts = [
         f"SELECT {'DISTINCT ' if distinct else ''}{projection} "
         f"FROM {table_ref} AS t"
