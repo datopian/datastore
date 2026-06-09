@@ -27,11 +27,12 @@ def _orjson_default(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):
         return obj.model_dump(exclude_none=True)
     # BigQuery `NUMERIC` / `BIGNUMERIC` columns come back as Decimal —
-    # JSON has no native form, and orjson refuses by default. Stringify
-    # to preserve full precision (NUMERIC = 38 digits, BIGNUMERIC = 76+,
-    # both beyond IEEE-754 double).
+    # JSON has no native form, and orjson refuses by default. Emit as a
+    # JSON number so clients can do arithmetic without parsing a string;
+    # values past ~15 significant digits round to the nearest IEEE-754
+    # double (full-precision callers should CAST to STRING in SQL).
     if isinstance(obj, Decimal):
-        return str(obj)
+        return float(obj)
     # `BYTES` columns come back as raw `bytes`; base64-encode so the
     # response stays UTF-8 and round-trippable.
     if isinstance(obj, bytes):

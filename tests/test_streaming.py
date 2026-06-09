@@ -28,8 +28,7 @@ def _join(parts: list[bytes]) -> str:
 
 def test_records_object_array_serialises_decimal_and_bytes() -> None:
     """Rows with NUMERIC (Decimal) + BYTES values must stream without
-    blowing up; Decimal is stringified (preserves precision); bytes is
-    base64-encoded."""
+    blowing up; Decimal lands as a JSON number; bytes is base64-encoded."""
     rows = iter(
         [
             ("DCL", Decimal("47.82"), b"\x00\xff"),
@@ -44,15 +43,19 @@ def test_records_object_array_serialises_decimal_and_bytes() -> None:
     assert records == [
         {
             "product_code": "DCL",
-            "clearing_price_gbp_per_mwh": "47.82",
+            "clearing_price_gbp_per_mwh": 47.82,
             "signature": "AP8=",                 # b64("\x00\xff")
         },
         {
             "product_code": "DCH",
-            "clearing_price_gbp_per_mwh": "1E-38",
+            "clearing_price_gbp_per_mwh": 1e-38,
             "signature": "YWJj",                 # b64(b"abc")
         },
     ]
+    # Confirm the type, not just the value — `47.82 == "47.82"` would be
+    # False but the eq above could pass with both as strings if the field
+    # ever flipped back. Pin the JSON number contract explicitly.
+    assert isinstance(records[0]["clearing_price_gbp_per_mwh"], float)
 
 
 def test_records_array_array_serialises_decimal_and_bytes() -> None:
@@ -62,7 +65,8 @@ def test_records_array_array_serialises_decimal_and_bytes() -> None:
     body = _join(list(_records_array_array(rows)))
     records = json.loads(body)
 
-    assert records == [["DCL", "47.82", "AP8="]]
+    assert records == [["DCL", 47.82, "AP8="]]
+    assert isinstance(records[0][1], float)
 
 
 def test_unsupported_type_still_raises() -> None:
