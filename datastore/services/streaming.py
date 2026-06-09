@@ -43,17 +43,17 @@ def _json_default(obj: Any) -> Any:
     """Serialise types `orjson` refuses out of the box.
 
     BigQuery `NUMERIC` / `BIGNUMERIC` columns come back as
-    `decimal.Decimal`, which has no native JSON representation.
-    Stringifying preserves full precision (NUMERIC is 38 digits,
-    BIGNUMERIC is 76+ — beyond what a JSON number / IEEE-754 double
-    can represent without loss) and matches CKAN's datastore
-    convention of returning high-precision numerics as strings.
+    `decimal.Decimal`. Emit them as JSON numbers so clients can do
+    arithmetic without parsing a string. The cost is that values past
+    ~15 significant digits round to the nearest IEEE-754 double —
+    full-precision callers should `CAST(... AS STRING)` in
+    `datastore_search_sql` instead.
 
     `bytes` (BigQuery `BYTES` columns) are base64-encoded so the
     response stays UTF-8 and round-trippable.
     """
     if isinstance(obj, Decimal):
-        return str(obj)
+        return float(obj)
     if isinstance(obj, bytes):
         return base64.b64encode(obj).decode("ascii")
     raise TypeError(
