@@ -608,8 +608,8 @@ class BigQueryBackend(DatastoreBackend):
         Safety relies on upstream layers (schema rejects non-SELECT,
         endpoint authorises tables, service checks function allow-list).
         The load-bearing guard is `mode="ro"` — read-only IAM
-        physically refuses any DML/DDL. Total comes from free
-        `INFORMATION_SCHEMA.TABLE_STORAGE` for plain SELECTs, else
+        physically refuses any DML/DDL. Total comes from a free
+        unfiltered `COUNT(*)` for plain SELECTs, else
         `COUNT(*) FROM (...)`; COUNT failures are non-fatal.
         """
         from itertools import islice
@@ -700,8 +700,9 @@ class BigQueryBackend(DatastoreBackend):
     ) -> tuple[str | None, list]:
         """Pick the cheapest `total` query for a vetted SELECT.
 
-        Plain `SELECT cols FROM t [LIMIT/OFFSET]` reads the free
-        `total_rows` from `INFORMATION_SCHEMA.TABLE_STORAGE`; anything
+        Plain `SELECT cols FROM t [LIMIT/OFFSET]` counts the source
+        table directly — an unfiltered `COUNT(*)` is a BigQuery metadata
+        read (0 bytes scanned), so it's free and always fresh. Anything
         that filters/joins/aggregates wraps the LIMIT-stripped query in
         `COUNT(*)`. `RowIterator.total_rows` can't be used — it counts
         the post-LIMIT page, so pagination would always read "last
@@ -710,18 +711,13 @@ class BigQueryBackend(DatastoreBackend):
         try:
             table = unfiltered_table_name(qualified_sql)
             if table is not None:
-                from google.cloud import bigquery
-                sql = (
-                    "SELECT total_rows AS n FROM "
-                    f"`{self.config.BIGQUERY_PROJECT}."
-                    f"{self.config.BIGQUERY_DATASET}."
-                    "INFORMATION_SCHEMA.TABLE_STORAGE` "
-                    "WHERE table_name = @table_name"
+                # `INFORMATION_SCHEMA.TABLE_STORAGE` is region-scoped
+                # (not dataset-scoped), so a `project.dataset.…` ref
+                # 404s; a bare unfiltered COUNT(*) is just as cheap.
+                return (
+                    f"SELECT COUNT(*) AS n FROM {self._data_table_ref(table)}",
+                    [],
                 )
-                params = [
-                    bigquery.ScalarQueryParameter("table_name", "STRING", table),
-                ]
-                return sql, params
             inner = strip_limit_offset(qualified_sql)
             return f"SELECT COUNT(*) AS n FROM ({inner})", []
         except Exception as e:

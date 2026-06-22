@@ -441,8 +441,9 @@ def unfiltered_table_name(
     = source row count. `None` if any clause could change row count
     (WHERE, GROUP BY, JOIN, DISTINCT, aggregates, set ops, subqueries).
 
-    Lets `datastore_search_sql` route the unfiltered total through
-    free `INFORMATION_SCHEMA.TABLE_STORAGE` instead of a full COUNT(*).
+    Lets `datastore_search_sql` count the source table directly with a
+    free unfiltered `COUNT(*)` instead of wrapping the query in a
+    `COUNT(*) FROM (<inner>)` subquery.
     """
     # Lazy import — sqlglot is heavy.
     import sqlglot
