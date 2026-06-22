@@ -40,6 +40,7 @@ from datastore.infrastructure.engines.bigquery.lib import (
     SYSTEM_COLUMN_NAMES,
     alter_clauses,
     column_defs,
+    default_order_by,
     delete_sql,
     drop_columns_sql,
     format_select_column,
@@ -648,6 +649,8 @@ class BigQueryBackend(DatastoreBackend):
 
         count_sql, count_params = self._search_sql_count_query(qualified_sql)
 
+        data_sql = default_order_by(qualified_sql)
+
         # Submit COUNT first (non-blocking) so it runs in parallel with
         # the data query. A COUNT failure is non-fatal — log and degrade
         # `total` to None; a data-query failure is the user's primary
@@ -662,7 +665,7 @@ class BigQueryBackend(DatastoreBackend):
 
         try:
             data_job = self.client.query(
-                qualified_sql, job_config=self._read_job_config(),
+                data_sql, job_config=self._read_job_config(),
             )
             row_iter = data_job.result()
         except Exception as e:

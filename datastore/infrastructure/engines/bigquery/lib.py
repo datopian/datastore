@@ -520,6 +520,53 @@ def qualify_table_refs(sql: str, project: str, dataset: str) -> str:
     return tree.sql(dialect="bigquery")
 
 
+def default_order_by(
+    sql: str, *, column: str = "_id", dialect: str = "bigquery"
+) -> str:
+    """Add `ORDER BY <column>` to a plain single-table SELECT for stable
+    LIMIT/OFFSET paging. No-op (returns `sql` unchanged) for anything where
+    `<column>` is out of scope: existing ORDER BY, GROUP BY, DISTINCT,
+    aggregates, set ops, CTEs, joins, subqueries, or a non-table FROM.
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    try:
+        tree = sqlglot.parse_one(sql, dialect=dialect)
+    except Exception:
+        return sql
+    if not isinstance(tree, exp.Select):
+        return sql
+
+    # Match by child node type, not arg-key name — sqlglot renames keys
+    # across releases (30.x: `from` → `from_`, `with` → `with_`).
+    def child(kind: type) -> Any:
+        return next(
+            (v for v in tree.args.values() if isinstance(v, kind)), None
+        )
+
+    if any(
+        child(k) is not None
+        for k in (exp.Order, exp.Group, exp.Distinct, exp.With)
+    ):
+        return sql
+    if tree.args.get("joins"):
+        return sql
+    from_ = child(exp.From)
+    if from_ is None or not isinstance(from_.this, exp.Table):
+        return sql
+    if len(list(tree.find_all(exp.Table))) != 1:
+        return sql  # subquery present (e.g. WHERE … IN (SELECT …))
+    if any(proj.find(exp.AggFunc) is not None for proj in tree.expressions):
+        return sql  # implicit aggregation without GROUP BY
+
+    tree.set(
+        "order",
+        exp.Order(expressions=[exp.Ordered(this=exp.column(column))]),
+    )
+    return tree.sql(dialect=dialect)
+
+
 # ── 7. native metadata (encoders + parsers) ────────────────────────────────
 #
 # Writes go through `table_options_clause` (on CREATE) or
