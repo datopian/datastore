@@ -19,7 +19,6 @@ import json
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 REPO = Path(__file__).resolve().parent.parent
 SOURCE_DIR = REPO / "example_payload"
@@ -67,24 +66,24 @@ ENDPOINTS: list[tuple[str, str, str]] = [
 ]
 
 HEALTH_REQUESTS: list[tuple[str, str, str]] = [
-    ("Welcome",  "",       "Banner / root endpoint. Echoes `APP_MESSAGE`."),
-    ("Health",   "health", "Liveness probe — always 200 while the process is up."),
-    ("Ready",    "ready",  "Readiness probe — 200 only when both engines pass "
-                           "healthcheck."),
+    ("Welcome", "", "Banner / root endpoint. Echoes `APP_MESSAGE`."),
+    ("Health", "datastore/api/health",
+     "Liveness probe — always 200 while the process is up."),
+    ("Ready", "datastore/api/ready",
+     "Readiness probe — 200 only when both engines pass healthcheck."),
 ]
 
 
 def _request_url(path: str, query: list[dict[str, str]] | None = None) -> dict[str, Any]:
     """Postman v2.1 structured URL — lets the Postman UI edit params."""
     parts = path.strip("/").split("/")
-    # Values can be JSON-encoded (e.g. `filters={"col":"v"}`) or contain
-    # spaces / `=` / `&`; percent-encode so the `raw` URL parses cleanly.
+    # `raw` is a human-readable mirror of the request. Postman drives the
+    # actual call from the structured `query` list below (and URL-encodes
+    # each value on send), so we leave `raw` un-encoded — readable JSON
+    # `filters`, spaces in `sort`, quoted identifiers in `sql`, etc.
     url: dict[str, Any] = {
         "raw": "{{baseUrl}}/" + "/".join(parts) + (
-            "?" + "&".join(
-                f"{quote(q['key'], safe='')}={quote(q['value'], safe='')}"
-                for q in query
-            )
+            "?" + "&".join(f"{q['key']}={q['value']}" for q in query)
             if query else ""
         ),
         "host": ["{{baseUrl}}"],
@@ -337,9 +336,9 @@ def _build_health_folder() -> dict[str, Any]:
     return {
         "name": "health",
         "description": (
-            "Health endpoints live at the root and also under "
-            "`/api/3/action/` so k8s probes and CKAN clients can both "
-            "reach them. Listed here at the root."
+            "Liveness / readiness probes live under `/datastore/api` "
+            "(`/datastore/api/health`, `/datastore/api/ready`); the welcome "
+            "banner is at the root `/`. Hit any of these to check the server."
         ),
         "item": items,
     }

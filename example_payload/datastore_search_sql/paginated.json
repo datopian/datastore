@@ -1,0 +1,3 @@
+{
+  "sql": "SELECT _id, auction_id, product_code, delivery_start FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" ORDER BY _id ASC LIMIT 50 OFFSET 100"
+}

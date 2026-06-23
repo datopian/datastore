@@ -1,0 +1,136 @@
+{
+  "resource_id": "7a10def4-8e95-46f9-96c7-9f61bdfd1a09",
+  "method": "insert",
+  "records": [
+    {
+      "auction_id": 100,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-17T20:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 53.84,
+      "volume_mwh": 135.3,
+      "accepted": true,
+      "bidder_metadata": {
+        "unit_id": "EDF-COTT-3",
+        "submission_lag_ms": 375
+      }
+    },
+    {
+      "auction_id": 101,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-18T00:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 53.69,
+      "volume_mwh": 104.6,
+      "accepted": true,
+      "bidder_metadata": {
+        "unit_id": "DRAX-2",
+        "submission_lag_ms": 349
+      }
+    },
+    {
+      "auction_id": 102,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-18T04:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 40.49,
+      "volume_mwh": 93.6,
+      "accepted": false,
+      "bidder_metadata": {
+        "unit_id": "EDF-COTT-2",
+        "submission_lag_ms": 442
+      }
+    },
+    {
+      "auction_id": 103,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-18T08:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 51.98,
+      "volume_mwh": 90.4,
+      "accepted": false,
+      "bidder_metadata": {
+        "unit_id": "EDF-COTT-3",
+        "submission_lag_ms": 570
+      }
+    },
+    {
+      "auction_id": 104,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-18T12:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 38.19,
+      "volume_mwh": 112.2,
+      "accepted": false,
+      "bidder_metadata": {
+        "unit_id": "EDF-COTT-3",
+        "submission_lag_ms": 403
+      }
+    },
+    {
+      "auction_id": 105,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-18T16:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 49.11,
+      "volume_mwh": 52.7,
+      "accepted": true,
+      "bidder_metadata": {
+        "unit_id": "DRAX-2",
+        "submission_lag_ms": 543
+      }
+    },
+    {
+      "auction_id": 106,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-18T20:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 46.54,
+      "volume_mwh": 55.0,
+      "accepted": true,
+      "bidder_metadata": {
+        "unit_id": "DRAX-2",
+        "submission_lag_ms": 332
+      }
+    },
+    {
+      "auction_id": 107,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-19T00:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 43.17,
+      "volume_mwh": 126.1,
+      "accepted": true,
+      "bidder_metadata": {
+        "unit_id": "EDF-COTT-3",
+        "submission_lag_ms": 229
+      }
+    },
+    {
+      "auction_id": 108,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-19T04:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 55.87,
+      "volume_mwh": 97.0,
+      "accepted": true,
+      "bidder_metadata": {
+        "unit_id": "DRAX-1",
+        "submission_lag_ms": 587
+      }
+    },
+    {
+      "auction_id": 109,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-19T08:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 43.75,
+      "volume_mwh": 115.0,
+      "accepted": true,
+      "bidder_metadata": {
+        "unit_id": "DRAX-1",
+        "submission_lag_ms": 486
+      }
+    }
+  ]
+}

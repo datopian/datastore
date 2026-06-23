@@ -91,6 +91,15 @@ def to_csv_list(value: Any) -> list[str] | None:
     raise ValueError("must be a comma-separated string or list of strings")
 
 
+_FIELD_METADATA_KEYS: tuple[str, ...] = (
+    "title",
+    "description",
+    "comment",
+    "unit",
+    "example",
+)
+
+
 def fields_to_frictionless_schema(
     fields: list[Any], primary_key: list[str] | None = None
 ) -> dict[str, Any]:
@@ -148,9 +157,14 @@ def frictionless_schema_to_fields(
     Returns `(fields, primary_key)` where `fields` matches the legacy
     `{id, type, info}` shape. Frictionless `name` → `id`; the field's
     Frictionless type is mapped back to Postgres via
-    `FRICTIONLESS_TO_POSTGRES` (defaults to `text`). `title` /
-    `description` on the field move into `info`; any extras saved
-    under `info` are merged back in.
+    `FRICTIONLESS_TO_POSTGRES` (defaults to `text`) for the outer `type`,
+    and is *also* surfaced as `info.type` (the canonical Frictionless type)
+    so a client reading the legacy shape can recover it — the outer alias is
+    lossy (e.g. `integer` → `int8`). The recognised data-dictionary keys
+    (`_FIELD_METADATA_KEYS`: title, description, comment, unit, example) move
+    from the field's top level into `info`, carried by presence so a declared
+    `unit: null` round-trips; any extras saved under a nested `info` are
+    merged back in. `info` key order is `title, type, <metadata…>, <extras>`.
 
     `primaryKey` may be a string or list of strings in Frictionless;
     normalised to `list[str]`.
@@ -165,10 +179,14 @@ def frictionless_schema_to_fields(
         if fr_type:
             out["type"] = FRICTIONLESS_TO_POSTGRES.get(fr_type, "text")
         info: dict[str, Any] = {}
-        for k in ("title", "description"):
-            v = fr.get(k)
-            if isinstance(v, str):
-                info[k] = v
+        if "title" in fr:
+            info["title"] = fr["title"]
+        if fr_type:
+            info["type"] = fr_type
+        for k in _FIELD_METADATA_KEYS:
+            if k == "title" or k not in fr:
+                continue
+            info[k] = fr[k]
         extra = fr.get("info")
         if isinstance(extra, dict):
             info.update(extra)

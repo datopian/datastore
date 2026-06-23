@@ -1,0 +1,35 @@
+{
+  "resource_id": "7a10def4-8e95-46f9-96c7-9f61bdfd1a09",
+  "method": "upsert",
+  "records": [
+    {
+      "auction_id": 1,
+      "product_code": "DCL",
+      "delivery_start": "2025-11-01T08:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 41.2,
+      "volume_mwh": 95.0,
+      "accepted": false,
+      "bidder_metadata": {
+        "unit_id": "DRAX-1",
+        "submission_lag_ms": 412,
+        "revision": 2
+      }
+    },
+    {
+      "auction_id": 200,
+      "product_code": "DCL",
+      "delivery_start": "2025-12-01T08:00:00Z",
+      "duration_minutes": 30,
+      "clearing_price_gbp_per_mwh": 39.5,
+      "volume_mwh": 110.0,
+      "accepted": true,
+      "bidder_metadata": {
+        "unit_id": "DRAX-2",
+        "submission_lag_ms": 350
+      }
+    }
+  ],
+  "include_records": true,
+  "include_total": false
+}

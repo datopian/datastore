@@ -1,0 +1,8 @@
+{
+  "resource_id": "7a10def4-8e95-46f9-96c7-9f61bdfd1a09",
+  "fields": "auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh",
+  "sort": "delivery_start desc, clearing_price_gbp_per_mwh asc",
+  "limit": "100",
+  "offset": "0",
+  "include_total": "true"
+}
