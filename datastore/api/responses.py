@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterable
 from decimal import Decimal
 from typing import Any
 
@@ -51,23 +52,37 @@ def _help(request: Request) -> str:
     return str(request.url)
 
 
-def _deprecation_warnings(payload: BaseModel) -> list[str]:
+def _deprecation_warnings(
+    payload: BaseModel, provided: Iterable[str] | None = None
+) -> list[str]:
     """Build body-level warnings from `Field(deprecated=...)` metadata.
 
-    For every field the caller explicitly provided (`model_fields_set`)
-    whose declaration carries a `deprecated` string, emit one warning of
-    the form ``"'<field>' is deprecated: <message>"``. Pulling the
-    message off the model keeps the wording in one place — the field's
-    own declaration — so endpoints never duplicate it.
+    For every field the caller explicitly provided whose declaration
+    carries a `deprecated` string, emit one warning of the form
+    ``"'<field>' is deprecated — <message>."``. Pulling the message off
+    the model keeps the wording in one place — the field's own
+    declaration — so endpoints never duplicate it.
 
-    `model_fields_set` is used instead of reading the value: it answers
-    "did the caller send this?" without invoking the field accessor,
-    which would itself emit a `DeprecationWarning` we don't want at
-    runtime.
+    "Did the caller send this?" is answered differently per request style:
+
+    - JSON body (`payload=...`): `model_fields_set` is reliable — Pydantic
+      records only the keys actually present. Pass `provided=None`.
+    - Query params (`Annotated[Model, Query()]`): FastAPI fills
+      `model_fields_set` with *every* field (defaults included), so it
+      can't tell sent-vs-default apart. Pass the request's query keys as
+      `provided` (e.g. `request.query_params.keys()`); a deprecated field
+      then warns only when its name appears in the query string.
+
+    Either way the field value is never read — that would itself emit a
+    `DeprecationWarning` we don't want at runtime.
     """
+    fields = type(payload).model_fields
+    sent = set(provided) if provided is not None else payload.model_fields_set
     out: list[str] = []
-    for name in payload.model_fields_set:
-        msg = type(payload).model_fields[name].deprecated
+    for name, field in fields.items():
+        if name not in sent:
+            continue
+        msg = field.deprecated
         if isinstance(msg, str) and msg:
             out.append(f"'{name}' is deprecated — {msg}.")
     return out

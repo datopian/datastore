@@ -40,6 +40,7 @@ async def search_datastore(
     data_dict: dict[str, Any],
     *,
     request_url: str,
+    warnings: list[str] | None = None,
 ) -> Iterator[bytes]:
     """Run the search and return a lazy `bytes` iterator over the JSON
     response body.
@@ -103,6 +104,7 @@ async def search_datastore(
             offset=data_dict["offset"],
             total=result.total,
         ),
+        warnings=warnings,
     )
 
     return _WRITERS[data_dict["records_format"]](**envelope_kwargs)
@@ -113,6 +115,7 @@ async def search_sql_datastore(
     data_dict: dict[str, Any],
     *,
     request_url: str,
+    warnings: list[str] | None = None,
 ) -> Iterator[bytes]:
     """Run a vetted SELECT and stream the result.
 
@@ -177,6 +180,7 @@ async def search_sql_datastore(
         # what actually ran (especially after `_links.next` rewrites
         # the OFFSET on follow-up requests).
         sql=data_dict["sql"],
+        warnings=warnings,
     )
 
 

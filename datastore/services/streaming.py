@@ -75,6 +75,7 @@ def stream_objects(
     include_total: bool,
     links: dict[str, str],
     sql: str | None = None,
+    warnings: list[str] | None = None,
 ) -> Iterator[bytes]:
     """`records_format=objects` — `records` is a JSON array of `{col: value}`."""
     columns = [f["id"] for f in fields]
@@ -90,6 +91,7 @@ def stream_objects(
         include_total=include_total,
         links=links,
         sql=sql,
+        warnings=warnings,
     )
 
 
@@ -106,6 +108,7 @@ def stream_lists(
     include_total: bool,
     links: dict[str, str],
     sql: str | None = None,
+    warnings: list[str] | None = None,
 ) -> Iterator[bytes]:
     """`records_format=lists` — `records` is a JSON array of `[v1, v2, ...]`."""
     return _stream_envelope(
@@ -120,6 +123,7 @@ def stream_lists(
         include_total=include_total,
         links=links,
         sql=sql,
+        warnings=warnings,
     )
 
 
@@ -136,6 +140,7 @@ def stream_csv(
     include_total: bool,
     links: dict[str, str],
     sql: str | None = None,
+    warnings: list[str] | None = None,
 ) -> Iterator[bytes]:
     """`records_format=csv` — `records` is a JSON string of CSV text."""
     columns = [f["id"] for f in fields]
@@ -151,6 +156,7 @@ def stream_csv(
         include_total=include_total,
         links=links,
         sql=sql,
+        warnings=warnings,
     )
 
 
@@ -167,6 +173,7 @@ def stream_tsv(
     include_total: bool,
     links: dict[str, str],
     sql: str | None = None,
+    warnings: list[str] | None = None,
 ) -> Iterator[bytes]:
     """`records_format=tsv` — `records` is a JSON string of TSV text."""
     columns = [f["id"] for f in fields]
@@ -182,6 +189,7 @@ def stream_tsv(
         include_total=include_total,
         links=links,
         sql=sql,
+        warnings=warnings,
     )
 
 
@@ -198,6 +206,7 @@ def _stream_envelope(
     include_total: bool,
     links: dict[str, str],
     sql: str | None = None,
+    warnings: list[str] | None = None,
 ) -> Iterator[bytes]:
     """CKAN envelope skeleton. Each format passes its own `records_chunks`
     iterator that emits the JSON value for the `records` field — either
@@ -206,7 +215,9 @@ def _stream_envelope(
     Column metadata is emitted in both shapes: `schema` (canonical
     Frictionless) and `fields` (legacy `{id, type}` list, deprecated).
     `sql` is emitted only when supplied (i.e. for `datastore_search_sql`);
-    `datastore_search` leaves it out.
+    `datastore_search` leaves it out. `warnings` (deprecated-input notices)
+    is emitted at the envelope level — a sibling of `result`, matching
+    `_success_response` — and omitted when empty.
     """
     yield b'{"help":'
     yield orjson.dumps(help_url)
@@ -230,7 +241,11 @@ def _stream_envelope(
         yield orjson.dumps(total)
     yield b',"_links":'
     yield orjson.dumps(links)
-    yield b"}}"
+    yield b"}"  # close `result`
+    if warnings:
+        yield b',"warnings":'
+        yield orjson.dumps(warnings)
+    yield b"}"  # close envelope
 
 
 def _records_object_array(

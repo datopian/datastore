@@ -42,6 +42,15 @@ from datastore.services.write import (
 
 router = APIRouter(tags=["Datastore"], responses=ERROR_RESPONSES)
 
+# Search responses still emit the legacy `fields` block ({id, type} list)
+# alongside the canonical `schema`. Surface a deprecation notice so clients
+# migrate to `result.schema` — the wording mirrors the same field's
+# deprecation on `DatastoreCreateRequest`.
+_LEGACY_FIELDS_WARNING = (
+    "'fields' is deprecated — use 'schema' (Frictionless Table Schema) "
+    "instead."
+)
+
 
 @router.post(
     "/datastore_create",
@@ -146,7 +155,17 @@ async def datastore_search(
         permission="read",
     )
     data_dict.update(params.model_dump())
-    body_iter = await search_datastore(context, data_dict, request_url=str(request.url))
+    body_iter = await search_datastore(
+        context,
+        data_dict,
+        request_url=str(request.url),
+        # Always flag the legacy `fields` block in the response, plus any
+        # deprecated query param the caller actually sent.
+        warnings=[
+            _LEGACY_FIELDS_WARNING,
+            *_deprecation_warnings(params, request.query_params.keys()),
+        ],
+    )
     return StreamingResponse(body_iter, media_type="application/json")
 
 
@@ -172,7 +191,17 @@ async def datastore_search_sql(
         "offset": params.offset,
     }
 
-    body_iter = await search_sql_datastore(context, data_dict, request_url=str(request.url))
+    body_iter = await search_sql_datastore(
+        context,
+        data_dict,
+        request_url=str(request.url),
+        # Always flag the legacy `fields` block in the response, plus any
+        # deprecated query param the caller actually sent.
+        warnings=[
+            _LEGACY_FIELDS_WARNING,
+            *_deprecation_warnings(params, request.query_params.keys()),
+        ],
+    )
     return StreamingResponse(body_iter, media_type="application/json")
 
 
