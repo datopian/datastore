@@ -11,19 +11,35 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from datastore.core.config import Config
-from datastore.services.write import create_datastore, upsert_datastore
+from datastore.services.write import (
+    create_datastore,
+    delete_datastore,
+    upsert_datastore,
+)
 
 
 class _FakeCKAN:
-    """Just enough surface for `create_datastore`'s new-resource branch."""
+    """Just enough surface for `create_datastore`'s CKAN sync.
+
+    Records `resource_create` calls and `resource_patch` calls so tests can
+    assert the schema (and timestamp) are mirrored onto the resource.
+    """
 
     def __init__(self) -> None:
         self.created: list[dict[str, Any]] = []
+        self.patched: list[tuple[str, dict[str, Any]]] = []
 
     async def resource_create(self, *, resource: dict[str, Any]) -> dict[str, Any]:
         self.created.append(dict(resource))
         return {**resource, "id": resource.get("id") or "new-res-id"}
+
+    async def resource_patch(
+        self, *, resource_id: str, patch: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.patched.append((resource_id, dict(patch)))
+        return {"id": resource_id, **patch}
 
 
 def _ctx() -> SimpleNamespace:
@@ -76,6 +92,133 @@ def test_new_resource_creates_via_ckan() -> None:
     assert result.package_id == "pkg-1"
     assert len(ctx.ckan.created) == 1
     assert ctx.ckan.created[0]["package_id"] == "pkg-1"
+
+
+def test_create_syncs_schema_to_ckan_resource() -> None:
+    """After the table write, the resource is patched with the schema and a
+    refreshed `last_modified`, so CKAN metadata stays in sync with the
+    datastore table."""
+    ctx = _ctx()
+    schema = _schema(primary_key=["a"])
+    data_dict = {
+        "package": {"id": "pkg-1"},
+        "resource": "res-1",
+        "schema": schema,
+        "records": [],
+    }
+
+    asyncio.run(create_datastore(ctx, data_dict))
+
+    assert len(ctx.ckan.patched) == 1
+    rid, patch = ctx.ckan.patched[0]
+    assert rid == "res-1"
+    assert patch["schema"] == schema
+    assert isinstance(patch["last_modified"], str) and patch["last_modified"]
+
+
+def test_create_new_resource_also_syncs_schema() -> None:
+    """The dict (new-resource) path patches the freshly-created resource id
+    with the schema too."""
+    ctx = _ctx()
+    schema = _schema(primary_key=["a"])
+    data_dict = {
+        "package": {"id": "pkg-1"},
+        "resource": {"package_id": "pkg-1", "name": "foo"},
+        "schema": schema,
+        "records": [],
+    }
+
+    asyncio.run(create_datastore(ctx, data_dict))
+
+    rid, patch = ctx.ckan.patched[0]
+    assert rid == "new-res-id"  # id returned by resource_create
+    assert patch["schema"] == schema
+
+
+def test_create_without_ckan_skips_schema_sync() -> None:
+    """Standalone auth (no CKAN) — there's no resource to patch; create
+    still succeeds without touching CKAN."""
+    ctx = SimpleNamespace(config=Config(), ckan=None)
+    data_dict = {
+        "package": {"id": "pkg-1"},
+        "resource": "res-1",
+        "schema": _schema(),
+        "records": [],
+    }
+
+    result = asyncio.run(create_datastore(ctx, data_dict))
+
+    assert result.resource_id == "res-1"  # no error, no CKAN call
+
+
+def test_upsert_syncs_timestamp_to_ckan() -> None:
+    """Upsert changes data, not columns — it refreshes the resource
+    timestamp (and activity log) but must NOT touch the schema."""
+    ctx = _ctx()
+    data_dict = {"resource_id": "res-1", "records": [{"a": 1}], "method": "upsert"}
+
+    asyncio.run(upsert_datastore(ctx, data_dict))
+
+    assert len(ctx.ckan.patched) == 1
+    rid, patch = ctx.ckan.patched[0]
+    assert rid == "res-1"
+    assert patch["last_modified"]
+    assert "schema" not in patch  # data-only op leaves the schema alone
+    assert "url_type" not in patch
+
+
+def test_delete_rows_syncs_timestamp_only() -> None:
+    """Row delete (placeholder yields no schema) → timestamp + activity,
+    no schema patch."""
+    ctx = _ctx()
+    data_dict = {"resource_id": "res-1", "filters": {"a": 1}}
+
+    asyncio.run(delete_datastore(ctx, data_dict))
+
+    rid, patch = ctx.ckan.patched[0]
+    assert rid == "res-1"
+    assert patch["last_modified"]
+    assert "schema" not in patch
+
+
+def test_delete_columns_syncs_new_schema_to_ckan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A column drop changes the schema — the reduced schema returned by
+    the engine is mirrored to CKAN so the two stay consistent."""
+    from datastore.infrastructure.engines.bigquery import BigQueryBackend
+
+    new_schema = {"fields": [{"name": "a", "type": "integer"}]}
+
+    def fake_delete(self: Any, *, resource_id: str, filters: Any, fields: Any) -> Any:
+        return SimpleNamespace(schema=new_schema)
+
+    monkeypatch.setattr(BigQueryBackend, "delete", fake_delete)
+
+    ctx = _ctx()
+    data_dict = {"resource_id": "res-1", "fields": ["b"]}
+
+    asyncio.run(delete_datastore(ctx, data_dict))
+
+    rid, patch = ctx.ckan.patched[0]
+    assert rid == "res-1"
+    assert patch["schema"] == new_schema
+    assert patch["last_modified"]
+
+
+def test_delete_whole_table_clears_schema_on_ckan() -> None:
+    """Dropping the whole table (no filters, no fields) removes the
+    BigQuery table — so the resource's schema is dropped too, keeping the
+    two consistent."""
+    ctx = _ctx()
+    data_dict = {"resource_id": "res-1"}  # no filters, no fields → drop table
+
+    asyncio.run(delete_datastore(ctx, data_dict))
+
+    rid, patch = ctx.ckan.patched[0]
+    assert rid == "res-1"
+    assert patch["schema"] is None  # schema cleared on the resource
+    assert patch["last_modified"]
 
 
 def test_missing_records_is_handled() -> None:
