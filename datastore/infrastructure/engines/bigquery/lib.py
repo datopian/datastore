@@ -238,6 +238,95 @@ def insert_sql(
     )
 
 
+def insert_conflict_count_sql(table_ref: str, schema: dict) -> str:
+    """Render a read-only COUNT of primary-key conflicts for an INSERT.
+
+    BigQuery does not enforce primary keys, so a plain INSERT happily
+    duplicates them. This query counts the incoming rows that *would*
+    create a duplicate: rows whose key already exists in the table,
+    plus the extra occurrences of any key repeated within the `@rows`
+    batch. Returns a single `n` column; `n > 0` means the INSERT must
+    be rejected. Caller guarantees `schema.primaryKey` is non-empty.
+    """
+    pk = normalize_pk(schema)
+    if not pk:
+        raise ValueError(
+            "schema has no 'primaryKey'; insert conflict check requires one"
+        )
+    by_name = {f["name"]: f for f in _user_fields(schema)}
+    missing = [c for c in pk if c not in by_name]
+    if missing:
+        raise ValueError(
+            f"primaryKey references undeclared column(s): {missing}"
+        )
+
+    extractors = ", ".join(
+        f"{_json_extract(by_name[c])} AS `{c}`" for c in pk
+    )
+    pk_cols = ", ".join(f"`{c}`" for c in pk)
+    on_clause = " AND ".join(f"d.`{c}` = T.`{c}`" for c in pk)
+    return (
+        f"WITH _incoming AS ("
+        f"SELECT {extractors} FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r), "
+        f"_batch AS ("
+        f"SELECT {pk_cols}, COUNT(*) AS _n FROM _incoming GROUP BY {pk_cols}) "
+        f"SELECT (SELECT IFNULL(SUM(_n - 1), 0) FROM _batch) + "
+        f"(SELECT COUNT(*) FROM (SELECT DISTINCT {pk_cols} FROM _incoming) d "
+        f"JOIN {table_ref} T ON {on_clause}) AS n"
+    )
+
+
+# Sentinel the guarded-insert RAISE emits (followed by the conflict
+# count) so `_translate_bigquery_error` can spot it in BigQuery's wrapped
+# error text and rebuild the user-facing message Python-side.
+PK_CONFLICT_SENTINEL = "DATASTORE_PK_CONFLICT"
+
+
+def insert_guarded_sql(
+    table_ref: str, schema: dict, *, include_updated_at: bool = True
+) -> str:
+    """Render one BigQuery script that rejects PK conflicts then INSERTs.
+
+    Wraps the conflict probe and the INSERT in a single `BEGIN … END`
+    block so the `@rows` batch is serialised + uploaded once (one job,
+    not two). If any incoming row would duplicate the primary key —
+    against an existing table row or another row in the same batch —
+    `RAISE` aborts the script *before* the INSERT with the sentinel + the
+    conflict count; nothing is written and `_translate_bigquery_error`
+    maps it to a `ValidationError`. Requires a non-empty
+    `schema.primaryKey`; PK-less tables use the plain `insert_sql` (no
+    check at all).
+
+    No-partial-write guarantee: the INSERT is the script's *only* write
+    and a single BigQuery DML statement, so it is atomic — all rows land
+    or none do. A conflict raises before it ever runs; a mid-INSERT
+    failure (e.g. a bad value) rolls the whole statement back. Either way
+    the table is left untouched. Keep this a single write statement to
+    preserve that guarantee.
+    """
+    pk = normalize_pk(schema)
+    if not pk:
+        raise ValueError(
+            "schema has no 'primaryKey'; guarded insert requires one"
+        )
+    count_query = insert_conflict_count_sql(table_ref, schema)
+    insert = insert_sql(
+        table_ref, schema, include_updated_at=include_updated_at
+    )
+    return (
+        "BEGIN "
+        "DECLARE _conflicts INT64 DEFAULT 0; "
+        f"SET _conflicts = ({count_query}); "
+        "IF _conflicts > 0 THEN "
+        f"RAISE USING MESSAGE = FORMAT('{PK_CONFLICT_SENTINEL} %d', "
+        "_conflicts); "
+        "END IF; "
+        # Single atomic DML write — runs only after the guard passes.
+        f"{insert}; "
+        "END"
+    )
+
+
 def merge_sql(
     table_ref: str, schema: dict, *, include_updated_at: bool = True
 ) -> str:
@@ -441,8 +530,9 @@ def unfiltered_table_name(
     = source row count. `None` if any clause could change row count
     (WHERE, GROUP BY, JOIN, DISTINCT, aggregates, set ops, subqueries).
 
-    Lets `datastore_search_sql` route the unfiltered total through
-    free `INFORMATION_SCHEMA.TABLE_STORAGE` instead of a full COUNT(*).
+    Lets `datastore_search_sql` count the source table directly with a
+    free unfiltered `COUNT(*)` instead of wrapping the query in a
+    `COUNT(*) FROM (<inner>)` subquery.
     """
     # Lazy import — sqlglot is heavy.
     import sqlglot
@@ -518,6 +608,53 @@ def qualify_table_refs(sql: str, project: str, dataset: str) -> str:
         table.set("catalog", exp.to_identifier(project, quoted=True))
         table.set("db", exp.to_identifier(dataset, quoted=True))
     return tree.sql(dialect="bigquery")
+
+
+def default_order_by(
+    sql: str, *, column: str = "_id", dialect: str = "bigquery"
+) -> str:
+    """Add `ORDER BY <column>` to a plain single-table SELECT for stable
+    LIMIT/OFFSET paging. No-op (returns `sql` unchanged) for anything where
+    `<column>` is out of scope: existing ORDER BY, GROUP BY, DISTINCT,
+    aggregates, set ops, CTEs, joins, subqueries, or a non-table FROM.
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    try:
+        tree = sqlglot.parse_one(sql, dialect=dialect)
+    except Exception:
+        return sql
+    if not isinstance(tree, exp.Select):
+        return sql
+
+    # Match by child node type, not arg-key name — sqlglot renames keys
+    # across releases (30.x: `from` → `from_`, `with` → `with_`).
+    def child(kind: type) -> Any:
+        return next(
+            (v for v in tree.args.values() if isinstance(v, kind)), None
+        )
+
+    if any(
+        child(k) is not None
+        for k in (exp.Order, exp.Group, exp.Distinct, exp.With)
+    ):
+        return sql
+    if tree.args.get("joins"):
+        return sql
+    from_ = child(exp.From)
+    if from_ is None or not isinstance(from_.this, exp.Table):
+        return sql
+    if len(list(tree.find_all(exp.Table))) != 1:
+        return sql  # subquery present (e.g. WHERE … IN (SELECT …))
+    if any(proj.find(exp.AggFunc) is not None for proj in tree.expressions):
+        return sql  # implicit aggregation without GROUP BY
+
+    tree.set(
+        "order",
+        exp.Order(expressions=[exp.Ordered(this=exp.column(column))]),
+    )
+    return tree.sql(dialect=dialect)
 
 
 # ── 7. native metadata (encoders + parsers) ────────────────────────────────

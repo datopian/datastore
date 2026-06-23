@@ -22,6 +22,8 @@ from datastore.core.exceptions import (
 )
 from datastore.infrastructure.engines.bigquery.backend import BigQueryBackend
 from datastore.infrastructure.engines.bigquery.lib import (
+    insert_conflict_count_sql,
+    insert_guarded_sql,
     merge_sql,
     update_sql,
 )
@@ -228,6 +230,72 @@ def test_insert_records_issues_dml_insert_with_rows_param(
     params = {p.name: p.value for p in kwargs["job_config"].query_parameters}
     assert list(params.keys()) == ["rows"]
     assert json.loads(params["rows"]) == records
+
+
+def test_insert_records_rejects_pk_conflict_and_writes_nothing(
+    mock_client: MagicMock,
+) -> None:
+    """With a primary key declared, the guarded script RAISEs server-side
+    when a row would duplicate a key. BigQuery wraps our marker-bracketed
+    message; the backend recovers it as a `ValidationError`. The script
+    aborts before the INSERT, so nothing is written."""
+    backend = _backend(mock_client)
+    schema = {
+        "fields": [{"name": "id", "type": "integer"}],
+        "primaryKey": ["id"],
+    }
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 DATASTORE_PK_CONFLICT 2 at [1:120]; reason: invalidQuery"
+    )
+
+    with pytest.raises(ValidationError, match="duplicate the primary key"):
+        backend._insert_records("res-1", schema, [{"id": 1}, {"id": 1}])
+
+    # One guarded job — the conflict check and the INSERT share a single
+    # submission (so `@rows` is uploaded once).
+    assert mock_client.query.call_count == 1
+    sql = mock_client.query.call_args[0][0]
+    assert sql.startswith("BEGIN ")
+    assert "RAISE USING MESSAGE" in sql
+    assert "INSERT INTO `proj-1.ds-1.res-1`" in sql
+
+
+def test_insert_records_with_pk_runs_guarded_insert_in_one_job(
+    mock_client: MagicMock,
+) -> None:
+    """A clean batch runs the conflict check and the INSERT as a single
+    `BEGIN … END` script — one `client.query`, so the `@rows` payload is
+    serialised + uploaded only once."""
+    backend = _backend(mock_client)
+    schema = {
+        "fields": [{"name": "id", "type": "integer"}],
+        "primaryKey": ["id"],
+    }
+
+    backend._insert_records("res-1", schema, [{"id": 1}, {"id": 2}])
+
+    assert mock_client.query.call_count == 1
+    sql = mock_client.query.call_args[0][0]
+    assert sql.startswith("BEGIN ")
+    assert "SET _conflicts = (WITH _incoming AS (" in sql
+    assert "INSERT INTO `proj-1.ds-1.res-1` " in sql
+    # @rows rides on the one job only.
+    params = mock_client.query.call_args.kwargs["job_config"].query_parameters
+    assert [p.name for p in params] == ["rows"]
+
+
+def test_insert_records_skips_guard_without_primary_key(
+    mock_client: MagicMock,
+) -> None:
+    """No primary key → no guard; a single plain INSERT, today's
+    behaviour (duplicates allowed)."""
+    backend = _backend(mock_client)
+    schema = {"fields": [{"name": "id", "type": "integer"}]}
+
+    backend._insert_records("res-1", schema, [{"id": 1}, {"id": 1}])
+
+    assert mock_client.query.call_count == 1
+    assert mock_client.query.call_args[0][0].startswith("INSERT INTO ")
 
 
 # --- error wrapping --------------------------------------------------------
@@ -453,6 +521,82 @@ def test_merge_and_update_sql_reject_missing_primary_key() -> None:
         update_sql("`p.d.r`", schema)
 
 
+def test_insert_conflict_count_sql_counts_batch_and_existing_dups() -> None:
+    """The conflict probe extracts the PK from `@rows`, counts in-batch
+    repeats (`SUM(_n - 1)`) plus rows whose key already exists in the
+    table (a self-JOIN), and returns one `n` column."""
+    sql = insert_conflict_count_sql(
+        "`p.d.r`",
+        {
+            "fields": [
+                {"name": "auction_id", "type": "integer"},
+                {"name": "product_code", "type": "string"},
+                {"name": "price", "type": "number"},
+            ],
+            "primaryKey": ["auction_id", "product_code"],
+        },
+    )
+    # PK columns extracted from the JSON batch — non-PK `price` is not.
+    assert "CAST(JSON_VALUE(r, '$.auction_id') AS INT64) AS `auction_id`" in sql
+    assert "JSON_VALUE(r, '$.product_code') AS `product_code`" in sql
+    assert "`price`" not in sql
+    # In-batch repeats counted via GROUP BY + SUM(_n - 1).
+    assert "GROUP BY `auction_id`, `product_code`" in sql
+    assert "IFNULL(SUM(_n - 1), 0)" in sql
+    # Existing-row collisions via a composite-key JOIN against the table.
+    assert (
+        "JOIN `p.d.r` T ON d.`auction_id` = T.`auction_id` "
+        "AND d.`product_code` = T.`product_code`"
+    ) in sql
+    assert sql.rstrip().endswith("AS n")
+
+
+def test_insert_conflict_count_sql_rejects_missing_primary_key() -> None:
+    with pytest.raises(ValueError, match="primaryKey"):
+        insert_conflict_count_sql(
+            "`p.d.r`", {"fields": [{"name": "id", "type": "integer"}]}
+        )
+
+
+def test_insert_guarded_sql_wraps_check_and_insert_in_one_script() -> None:
+    """The guarded builder emits a single `BEGIN … END` script: declare a
+    counter, set it from the conflict probe, RAISE a marker-bracketed
+    message if non-zero, else fall through to the INSERT — all sharing the
+    one `@rows` parameter."""
+    sql = insert_guarded_sql(
+        "`p.d.r`",
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "label", "type": "string"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+    assert sql.startswith("BEGIN ")
+    assert sql.endswith(" END")
+    # Conflict probe feeds the script variable.
+    assert "SET _conflicts = (WITH _incoming AS (" in sql
+    # Guard fires only when the count is positive.
+    assert "IF _conflicts > 0 THEN" in sql
+    # RAISE emits the sentinel + the count; the message is rebuilt Python-side.
+    assert "RAISE USING MESSAGE = FORMAT('DATASTORE_PK_CONFLICT %d'" in sql
+    # The real INSERT follows the guard, reading the same @rows batch.
+    assert "INSERT INTO `p.d.r` " in sql
+    assert sql.count("JSON_QUERY_ARRAY(@rows)") == 2  # probe + insert
+    # No-partial-write invariant: exactly one (atomic) write statement,
+    # and the guard precedes it so a conflict never reaches the INSERT.
+    assert sql.count("INSERT INTO") == 1
+    assert sql.index("END IF") < sql.index("INSERT INTO")
+
+
+def test_insert_guarded_sql_rejects_missing_primary_key() -> None:
+    with pytest.raises(ValueError, match="primaryKey"):
+        insert_guarded_sql(
+            "`p.d.r`", {"fields": [{"name": "id", "type": "integer"}]}
+        )
+
+
 # --- upsert() dispatch ----------------------------------------------------
 
 
@@ -490,9 +634,8 @@ def test_upsert_method_upsert_issues_merge_with_rows_param(
 def test_upsert_method_insert_issues_dml_insert(
     mock_client: MagicMock,
 ) -> None:
-    """`method='insert'` runs DML `INSERT INTO ... SELECT FROM UNNEST`,
-    not the streaming insert API — same path as `_insert_records` on
-    the create flow."""
+    """`method='insert'` on a PK table runs the guarded `BEGIN … INSERT
+    … END` script (DML INSERT, not the streaming insert API) in one job."""
     backend = _backend_with_schema(
         mock_client,
         {"fields": [{"name": "id", "type": "integer"}], "primaryKey": ["id"]},
@@ -501,9 +644,33 @@ def test_upsert_method_insert_issues_dml_insert(
     backend.upsert("res-1", [{"id": 1}], method="insert", include_total=False)
 
     mock_client.insert_rows_json.assert_not_called()
+    assert mock_client.query.call_count == 1  # check + INSERT share one job
     sql = mock_client.query.call_args[0][0]
-    assert sql.startswith("INSERT INTO `proj-1.ds-1.res-1` ")
+    assert sql.startswith("BEGIN ")
+    assert "INSERT INTO `proj-1.ds-1.res-1` " in sql
     assert "FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r" in sql
+
+
+def test_upsert_method_insert_rejects_pk_conflict(
+    mock_client: MagicMock,
+) -> None:
+    """`method='insert'` against a key that already exists is rejected
+    with `ValidationError` (the caller should switch to `upsert`). The
+    guarded script RAISEs the sentinel + count, which BigQuery surfaces in
+    its error text."""
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "integer"}], "primaryKey": ["id"]},
+    )
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 DATASTORE_PK_CONFLICT 1 at [1:120]"
+    )
+
+    with pytest.raises(ValidationError, match="method='upsert'"):
+        backend.upsert("res-1", [{"id": 1}], method="insert",
+                       include_total=False)
+
+    assert mock_client.query.call_count == 1  # single guarded job
 
 
 def test_upsert_method_update_issues_dml_update(
