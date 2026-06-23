@@ -353,6 +353,60 @@ def test_create_new_resource_runs_combined_create_and_insert_script(
     assert [p.name for p in params] == ["rows"]
 
 
+def test_create_new_resource_with_pk_guards_the_insert(
+    mock_client: MagicMock,
+) -> None:
+    """New resource WITH a primaryKey: the INSERT half of the CREATE +
+    INSERT script is the guarded block, so its conflict probe runs
+    against the just-created (empty) table and catches intra-batch
+    duplicate keys."""
+    backend = _backend(mock_client)
+    backend._read_schema = MagicMock(return_value=None)
+
+    backend.create(
+        "res-1",
+        schema={
+            "fields": [{"name": "id", "type": "integer"}],
+            "primaryKey": ["id"],
+        },
+        records=[{"id": 1}, {"id": 2}],
+        include_total=False,
+    )
+
+    assert mock_client.query.call_count == 1
+    script = mock_client.query.call_args[0][0]
+    # CREATE first, then the guarded INSERT block (probe + RAISE + INSERT).
+    assert script.startswith("CREATE TABLE ")
+    assert ";\nBEGIN " in script
+    assert "SET _conflicts = (WITH _incoming AS (" in script
+    assert "RAISE USING MESSAGE = FORMAT('DATASTORE_PK_CONFLICT %d'" in script
+    assert "INSERT INTO `proj-1.ds-1.res-1`" in script
+
+
+def test_create_new_resource_with_pk_rejects_duplicate_records(
+    mock_client: MagicMock,
+) -> None:
+    """Duplicate primary keys in the create batch are rejected: the
+    guarded block RAISEs and BigQuery surfaces the sentinel, which maps
+    to a ValidationError. Nothing is written."""
+    backend = _backend(mock_client)
+    backend._read_schema = MagicMock(return_value=None)
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 DATASTORE_PK_CONFLICT 1 at [2:80]; reason: invalidQuery"
+    )
+
+    with pytest.raises(ValidationError, match="duplicate the primary key"):
+        backend.create(
+            "res-1",
+            schema={
+                "fields": [{"name": "id", "type": "integer"}],
+                "primaryKey": ["id"],
+            },
+            records=[{"id": 1}, {"id": 1}],
+            include_total=False,
+        )
+
+
 def test_create_with_no_records_on_new_resource_runs_create_only(
     mock_client: MagicMock,
 ) -> None:

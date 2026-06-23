@@ -384,9 +384,14 @@ class BigQueryBackend(DatastoreBackend):
         # `;` joins the DDL + DML into one BigQuery script — one job
         # submission, shared `@rows`. The INSERT's `MAX(_id)` subquery
         # sees the just-created empty table, so `_id` starts at 1.
+        # With a primaryKey, the guarded INSERT runs its conflict probe
+        # against the just-created (empty) table — existing-row hits are
+        # impossible, but intra-batch duplicate keys still RAISE before
+        # any row lands.
+        builder = insert_guarded_sql if normalize_pk(schema) else insert_sql
         script = (
             f"{create_sql};\n"
-            f"{self._build_dml(insert_sql, resource_id, schema)}"
+            f"{self._build_dml(builder, resource_id, schema)}"
         )
         self._write_rows(
             resource_id, script,
