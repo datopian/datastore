@@ -1709,16 +1709,16 @@ def test_search_sql_streams_rows_with_result_schema(
         "SELECT day, avg, count FROM x LIMIT 100", limit=100,
     )
 
-    # Two queries fire. For this unfiltered SELECT the total comes
-    # from `INFORMATION_SCHEMA.TABLE_STORAGE` (free metadata read), not
-    # a COUNT(*) full-scan.
+    # Two queries fire. For this unfiltered plain SELECT the total comes
+    # from a bare `COUNT(*)` on the source table (a BigQuery metadata
+    # read, 0 bytes scanned — `INFORMATION_SCHEMA.TABLE_STORAGE` is
+    # region-scoped so a project.dataset ref 404s).
     assert mock_client.query.call_count == 2
     count_sql, data_sql = (
         mock_client.query.call_args_list[0][0][0],
         mock_client.query.call_args_list[1][0][0],
     )
-    assert "INFORMATION_SCHEMA.TABLE_STORAGE" in count_sql
-    assert "WHERE table_name = @table_name" in count_sql
+    assert count_sql == "SELECT COUNT(*) AS n FROM `proj-1.ds-1.x`"
     assert "`proj-1`" in data_sql
     assert "`ds-1`" in data_sql
     assert "FROM `proj-1`.`ds-1`.x" in data_sql
