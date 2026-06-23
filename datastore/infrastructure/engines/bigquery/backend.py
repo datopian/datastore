@@ -37,6 +37,7 @@ from datastore.infrastructure.engines.base import (
     WriteResult,
 )
 from datastore.infrastructure.engines.bigquery.lib import (
+    PK_CONFLICT_SENTINEL,
     SYSTEM_COLUMN_NAMES,
     alter_clauses,
     column_defs,
@@ -44,6 +45,7 @@ from datastore.infrastructure.engines.bigquery.lib import (
     delete_sql,
     drop_columns_sql,
     format_select_column,
+    insert_guarded_sql,
     insert_sql,
     merge_sql,
     normalize_pk,
@@ -302,10 +304,27 @@ class BigQueryBackend(DatastoreBackend):
     def _insert_records(
         self, resource_id: str, schema: dict, records: list
     ) -> None:
-        """DML `INSERT` for `records` (empty → no-op)."""
+        """DML `INSERT` for `records` (empty → no-op).
+
+        When the resource declares a `primaryKey`, the INSERT is wrapped
+        in a single guarded script (`insert_guarded_sql`) that rejects
+        the whole batch with `ValidationError` — nothing written — if any
+        row would duplicate a key (against an existing table row or
+        another row in the same batch). BigQuery doesn't enforce keys, so
+        a plain INSERT would silently duplicate them; the guard runs the
+        conflict check and the INSERT in *one* job, so the `@rows` batch
+        is serialised + uploaded only once. PK-less resources keep the
+        plain INSERT.
+        """
         if not records:
             return
-        sql = self._build_dml(insert_sql, resource_id, schema)
+        # PK declared → guarded script (conflict check + atomic INSERT in
+        # one job). No PK → skip the check entirely; plain atomic INSERT.
+        if normalize_pk(schema):
+            builder = insert_guarded_sql
+        else:
+            builder = insert_sql
+        sql = self._build_dml(builder, resource_id, schema)
         self._write_rows(
             resource_id, sql, op="INSERT", action="insert", records=records,
         )
@@ -432,7 +451,9 @@ class BigQueryBackend(DatastoreBackend):
         """Insert / update / upsert records into an existing resource.
 
         `method="upsert"` → `MERGE` keyed on `schema.primaryKey`;
-        `method="insert"` → plain DML INSERT (no PK check);
+        `method="insert"` → DML INSERT; when a `primaryKey` is declared,
+        a row that would duplicate a key (existing or in-batch) is
+        rejected with `ValidationError`;
         `method="update"` → DML UPDATE (missing PK raises
         `NotFoundError`). Resource must already exist
         (`datastore_create` first). Placeholder mode is an echo.
@@ -1168,10 +1189,21 @@ def _translate_bigquery_error(
 
     msg = str(exc)
 
+    # `insert_guarded_sql` RAISEs "<sentinel> <count>" when an INSERT would
+    # duplicate a primary key. Rebuild the user-facing message here (the
+    # digit run ends at BigQuery's trailing metadata, so no markers needed).
+    m = re.search(rf"{PK_CONFLICT_SENTINEL} (\d+)", msg)
+    if m:
+        return ValidationError(
+            f"Found {m.group(1)} row(s) that would duplicate the primary "
+            "key. Use method='upsert' to update existing rows, or "
+            "deduplicate the records"
+        )
+
     if "Scalar subquery produced more than one element" in msg:
         return ValidationError(
             "Found duplicated rows with the same primary key. "
-            f"Deduplicate the input batch and retry the {action} operation."
+            f"Deduplicate the records and retry the {action} operation."
         )
 
     # `Bad int64 value: <v>` etc. — type-coercion failure on CAST(JSON_VALUE).
