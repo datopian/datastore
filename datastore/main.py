@@ -128,7 +128,13 @@ def create_app() -> FastAPI:
         title="Datastore API",
         version=_api_version(),
         summary="A datastore API for managing tabular data resources.",
-        description="",
+        description=(
+            "📮 **Postman collection** — import the "
+            "[Datastore API collection]"
+            "(https://raw.githubusercontent.com/datopian/datastore/main/"
+            "postman/collection.json) via Postman's **Import → Link** to "
+            "exercise every endpoint with worked examples."
+        ),
         openapi_tags=OPENAPI_TAGS,
         contact={"name": "Datopian", "url": "https://www.datopian.com/"},
         # Mount the interactive docs (and the spec they fetch) under the
