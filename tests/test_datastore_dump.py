@@ -11,6 +11,7 @@ tests so they don't try to fetch real URLs.
 
 from __future__ import annotations
 
+import gzip
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -51,7 +52,7 @@ def test_single_shard_returns_302(client: TestClient) -> None:
     assert response.content == b""
 
 
-@pytest.mark.parametrize("fmt", ["csv", "ndjson", "parquet"])
+@pytest.mark.parametrize("fmt", ["csv", "gzip", "ndjson", "parquet"])
 def test_each_format_supports_single_shard_redirect(
     fmt: str, client: TestClient,
 ) -> None:
@@ -109,6 +110,35 @@ def test_multi_shard_ndjson_pure_byte_concat(client: TestClient) -> None:
         '{"id":1}\n{"id":2}\n'
         '{"id":3}\n'
     )
+
+
+def test_multi_shard_gzip_stream_concat_dedups_header(
+    client: TestClient,
+) -> None:
+    """Gzip CSV shards are decompressed, header-deduped, then emitted
+    as one gzip-compressed CSV file."""
+    shards = {
+        "url-1": gzip.compress(b"col1,col2\na,1\nb,2\n"),
+        "url-2": gzip.compress(b"col1,col2\nc,3\nd,4\n"),
+        "url-3": gzip.compress(b"col1,col2\ne,5\n"),
+    }
+
+    with _patch_dump(list(shards.keys())), _patch_httpx_stream(shards):
+        response = client.get(
+            DUMP_URL, params={"format": "gzip"}, follow_redirects=False,
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/gzip")
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="balancing_auction_results_2025.csv.gz"'
+    )
+    assert gzip.decompress(response.content).decode().splitlines() == [
+        "col1,col2",
+        "a,1", "b,2",
+        "c,3", "d,4",
+        "e,5",
+    ]
 
 
 # --- error paths ----------------------------------------------------------
@@ -186,6 +216,13 @@ def test_build_export_select_iso_casts_timestamp_and_datetime() -> None:
 def test_build_export_select_parquet_returns_star() -> None:
     schema = [_bq_field("delivery_start", "TIMESTAMP")]
     assert _build_export_select(schema, fmt="parquet") == "*"
+
+
+def test_build_export_select_gzip_matches_csv_formatting() -> None:
+    schema = [_bq_field("delivery_start", "TIMESTAMP")]
+    assert _build_export_select(schema, fmt="gzip") == _build_export_select(
+        schema, fmt="csv",
+    )
 
 
 def _bq_field(name: str, field_type: str) -> Any:
@@ -432,6 +469,31 @@ def test_dump_cache_miss_submits_extract_then_returns_urls() -> None:
     assert urls == ["https://fresh"]
     # Exactly one extract submitted on cache miss.
     assert backend.client.query.call_count == 1
+
+
+def test_dump_gzip_export_uses_csv_with_gzip_compression() -> None:
+    """`format=gzip` is a CSV export with BigQuery-side gzip compression
+    and `.csv.gz` object names."""
+    import asyncio
+
+    new_blob = _fake_blob("dumps/res-1/gzip/<rev>_000.csv.gz", "https://fresh")
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
+
+    job = MagicMock()
+    job.state = "DONE"
+    job.error_result = None
+    backend.client.query.return_value = job
+
+    urls = asyncio.run(backend.dump("res-1", "gzip"))
+
+    assert urls == ["https://fresh"]
+    sql = backend.client.query.call_args.args[0]
+    assert "format='CSV'" in sql
+    assert "header=true" in sql
+    assert "compression='GZIP'" in sql
+    assert "_*.csv.gz" in sql
 
 
 def test_dump_cache_miss_deletes_older_revisions() -> None:

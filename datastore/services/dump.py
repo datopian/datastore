@@ -21,6 +21,7 @@ byte-concat'd; the engine refuses multi-shard Parquet at 1 GB.
 
 from __future__ import annotations
 
+import zlib
 from collections.abc import AsyncIterator
 
 import httpx
@@ -63,6 +64,43 @@ async def stream_ndjson_shards(urls: list[str]) -> AsyncIterator[bytes]:
                     yield chunk
 
 
+async def stream_gzip_csv_shards(urls: list[str]) -> AsyncIterator[bytes]:
+    """Stream-concat gzip-compressed CSV shards into one gzip file.
+
+    BigQuery emits one CSV header per exported shard. For gzip output we
+    decompress each shard, strip duplicate headers after shard 0, and
+    recompress the combined CSV as a single gzip stream.
+    """
+    compressor = zlib.compressobj(wbits=16 + zlib.MAX_WBITS)
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        for i, url in enumerate(urls):
+            async with client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                csv_chunks = _decompress_gzip(resp.aiter_bytes(_CHUNK_BYTES))
+                if i > 0:
+                    csv_chunks = _skip_first_line(csv_chunks)
+                async for chunk in csv_chunks:
+                    compressed = compressor.compress(chunk)
+                    if compressed:
+                        yield compressed
+    tail = compressor.flush()
+    if tail:
+        yield tail
+
+
+async def _decompress_gzip(
+    chunks: AsyncIterator[bytes],
+) -> AsyncIterator[bytes]:
+    decompressor = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+    async for chunk in chunks:
+        data = decompressor.decompress(chunk)
+        if data:
+            yield data
+    tail = decompressor.flush()
+    if tail:
+        yield tail
+
+
 async def _skip_first_line(
     chunks: AsyncIterator[bytes],
 ) -> AsyncIterator[bytes]:
@@ -80,5 +118,3 @@ async def _skip_first_line(
             break
     async for chunk in chunks:
         yield chunk
-
-

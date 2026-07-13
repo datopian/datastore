@@ -23,14 +23,26 @@ from starlette.responses import RedirectResponse, StreamingResponse
 from datastore.api.context import Context
 from datastore.api.responses import ERROR_RESPONSES
 from datastore.infrastructure.engines import get_datastore_engine
-from datastore.services.dump import stream_csv_shards, stream_ndjson_shards
+from datastore.services.dump import (
+    stream_csv_shards,
+    stream_gzip_csv_shards,
+    stream_ndjson_shards,
+)
 
-DumpFormat = Literal["csv", "ndjson", "parquet"]
+DumpFormat = Literal["csv", "gzip", "ndjson", "parquet"]
 
 _MEDIA_TYPE: dict[str, str] = {
     "csv":     "text/csv",
+    "gzip":    "application/gzip",
     "ndjson":  "application/x-ndjson",
     "parquet": "application/vnd.apache.parquet",
+}
+
+_DOWNLOAD_EXT: dict[str, str] = {
+    "csv":     "csv",
+    "gzip":    "csv.gz",
+    "ndjson":  "ndjson",
+    "parquet": "parquet",
 }
 
 router = APIRouter(tags=["Datastore Download"], responses=ERROR_RESPONSES)
@@ -38,7 +50,7 @@ router = APIRouter(tags=["Datastore Download"], responses=ERROR_RESPONSES)
 
 @router.get(
     "/datastore/dump/{resource_id}",
-    summary="Download an entire table (CSV / NDJSON / Parquet)",
+    summary="Download an entire table (CSV / gzip CSV / NDJSON / Parquet)",
     responses={
         302: {"description": "Single-shard export — redirect to a signed GCS URL."},
         200: {"description": "Multi-shard export — streamed CSV / NDJSON body."},
@@ -49,7 +61,7 @@ async def dump(
     resource_id: str,
     fmt: Annotated[DumpFormat, Query(alias="format")] = "csv",
 ):
-    """Download an entire resource as `csv` (default), `ndjson`, or `parquet`.
+    """Download an entire resource as `csv` (default), `gzip`, `ndjson`, or `parquet`.
 
     Small exports redirect (302) straight to a signed GCS URL; large ones
     stream a concatenated body. Select the format with `?format=`.
@@ -64,6 +76,8 @@ async def dump(
 
     if fmt == "csv":
         body = stream_csv_shards(urls)
+    elif fmt == "gzip":
+        body = stream_gzip_csv_shards(urls)
     elif fmt == "ndjson":
         body = stream_ndjson_shards(urls)
     else:  # pragma: no cover — Parquet never returns >1 shard
@@ -74,7 +88,7 @@ async def dump(
         media_type=_MEDIA_TYPE[fmt],
         headers={
             "Content-Disposition": (
-                f'attachment; filename="{resource_id}.{fmt}"'
+                f'attachment; filename="{resource_id}.{_DOWNLOAD_EXT[fmt]}"'
             ),
         },
     )
