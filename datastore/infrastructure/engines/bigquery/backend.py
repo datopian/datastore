@@ -940,8 +940,9 @@ class BigQueryBackend(DatastoreBackend):
     async def dump(self, resource_id: str, fmt: str) -> list[str]:
         """Submit `EXPORT DATA`; poll non-blockingly; return signed URLs.
 
-        - CSV/gzip/NDJSON: wildcard URI → BigQuery shards above 1 GB.
-        - Parquet: single-file URI; >1 GB → 413, switch format.
+        - All formats use a wildcard URI because BigQuery SQL
+          `EXPORT DATA` requires one; Parquet must still produce one
+          shard because parquet shards cannot be byte-concatenated.
         - Cache key = `table.modified`; unchanged tables skip the extract.
         - Older revisions are GC'd on cache miss.
         - All BQ + GCS calls are offloaded via `asyncio.to_thread`; the
@@ -996,11 +997,7 @@ class BigQueryBackend(DatastoreBackend):
         )
         ext = _FMT[fmt]["ext"]
         prefix = f"dumps/{resource_id}/{fmt}/{rev}"
-        uri = (
-            f"gs://{bucket}/{prefix}.{ext}"
-            if fmt == "parquet"
-            else f"gs://{bucket}/{prefix}_*.{ext}"
-        )
+        uri = f"gs://{bucket}/{prefix}_*.{ext}"
 
         async def _list(b: Any, p: str) -> list[Any]:
             return sorted(
@@ -1100,6 +1097,14 @@ class BigQueryBackend(DatastoreBackend):
             # Re-fetch via rw so the blobs we sign carry rw credentials
             # (signing needs IAM signBlob under workload identity).
             blobs = await _list(rw_gcs, prefix)
+
+        if fmt == "parquet" and len(blobs) > 1:
+            raise PayloadTooLargeError(
+                f"resource {resource_id!r} exported as multiple parquet "
+                "shards; single-file download isn't possible. Try "
+                "`format=csv` or `format=ndjson` for sharded multi-file "
+                "downloads instead."
+            )
 
         expiry = timedelta(
             hours=getattr(self.config, "BIGQUERY_EXPORT_URL_EXPIRY_HOURS", 1),
@@ -1342,13 +1347,23 @@ _FMT: dict[str, dict[str, str]] = {
 def _build_export_select(schema: Any, fmt: str) -> str:
     """SELECT column list for EXPORT DATA.
 
-    Parquet preserves native logical types → `*` is enough. For CSV /
-    NDJSON, every column goes through `format_select_column` (in
-    `bigquery/lib.py`) — the same helper `datastore_search` uses — so a
-    given column renders identically in a dump and in a search response.
+    Parquet preserves native logical types, but BigQuery cannot export
+    native JSON columns to Parquet. Keep `*` for the common no-JSON path;
+    otherwise cast only JSON columns to strings. For CSV / NDJSON, every
+    column goes through `format_select_column` (in `bigquery/lib.py`) —
+    the same helper `datastore_search` uses — so a given column renders
+    identically in a dump and in a search response.
     """
     if fmt == "parquet":
-        return "*"
+        fields = list(schema)
+        if not any((f.field_type or "").upper() == "JSON" for f in fields):
+            return "*"
+        return ", ".join(
+            f"TO_JSON_STRING(`{f.name}`) AS `{f.name}`"
+            if (f.field_type or "").upper() == "JSON"
+            else f"`{f.name}`"
+            for f in fields
+        )
     return ", ".join(
         format_select_column(f.name, f.field_type) for f in schema
     )
