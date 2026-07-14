@@ -935,7 +935,7 @@ class BigQueryBackend(DatastoreBackend):
     async def dump(self, resource_id: str, fmt: str) -> list[str]:
         """Submit `EXPORT DATA`; poll non-blockingly; return signed URLs.
 
-        - CSV/NDJSON: wildcard URI → BigQuery shards above 1 GB.
+        - CSV/gzip/NDJSON: wildcard URI → BigQuery shards above 1 GB.
         - Parquet: single-file URI; >1 GB → 413, switch format.
         - Cache key = `table.modified`; unchanged tables skip the extract.
         - Older revisions are GC'd on cache miss.
@@ -1009,8 +1009,11 @@ class BigQueryBackend(DatastoreBackend):
             # `header=true` is the documented default for CSV but some
             # client versions / project configs treat it as false; be
             # explicit so the column names always land in shard 0.
-            # NDJSON / Parquet ignore the option.
-            extra_opts = ", header=true" if fmt == "csv" else ""
+            # NDJSON / Parquet ignore the option. `format=gzip` is CSV
+            # with BigQuery-side GZIP compression.
+            extra_opts = ", header=true" if fmt in {"csv", "gzip"} else ""
+            if fmt == "gzip":
+                extra_opts += ", compression='GZIP'"
             sql = (
                 f"EXPORT DATA OPTIONS("
                 f"uri='{uri}', format='{_FMT[fmt]['bq']}', overwrite=true"
@@ -1309,6 +1312,7 @@ _DUMP_POLL_INTERVAL_SECONDS = 1.0
 # extension on the GCS object so clients see the file type they expect.
 _FMT: dict[str, dict[str, str]] = {
     "csv":     {"ext": "csv",     "bq": "CSV"},
+    "gzip":    {"ext": "csv.gz",  "bq": "CSV"},
     "ndjson":  {"ext": "json",    "bq": "JSON"},
     "parquet": {"ext": "parquet", "bq": "PARQUET"},
 }
@@ -1338,4 +1342,3 @@ def _is_export_too_large(exc: BaseException) -> bool:
     """
     msg = str(exc).lower()
     return "single uri" in msg or "wildcard" in msg
-
