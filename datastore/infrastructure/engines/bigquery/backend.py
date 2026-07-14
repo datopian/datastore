@@ -21,6 +21,7 @@ File layout (top to bottom):
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from datastore.core.config import Config
@@ -62,6 +63,9 @@ from datastore.infrastructure.engines.bigquery.lib import (
 
 log = logging.getLogger(__name__)
 
+_HEALTHCHECK_TTL_SECONDS = 15.0
+_HEALTHCHECK_TIMEOUT_SECONDS = 5.0
+
 
 class BigQueryBackend(DatastoreBackend):
     # ----- lifecycle ------------------------------------------------------
@@ -77,6 +81,7 @@ class BigQueryBackend(DatastoreBackend):
         self.context = context
         self.config = config
         self.client: Any = None
+        self._health: tuple[float, bool] | None = None
 
     def initialize(self) -> None:
         """Build the BigQuery client when project + dataset are configured.
@@ -1164,20 +1169,36 @@ class BigQueryBackend(DatastoreBackend):
         return []
 
     def healthcheck(self) -> bool:
-        """Probe the BigQuery client with `SELECT 1`. Returns False on
+        """Probe BigQuery with a dry-run `SELECT 1`. Returns False on
         any failure so `/ready` can return 503 instead of crashing.
         """
         if self.client is None:
             return False
+        now = time.monotonic()
+        if (
+            self._health is not None
+            and now - self._health[0] < _HEALTHCHECK_TTL_SECONDS
+        ):
+            return self._health[1]
+
+        from google.cloud import bigquery
+
         try:
-            self.client.query("SELECT 1").result()
-            return True
+            self.client.query(
+                "SELECT 1",
+                job_config=bigquery.QueryJobConfig(
+                    dry_run=True, use_query_cache=False
+                ),
+                timeout=_HEALTHCHECK_TIMEOUT_SECONDS,
+            )
+            ok = True
         except Exception as e:
+            ok = False
             log.warning(
                 "BigQuery healthcheck failed (mode=%s): %s", self.mode, e
             )
-            return False
-
+        self._health = (now, ok)
+        return ok
 
 def _translate_bigquery_error(
     exc: ServerError, resource_id: str, action: str
