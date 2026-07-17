@@ -218,6 +218,18 @@ def test_build_export_select_parquet_returns_star() -> None:
     assert _build_export_select(schema, fmt="parquet") == "*"
 
 
+def test_build_export_select_parquet_casts_json_columns() -> None:
+    schema = [
+        _bq_field("id", "INT64"),
+        _bq_field("bidder_metadata", "JSON"),
+        _bq_field("delivery_start", "TIMESTAMP"),
+    ]
+    assert _build_export_select(schema, fmt="parquet") == (
+        "`id`, TO_JSON_STRING(`bidder_metadata`) AS `bidder_metadata`, "
+        "`delivery_start`"
+    )
+
+
 def test_build_export_select_gzip_matches_csv_formatting() -> None:
     schema = [_bq_field("delivery_start", "TIMESTAMP")]
     assert _build_export_select(schema, fmt="gzip") == _build_export_select(
@@ -494,6 +506,50 @@ def test_dump_gzip_export_uses_csv_with_gzip_compression() -> None:
     assert "header=true" in sql
     assert "compression='GZIP'" in sql
     assert "_*.csv.gz" in sql
+
+
+def test_dump_parquet_export_uses_wildcard_uri() -> None:
+    """BigQuery SQL EXPORT DATA requires a wildcard URI even for
+    formats where this endpoint only accepts a single shard.
+    """
+    import asyncio
+
+    new_blob = _fake_blob("dumps/res-1/parquet/<rev>_000.parquet", "https://fresh")
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
+
+    job = MagicMock()
+    job.state = "DONE"
+    job.error_result = None
+    backend.client.query.return_value = job
+
+    urls = asyncio.run(backend.dump("res-1", "parquet"))
+
+    assert urls == ["https://fresh"]
+    sql = backend.client.query.call_args.args[0]
+    assert "format='PARQUET'" in sql
+    assert "_*.parquet" in sql
+
+
+def test_dump_multi_shard_parquet_returns_413() -> None:
+    import asyncio
+
+    blobs = [
+        _fake_blob("dumps/res-1/parquet/<rev>_000.parquet"),
+        _fake_blob("dumps/res-1/parquet/<rev>_001.parquet"),
+    ]
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[], blobs, blobs]
+
+    job = MagicMock()
+    job.state = "DONE"
+    job.error_result = None
+    backend.client.query.return_value = job
+
+    with pytest.raises(PayloadTooLargeError, match="multiple parquet shards"):
+        asyncio.run(backend.dump("res-1", "parquet"))
 
 
 def test_dump_cache_miss_deletes_older_revisions() -> None:

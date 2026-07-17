@@ -2,14 +2,14 @@
 
 Behaviour by shard count (decided by BigQuery from the export size):
 
-  - **1 shard** (≤ 1 GB, or any-size Parquet): 302 redirect to the
+  - **1 shard** (≤ 1 GB, including Parquet): 302 redirect to the
     GCS signed URL. Zero server bandwidth — bytes go GCS → client.
   - **N shards** (>1 GB CSV/NDJSON): `StreamingResponse` over
     `services.dump.stream_*_shards`, which pulls each shard from GCS
     via async httpx and byte-forwards (CSV header-dedup; NDJSON pure
     concat). Memory ≈ one chunk in flight; no threadpool consumption.
 
-Parquet >1 GB is refused upstream with 413 (parquet shards can't be
+Multi-shard Parquet is refused with 413 (parquet shards can't be
 byte-concatenated). Caller picks CSV/NDJSON.
 """
 
@@ -80,7 +80,7 @@ async def dump(
         body = stream_gzip_csv_shards(urls)
     elif fmt == "ndjson":
         body = stream_ndjson_shards(urls)
-    else:  # pragma: no cover — Parquet never returns >1 shard
+    else:  # pragma: no cover — the engine rejects multi-shard Parquet
         raise RuntimeError(f"unexpected multi-shard format: {fmt}")
 
     return StreamingResponse(
