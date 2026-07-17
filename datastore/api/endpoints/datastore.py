@@ -226,8 +226,9 @@ async def datastore_info(
         result.fields  — column schema, list of {"id", "type", ...}
         result.meta    — free-form dict (engine-specific extras)
     """
-    await context.authorize(resource_id=params.resource_id, permission="read")
-    result = await info_datastore(context, params.model_dump())
+    data_dict = await context.authorize(resource_id=params.resource_id, permission="read")
+    data_dict.update(params.model_dump())
+    result = await info_datastore(context, data_dict)
     return _success_response(request, result)
 
 

@@ -199,10 +199,14 @@ async def info_datastore(
     result = await asyncio.to_thread(
         engine.info, resource_id=data_dict["resource_id"],
     )
-    fields, _ = frictionless_schema_to_fields(result.schema)
+
+    schema = result.schema
+    if context.config.AUTH_TYPE == "ckan":
+        schema = data_dict.get("resource", {}).get("schema") or result.schema
+    fields, _ = frictionless_schema_to_fields(schema)
     return DatastoreInfoResponse.Result(
         meta=result.meta,
-        schema=result.schema,
+        schema=schema,
         fields=fields,
     )
 
