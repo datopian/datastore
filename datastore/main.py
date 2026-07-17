@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from datastore.api.error_handlers import register_exception_handlers
@@ -152,6 +153,16 @@ def create_app() -> FastAPI:
         BodySizeLimitMiddleware,
         max_bytes=config.MAX_REQUEST_BODY_MB * 1024 * 1024,
     )
+    # Added last = outermost, so 4xx/5xx envelopes carry CORS headers too.
+    # `CORS_ORIGINS=*` allows every origin, a comma-separated list allows
+    # only those domains, empty skips the middleware entirely.
+    if config.cors_origin_list:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=config.cors_origin_list,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     register_exception_handlers(app)
     app.include_router(api_router)

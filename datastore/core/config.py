@@ -56,6 +56,21 @@ class Config(BaseSettings):
         description="Maximum request body size in MB",
     )
 
+    # CORS
+    CORS_ORIGINS: str = Field(
+        default="*",
+        description=(
+            "Comma-separated list of origins allowed for cross-origin "
+            "requests (e.g. `https://data.example.org,https://app.example.org`). "
+            "`*` allows every origin; empty disables CORS entirely."
+        ),
+    )
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """`CORS_ORIGINS` split on commas, blanks dropped. `[]` = disabled."""
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
     # Datastore backend. Typed as `str` (not `Literal`) so engines added
     # as local-only sub-packages (gitignored) are auto-accepted without
     # editing this file — see `_available_engines`. The committed list

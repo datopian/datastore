@@ -77,7 +77,11 @@ async def create_datastore(
         # read-only guard on subsequent writes) knows the datastore owns
         # its data. Caller-supplied url_type is overridden on purpose.
         resource = await context.ckan.resource_create(
-            resource={**resource, "url_type": "datastore"}
+            resource={
+                **resource, 
+                "url_type": "datastore",
+                "datastore_active": True,
+            }
         )
         resource_id = resource["id"]
     else:
