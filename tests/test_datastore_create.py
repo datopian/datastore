@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
@@ -184,6 +185,53 @@ def test_create_field_missing_id_returns_validation_error(client: TestClient) ->
     assert body["success"] is False
     assert body["error"]["__type"] == "Validation Error"
     assert any("fields[0].id" in path for path in body["error"]["fields"])
+
+
+@pytest.mark.parametrize(
+    "bad_name", ["auction-id", "price (GBP)", "col;drop", 'a"b', "naïve"]
+)
+def test_create_field_id_with_special_chars_returns_validation_error(
+    client: TestClient, bad_name: str
+) -> None:
+    """Legacy `fields[].id` — only letters, digits, underscores, spaces."""
+    payload = _valid_payload_with_resource_id()
+    payload["fields"][0]["id"] = bad_name
+
+    response = client.post(CREATE_URL, json=payload)
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["success"] is False
+    assert body["error"]["__type"] == "Validation Error"
+    assert "invalid characters" in str(body["error"]["fields"])
+
+
+def test_create_schema_field_name_with_special_chars_returns_validation_error(
+    client: TestClient,
+) -> None:
+    """Frictionless `schema.fields[].name` gets the same identifier rule."""
+    payload = _valid_payload_with_schema()
+    payload["schema"]["fields"][0]["name"] = "auction-id"
+    payload["schema"]["primaryKey"] = ["product_code"]
+
+    response = client.post(CREATE_URL, json=payload)
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["success"] is False
+    assert body["error"]["__type"] == "Validation Error"
+    assert "invalid characters" in str(body["error"]["fields"])
+
+
+def test_create_field_id_with_space_is_allowed(client: TestClient) -> None:
+    payload = _valid_payload_with_resource_id()
+    payload["fields"][1]["id"] = "product code"
+    payload["primary_key"] = ["auction_id"]
+    payload["records"] = None
+
+    response = client.post(CREATE_URL, json=payload)
+
+    assert response.status_code == 200, response.text
 
 
 # 3. Resource not accessible ------------------------------------------------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, field_validator
@@ -14,6 +15,20 @@ from datastore.core.constants import (
 )
 
 # --- validator functions -----------------------------------------------------
+
+# Column identifiers (legacy `fields[].id` and Frictionless
+# `schema.fields[].name`) — letters, digits, underscores, and spaces only.
+_FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9_ ]+$")
+
+
+def check_field_name(name: str) -> str:
+    """Reject column identifiers with special characters."""
+    if not _FIELD_NAME_RE.match(name):
+        raise ValueError(
+            f"field name {name!r} contains invalid characters; only "
+            "letters, digits, underscores, and spaces are allowed"
+        )
+    return name
 
 
 def to_list(value: Any) -> list[str] | None:
@@ -248,6 +263,8 @@ def validate_frictionless_schema(value: Any) -> dict[str, Any] | None:
                 f"field name {name!r} is reserved for engine-managed "
                 "system columns; rename the field"
             )
+        if isinstance(name, str):
+            check_field_name(name)
         ftype = f.get("type")
         if ftype is not None and ftype not in ALLOWED_FRICTIONLESS_TYPES:
             raise ValueError(
@@ -417,4 +434,4 @@ class FieldSpec(BaseModel):
                 f"field id {v!r} is reserved for engine-managed system "
                 "columns; rename the field"
             )
-        return v
+        return check_field_name(v)
