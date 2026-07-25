@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -12,6 +12,7 @@ from pydantic import (
     model_validator,
 )
 
+from datastore.core.constants import DumpFormat
 from datastore.schemas.validators import (
     FieldSpec,
     StringOrList,
@@ -327,6 +328,10 @@ class DatastoreSearchSQLRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Subclass hook: `DatastoreDumpSQLRequest` flips this to False —
+    # a download exports the full result set, so LIMIT is optional there.
+    _REQUIRE_LIMIT: ClassVar[bool] = True
+
     sql: str = Field(
         description=(
             "A single read-only `SELECT` / `WITH` statement. Reference "
@@ -344,7 +349,7 @@ class DatastoreSearchSQLRequest(BaseModel):
     # the read-only properties below give callers a clean attribute.
     _resource_ids: list[str] = PrivateAttr(default_factory=list)
     _function_names: list[str] = PrivateAttr(default_factory=list)
-    _limit: int = PrivateAttr(default=0)
+    _limit: int | None = PrivateAttr(default=None)
     _offset: int = PrivateAttr(default=0)
 
     @property
@@ -360,8 +365,10 @@ class DatastoreSearchSQLRequest(BaseModel):
         return self._function_names
 
     @property
-    def limit(self) -> int:
-        """`LIMIT` literal parsed from the SQL — required."""
+    def limit(self) -> int | None:
+        """`LIMIT` literal parsed from the SQL. Required here (never
+        `None`); `None` only on `DatastoreDumpSQLRequest` when the SQL
+        carries no LIMIT."""
         return self._limit
 
     @property
@@ -412,13 +419,51 @@ class DatastoreSearchSQLRequest(BaseModel):
         Runs after `_check_sql_is_select`, so we know we have a single
         SELECT / WITH. CTE aliases are excluded from `_resource_ids`
         (they're defined inline, not external tables). LIMIT is
-        required — the service uses it to build pagination links and
-        to cap the streaming response; missing LIMIT raises a clean
-        ValidationError up front.
+        required (`_REQUIRE_LIMIT`) — the service uses it to build
+        pagination links and to cap the streaming response; missing
+        LIMIT raises a clean ValidationError up front. The dump-SQL
+        subclass relaxes the rule: exports cover the full result set,
+        so `_limit` stays `None` when absent.
         """
         self._resource_ids, self._function_names = parse_sql_references(self.sql)
-        self._limit, self._offset = parse_sql_pagination(self.sql)
+        self._limit, self._offset = parse_sql_pagination(
+            self.sql, require_limit=self._REQUIRE_LIMIT,
+        )
         return self
+
+
+class DatastoreDumpSQLRequest(DatastoreSearchSQLRequest):
+    """Query parameters for `GET /datastore/dump/sql`.
+
+    Same vetted-SELECT contract as `DatastoreSearchSQLRequest` (single
+    SELECT / WITH, table + function extraction, `extra="forbid"`), but
+    the result is exported as a **file**: `LIMIT` is optional — absent
+    means the full result set; present it is honored as written, and
+    the JSON path's row cap does not apply. `format` picks the export
+    format.
+    """
+
+    _REQUIRE_LIMIT: ClassVar[bool] = False
+
+    sql: str = Field(
+        description=(
+            "A single read-only `SELECT` / `WITH` statement. Reference "
+            "resources by their id. `LIMIT` is optional — absent exports "
+            "the full result set; present it is honored as written."
+        ),
+        examples=[
+            'SELECT * FROM "balancing_auction_results_2025" '
+            "WHERE accepted = true"
+        ],
+    )
+
+    format: DumpFormat = Field(
+        default="csv",
+        description=(
+            "Export format: `csv` | `gzip` (gzipped CSV) | `ndjson` | "
+            "`parquet`."
+        ),
+    )
 
 
 class DatastoreInfoRequest(BaseModel):

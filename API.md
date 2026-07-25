@@ -71,6 +71,7 @@ token (except under `anonymous`).
 | POST | `/api/3/action/datastore_delete` | Delete rows, drop columns, or drop the table |
 | GET | `/api/3/action/datastore_search` | Search a resource (streaming) |
 | GET | `/api/3/action/datastore_search_sql` | Run a read-only SQL `SELECT` (streaming) |
+| GET | `/datastore/dump/sql` | Download the result of a SQL `SELECT` as a file |
 | GET | `/api/3/action/datastore_info` | Schema + row stats for a resource |
 | GET | `/datastore/dump/{resource_id}` | Download a whole resource (CSV/NDJSON/Parquet) |
 | GET | `/` · `/health` · `/ready` | Welcome / liveness / readiness |
@@ -306,6 +307,7 @@ GET /api/3/action/datastore_search
 Run a single read-only `SELECT` / `WITH` statement and stream the result. Tables
 are referenced by `resource_id`; each is authorized individually, and functions
 are checked against the engine's allow-list. Include a `LIMIT` (required).
+To export the result as a file instead, use [`GET /datastore/dump/sql`](#get-datastoredumpsql).
 
 ### Query parameters
 
@@ -390,6 +392,58 @@ Download an entire resource. Pick the format with `?format=csv` (default),
 
 Requires `read` permission on the resource and a configured export bucket
 (`BIGQUERY_EXPORT_BUCKET`).
+
+`sql` is a **reserved name** on this route — `/datastore/dump/sql` is the SQL
+download endpoint below, so a resource literally named `sql` can't be dumped
+by this URL.
+
+---
+
+## `GET /datastore/dump/sql`
+
+Download the result of a **SQL `SELECT`** as a single file — filtered
+downloads at any size. Same validation as `datastore_search_sql` (single
+`SELECT`/`WITH`, per-table auth, function allow-list); the response is the
+file itself, not the CKAN envelope.
+
+### Query parameters
+
+| Name | Type | Notes |
+|---|---|---|
+| `sql` | string | A single `SELECT`/`WITH`; no multi-statement, no DML/DDL. `LIMIT` optional. |
+| `format` | string | `csv` (default) \| `gzip` (gzipped CSV) \| `ndjson` \| `parquet`. |
+
+### Example
+
+```http
+GET /datastore/dump/sql
+    ?sql=SELECT * FROM "c6153a74-43cb-4edf-8bdf-bb664feca937" WHERE accepted = true
+    &format=csv
+```
+
+### Response
+
+- **Single shard (≤ ~1 GB):** `302` redirect to a signed GCS URL — bytes flow
+  storage → client; the URL expires after `BIGQUERY_EXPORT_URL_EXPIRY_HOURS`
+  (default 1h).
+- **Multiple shards (larger CSV / gzip / NDJSON):** one streamed body (`200`)
+  concatenated server-side at ~constant memory; not resumable mid-stream.
+- **Parquet over the single-shard limit:** `413` — switch to `format=csv` or
+  `format=ndjson`.
+
+### Rules (vs the JSON API)
+
+- `LIMIT` is **optional** — absent exports the full result set; present it is
+  honored as written, and the `SEARCH_RESULT_ROWS_MAX` cap does not apply
+  (`OFFSET` without `LIMIT` is rejected).
+- Repeated downloads of the same SQL are served from a GCS cache until any
+  referenced table changes; SQL calling non-deterministic functions
+  (`now()`, `current_date`, …) re-exports on every request.
+- Row order in the file follows the SQL's `ORDER BY` when it sorts on output
+  columns (BigQuery preserves it across shards). Without one, results fall
+  back to `_id` order when the query outputs `_id` (e.g. `SELECT *`) — the
+  same order the JSON API pages in; otherwise order is undefined.
+- Requires a configured export bucket (`BIGQUERY_EXPORT_BUCKET`).
 
 ---
 

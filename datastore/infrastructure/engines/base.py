@@ -130,7 +130,26 @@ class DatastoreBackend(ABC):
 
     @abstractmethod
     async def dump(self, resource_id: str, fmt: str) -> list[str]:
-        """Download a table as CSV/NDJSON/Parquet. 
+        """Download a table as CSV/NDJSON/Parquet.
+        """
+
+    @abstractmethod
+    async def dump_sql(
+        self,
+        sql: str,
+        fmt: str,
+        *,
+        resource_ids: list[str],
+        function_names: list[str],
+    ) -> list[str]:
+        """Export the result of a vetted SELECT as `fmt`; return signed
+        URLs (one per shard).
+
+        `resource_ids` / `function_names` are the names already parsed
+        (and authorized / allow-listed) by the schema + service layers —
+        passed in so engines don't re-parse the SQL. Engines may use
+        `function_names` to decide result cacheability (non-deterministic
+        functions make a cached export stale by definition).
         """
 
     @abstractmethod

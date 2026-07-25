@@ -131,16 +131,7 @@ async def search_sql_datastore(
         OFFSET so callers can follow `_links.next` / `prev` without
         re-editing their SQL.
     """
-    allowed = get_allowed_sql_functions(
-        context.config.DATASTORE_ENGINE,
-        override_path=context.config.SQL_FUNCTIONS_ALLOW_FILE,
-    )
-    disallowed = sorted(set(data_dict.get("function_names", [])) - allowed)
-    if disallowed:
-        raise ValidationError(
-            f"sql uses disallowed function(s): {', '.join(disallowed)}",
-            fields={"sql": [f"disallowed: {', '.join(disallowed)}"]},
-        )
+    _ensure_allowed_sql_functions(context, data_dict.get("function_names", []))
 
     limit = data_dict["limit"]
     offset = data_dict["offset"]
@@ -182,6 +173,52 @@ async def search_sql_datastore(
         sql=data_dict["sql"],
         warnings=warnings,
     )
+
+
+async def dump_sql_datastore(
+    context: RequestContext, data_dict: dict[str, Any]
+) -> list[str]:
+    """Export a vetted SELECT's result via the engine; return signed URLs.
+
+    The download-mode sibling of `search_sql_datastore`: same function
+    allow-list gate, but **no LIMIT clamp** — the result lands in GCS as
+    a file, not in a streamed JSON envelope, so a LIMIT in the SQL is
+    honored as written and its absence means the full result set.
+
+    Dispatches on the read-only engine; the EXPORT-side elevation to rw
+    credentials is engine-internal (BigQuery writes shards under the rw
+    identity).
+    """
+    _ensure_allowed_sql_functions(context, data_dict.get("function_names", []))
+    engine = get_datastore_engine(context, mode="ro")
+    # `dump_sql` is a native coroutine (its blocking calls are offloaded
+    # internally) — await it directly, no `to_thread`.
+    return await engine.dump_sql(
+        data_dict["sql"],
+        data_dict["fmt"],
+        resource_ids=data_dict["resource_ids"],
+        function_names=data_dict["function_names"],
+    )
+
+
+def _ensure_allowed_sql_functions(
+    context: RequestContext, function_names: list[str],
+) -> None:
+    """Reject SQL that calls functions outside the engine's allow-list.
+
+    Shared by `search_sql_datastore` and `dump_sql_datastore` so both
+    entry points enforce the identical gate.
+    """
+    allowed = get_allowed_sql_functions(
+        context.config.DATASTORE_ENGINE,
+        override_path=context.config.SQL_FUNCTIONS_ALLOW_FILE,
+    )
+    disallowed = sorted(set(function_names) - allowed)
+    if disallowed:
+        raise ValidationError(
+            f"sql uses disallowed function(s): {', '.join(disallowed)}",
+            fields={"sql": [f"disallowed: {', '.join(disallowed)}"]},
+        )
 
 
 async def info_datastore(

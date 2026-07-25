@@ -31,7 +31,14 @@ Copy [.env.example](.env.example) and fill it in. The essentials:
 | `AUTH_TYPE` | `ckan` | Auth provider: `ckan` · `jwt` · `anonymous` |
 | `CKAN_URL` | — | CKAN base URL (required when `AUTH_TYPE=ckan`) |
 | `BIGQUERY_PROJECT` / `BIGQUERY_DATASET` | — | Required when `DATASTORE_ENGINE=bigquery` |
+| `BIGQUERY_EXPORT_BUCKET` | — | GCS bucket for downloads (`/datastore/dump/{resource_id}`, `/datastore/dump/sql`) |
 | `REDIS_URL` | — | Cache backend; empty → in-process cache |
+
+**Note on the export bucket:** configure a ~24h object-lifecycle rule on
+`BIGQUERY_EXPORT_BUCKET`. The engine garbage-collects superseded export
+revisions itself, but abandoned SQL-download prefixes (queries never
+re-issued) and files stranded by a crashed export are only ever cleaned
+by the lifecycle rule.
 
 ## Documentation
 

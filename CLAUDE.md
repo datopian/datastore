@@ -423,6 +423,7 @@ Each endpoint takes a single `ContextDep`. The handler calls `context.authorize(
 | POST | `/api/3/action/datastore_delete` | **implemented** | `DatastoreDeleteRequest` | `DatastoreDeleteResponse` |
 | GET  | `/api/3/action/datastore_search` | **implemented** (streaming) | `DatastoreSearchRequest` | `DatastoreSearchResponse` |
 | GET  | `/api/3/action/datastore_search_sql` | **implemented** (streaming) | `DatastoreSearchSQLRequest` | `DatastoreSearchResponse` |
+| GET  | `/datastore/dump/sql` | **implemented** | `sql=<SELECT…>`, `format=csv\|gzip\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 | GET  | `/api/3/action/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
 | GET  | `/datastore/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 
@@ -476,7 +477,21 @@ Concrete perm sets:
 
 A single SA works if both perm sets land on the same identity — `BIGQUERY_CREDENTIALS_RO` empty falls through to ADC; same env var can drive both. `_build_bq_client` and `_build_storage_client` on the backend are deliberately small + stub-friendly so tests inject mocks without monkey-patching `google.cloud.*` globally.
 
-A 24h object-lifecycle rule on the bucket is a useful belt-and-braces: the engine GCs older revs already, but lifecycle catches anything stranded by a crashed dump.
+A 24h object-lifecycle rule on the bucket is **required** in practice: the engine GCs older revs already, but lifecycle is the only thing that cleans abandoned `sql_dumps/<qhash>/` prefixes (SQL downloads whose query is never re-issued — see below) and anything stranded by a crashed dump.
+
+### SQL download (`GET /datastore/dump/sql`)
+
+`GET /datastore/dump/sql?sql=<SELECT…>&format=csv|gzip|ndjson|parquet` exports the result of an arbitrary vetted SELECT through the same pipeline as `/datastore/dump/{resource_id}` — engine method `dump_sql` in [bigquery/backend.py](datastore/infrastructure/engines/bigquery/backend.py), response shaping shared via `shard_download_response` in [api/endpoints/dump.py](datastore/api/endpoints/dump.py) (302 single shard / stream-concat multi-shard / 413 multi-shard parquet). Same SQL validation + per-table auth as `datastore_search_sql` (`DatastoreDumpSQLRequest` subclasses its request schema); the action API itself stays pure JSON envelope. The route is declared before `/datastore/dump/{resource_id}`, making `sql` a reserved resource name on the dump family.
+
+Deltas vs the whole-table dump:
+
+- **LIMIT is optional, uncapped.** `datastore_search_sql` requires a LIMIT literal; the dump request schema relaxes it (`parse_sql_pagination(require_limit=…)` via the `_REQUIRE_LIMIT` class flag), honors a present LIMIT as written, and `SEARCH_RESULT_ROWS_MAX` does not apply. OFFSET without LIMIT is rejected.
+- **Cache key** = `sql_dumps/<qhash>/<fmt>/<rev>`: `qhash` = sha256 of the qualified SQL, `rev` = sha256 over every referenced table's `(rid, modified)` pair — any table change → new rev. The top-level `sql_dumps/` prefix can't collide with `dumps/<rid>/…`.
+- **Non-deterministic SQL bypasses the cache.** Queries calling `now()`, `current_date`, … (`_NON_DETERMINISTIC_SQL_FUNCTIONS`) skip the lookup and export under a fresh uuid rev per run.
+- **RO dry run → RW export.** The user SQL is dry-run on the RO client first (free; clean 400 on SQL that doesn't compile; yields the output schema for the same per-format casts `dump()` uses — ISO timestamps for CSV/NDJSON, `TO_JSON_STRING` for JSON→parquet). The `EXPORT DATA` itself must run under the RW SA (it writes GCS objects); containment = single-statement/SELECT-only schema validation + per-table authorize + function allow-list + the user SQL riding in subquery position (`AS SELECT … FROM (<sql>)`).
+- **Age-gated GC.** Stale revisions under `sql_dumps/<qhash>/<fmt>/` are deleted only once older than the signed-URL expiry, so a re-export can't kill shards whose URLs are still live.
+- **Row order** (`_export_order_suffix`): BigQuery ignores a subquery's ORDER BY without LIMIT, so ordering lives on the **outer** exported query — a user's top-level `ORDER BY` is hoisted there when its keys are output columns; with no ORDER BY, `ORDER BY _id` is applied when `_id` is in the output (mirrors JSON mode's `default_order_by`). Otherwise the file is unordered. BigQuery preserves outer ORDER BY globally across shards; shards concat in name order.
+- Every cache miss is a **billed query** (EXPORT DATA never uses BigQuery's result cache); `maximum_bytes_billed` is a possible future cost cap.
 
 The GCS client is built with the same credentials as the BigQuery client for the active engine mode (`load_credentials(config, mode)` in [bigquery/client.py](datastore/infrastructure/engines/bigquery/client.py)). Without this shim, a service-account JSON loaded via `BIGQUERY_CREDENTIALS_RO` would drive BigQuery but `storage.Client(...)` would silently fall back to ADC — a near-invisible identity split. Workload identity / `GOOGLE_APPLICATION_CREDENTIALS`-style setups still work because `load_credentials` returns `None` for ADC and the storage client follows the same default-credentials path.
 
@@ -763,7 +778,7 @@ Optional fields appear in `result` only when requested:
 
 ### 6.4 `GET /api/3/datastore_search_sql`
 
-**Query params**: `sql` (required), `limit` (default 32000).
+**Query params**: `sql` (required; must carry a `LIMIT` literal). To export the result as a file instead of the JSON envelope, use `GET /datastore/dump/sql?sql=…&format=…` (LIMIT optional + uncapped there — see §5.3 "SQL download").
 
 **Example request — daily clearing-price summary**
 ```
