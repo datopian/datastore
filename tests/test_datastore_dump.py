@@ -1,17 +1,22 @@
 """Tests for `GET /datastore/dump/{resource_id}`.
 
 The engine returns one signed URL (csv / gzip / ndjson shards are
-composed into a single object), so every format 302s. Only a multi-file
-parquet export comes back as several URLs, returned as a JSON list.
+composed into a single object), so every format 302s. Only a sharded
+parquet export comes back as several URLs, which the endpoint fetches
+and streams as one zip.
 
-We patch `BigQueryBackend.dump` to control what the engine reports.
+We patch `BigQueryBackend.dump` to control what the engine reports, and
+`app.state.http` to serve the signed URLs from memory.
 """
 
 from __future__ import annotations
 
+import io
+import zipfile
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
 from datastore.infrastructure.engines.bigquery.export import (
@@ -32,6 +37,17 @@ def _patch_dump(urls_or_exc: list[str] | Exception):
             raise urls_or_exc
         return urls_or_exc
     return patch.object(BigQueryBackend, "dump", fake)
+
+
+def stub_signed_urls(client: TestClient, parts: dict[str, bytes]) -> None:
+    """Serve `parts` (url → body) from `app.state.http`, the client the
+    zip writer fetches the signed URLs with."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=parts[str(request.url)])
+
+    client.app.state.http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    )
 
 
 # --- single shard: 302 redirect -------------------------------------------
@@ -55,6 +71,55 @@ def test_each_format_supports_single_shard_redirect(
             DUMP_URL, params={"format": fmt}, follow_redirects=False,
         )
     assert response.status_code == 302
+
+
+# --- several shards: one streamed zip -------------------------------------
+
+
+def test_multi_file_parquet_streams_one_zip(client: TestClient) -> None:
+    """A sharded parquet export is fetched back and framed into a single
+    zip, so the caller still gets one file from one URL."""
+    parts = {
+        "https://signed/p0.parquet": b"PAR1-first-shard-bytes",
+        "https://signed/p1.parquet": b"PAR1-second-shard-bytes",
+    }
+    stub_signed_urls(client, parts)
+
+    with _patch_dump(list(parts)):
+        response = client.get(DUMP_URL, params={"format": "parquet"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="balancing_auction_results_2025.zip"'
+    )
+
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    # `testzip` walks every member and checks its CRC — the framing has
+    # to be right, not merely parseable.
+    assert archive.testzip() is None
+    assert archive.namelist() == [
+        "balancing_auction_results_2025_01.parquet",
+        "balancing_auction_results_2025_02.parquet",
+    ]
+    assert [archive.read(n) for n in archive.namelist()] == list(parts.values())
+
+
+def test_zip_members_are_stored_not_deflated(client: TestClient) -> None:
+    """Parquet is already compressed — deflating it would cost CPU for
+    no size win, so members go in uncompressed."""
+    body = b"PAR1" + b"x" * 4096
+    parts = {"https://signed/a.parquet": body, "https://signed/b.parquet": body}
+    stub_signed_urls(client, parts)
+
+    with _patch_dump(list(parts)):
+        response = client.get(DUMP_URL, params={"format": "parquet"})
+
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    for info in archive.infolist():
+        assert info.compress_type == zipfile.ZIP_STORED
+        assert info.compress_size == len(body)
 
 
 # --- error paths ----------------------------------------------------------

@@ -10,7 +10,7 @@ storage backend (BigQuery Datastore or Ducklake as future support).
 - **Pluggable storage backend** selected by `DATASTORE_ENGINE` (`bigquery` today; `ducklake` planned).
 - **Pluggable auth** selected by `AUTH_TYPE` (`ckan` / `jwt` / `anonymous`). Provider lives in `datastore/auth/<name>/`; only the CKAN provider touches the network, and its TTL cache is local to that provider.
 - **Standalone-capable** — runs without an upstream CKAN under `AUTH_TYPE=anonymous` or `AUTH_TYPE=jwt`. CKAN is only required when `AUTH_TYPE=ckan`.
-- **Streaming search responses** (peak memory ≈ 1 row) for `datastore_search` / `datastore_search_sql`.
+- **Streaming search responses** (peak memory ≈ 1 row) for `datastore_search` / `datastore_search_sql`; the sharded-parquet download streams a zip at ≈ 1 chunk.
 - Strict request validation, structured CKAN-shaped error envelopes.
 
 
@@ -187,7 +187,8 @@ datastore-api/
 │   │   │                             #                  dispatch, pagination links,
 │   │   │                             #                  function allow-list)
 │   │   └── streaming.py              #   streaming.py – byte-yielding writers
-│   │                                 #                  (objects/lists/csv/tsv)
+│   │                                 #                  (objects/lists/csv/tsv
+│   │                                 #                   + zip_archive_writer)
 │   │
 │   │ ── 6. INFRASTRUCTURE (adapters to the outside world) ─
 │   └── infrastructure/
@@ -454,7 +455,7 @@ Pipeline (`_prepare_download` in [bigquery/export.py](datastore/infrastructure/e
 6. **Sign URLs** — V4 with `response-content-disposition: attachment; filename="<rid>.<ext>"` (one file) or `<rid>_NN.<ext>` (multi-file parquet, 1-indexed). Signing is offloaded to a thread (IAM round-trip under workload identity).
 7. **Return** (`download_response` in [api/endpoints/dump.py](datastore/api/endpoints/dump.py)):
    - 1 URL → `RedirectResponse(302)`. Bytes flow GCS → client; the server is **out of the byte path** for every format, and downloads are resumable.
-   - N URLs (multi-file parquet only) → `200` + JSON manifest `{format, count, files}`; DuckDB/pandas/Spark read that list as one dataset.
+   - N URLs (sharded parquet only) → `200` + **a streamed zip** of the parts (`zip_archive_writer` in [services/streaming.py](datastore/services/streaming.py)). The API fetches each signed URL over `app.state.http` and frames it into the archive a chunk at a time, so one export is always one file at one URL. Entries are `ZIP_STORED` (parquet is already compressed; deflating costs CPU for no size win) and `force_zip64=True` (member sizes aren't known up front). This is the **only** path where the server carries the bytes — no `Content-Length`, no range support, and a fetch failure mid-archive truncates a response that already returned 200.
 
 Errors:
 - Any BigQuery / GCS failure → `ServerError` (500) with the upstream message. A ">1 GB single URI" failure is classified by `_is_export_too_large` into `PayloadTooLargeError` (413) — defensive only, since the wildcard URI means BigQuery shards instead of failing.

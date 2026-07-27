@@ -388,10 +388,12 @@ Download an entire resource. Pick the format with `?format=csv` (default),
   Shards from a large export are stitched into one object server-side, so the
   bytes go straight from storage to the client (resumable, no server
   bandwidth, no server CPU). `gzip` is compressed by BigQuery at export time.
-- **parquet** — `302` for a single file. A larger export can't be merged
-  (parquet isn't concatenable), so it returns `200` with a JSON list of signed
-  URLs: `{"format": "parquet", "count": N, "files": [...]}` — a multi-file
-  parquet dataset, which DuckDB / pandas / Spark read natively.
+- **parquet** — `302` when the export is a single file. Parquet shards can't be
+  merged (footer + magic bytes), so a sharded export instead returns `200` with
+  a **zip** of the parts (`Content-Type: application/zip`, members named
+  `<resource_id>_NN.parquet`). Entries are stored, not deflated — parquet is
+  already compressed. This is the one download the server streams itself, so
+  it has no `Content-Length` and can't be resumed; unzip before querying.
 
 Requires `read` permission on the resource and a configured export bucket
 (`BIGQUERY_EXPORT_BUCKET`).
@@ -431,8 +433,8 @@ Identical to `/datastore/dump/{resource_id}` above:
 - **csv / gzip / ndjson** — `302` to a signed GCS URL at any size (shards are
   composed into one object). The URL expires after
   `BIGQUERY_EXPORT_URL_EXPIRY_HOURS` (default 1h).
-- **parquet** — `302` for one file; a sharded export returns `200` with
-  `{"format": "parquet", "count": N, "files": [...]}`.
+- **parquet** — `302` for one file; a sharded export returns `200` with a
+  streamed zip of the parts, members named `query_NN.parquet`.
 
 ### Rules (vs the JSON API)
 

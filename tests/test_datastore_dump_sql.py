@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hashlib
+import io
+import zipfile
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -39,6 +41,7 @@ from tests.test_datastore_dump import (
     _bq_field,
     _engine_with_storage,
     _fake_blob,
+    stub_signed_urls,
 )
 
 DUMP_SQL_URL = "/datastore/dump/query"
@@ -865,18 +868,32 @@ def test_every_single_file_format_redirects(client: TestClient) -> None:
         assert response.status_code == 302, fmt
 
 
-def test_multi_file_parquet_returns_url_list(client: TestClient) -> None:
-    """A sharded parquet export is returned as a JSON list of signed
-    URLs (readers open the files as one dataset) — not a 413."""
-    urls = ["https://signed/p0.parquet", "https://signed/p1.parquet"]
-    patcher, _ = _patch_dump_sql(urls)
+def test_multi_file_parquet_streams_one_zip(client: TestClient) -> None:
+    """A sharded parquet export is streamed back as a single zip — not a
+    URL list, and not a 413. Members are named after the `query` base."""
+    parts = {
+        "https://signed/p0.parquet": b"PAR1-shard-zero",
+        "https://signed/p1.parquet": b"PAR1-shard-one",
+    }
+    stub_signed_urls(client, parts)
+
+    patcher, _ = _patch_dump_sql(list(parts))
     with patcher:
         response = client.get(DUMP_SQL_URL, params={
             "sql": "SELECT 1 LIMIT 5", "format": "parquet",
         })
+
     assert response.status_code == 200
-    body = response.json()
-    assert body == {"format": "parquet", "count": 2, "files": urls}
+    assert response.headers["content-type"] == "application/zip"
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="query.zip"'
+    )
+
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert archive.testzip() is None
+    assert archive.namelist() == ["query_01.parquet", "query_02.parquet"]
+    assert [archive.read(n) for n in archive.namelist()] == list(parts.values())
 
 
 def test_payload_too_large_error_maps_to_413(client: TestClient) -> None:
