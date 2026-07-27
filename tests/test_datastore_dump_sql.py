@@ -30,6 +30,7 @@ from datastore.core.exceptions import (
     ValidationError,
 )
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
+from datastore.infrastructure.engines.bigquery.export import _delete_old_cache
 from datastore.infrastructure.engines.bigquery.lib import qualify_table_refs
 from fastapi.testclient import TestClient
 
@@ -38,10 +39,9 @@ from tests.test_datastore_dump import (
     _bq_field,
     _engine_with_storage,
     _fake_blob,
-    _patch_httpx_stream,
 )
 
-DUMP_SQL_URL = "/datastore/dump/sql"
+DUMP_SQL_URL = "/datastore/dump/query"
 
 _NOW = dt.datetime.now(dt.timezone.utc)
 
@@ -54,11 +54,8 @@ def _dry_job(schema: list[Any] | None = None) -> Any:
 
 
 def _export_job() -> Any:
-    """An EXPORT DATA job that completes immediately without errors."""
-    job = MagicMock()
-    job.state = "DONE"
-    job.error_result = None
-    return job
+    """An EXPORT DATA job whose `result()` returns without raising."""
+    return MagicMock()
 
 
 def _blob(name: str, url: str = "https://signed/x", age_hours: float = 0.0) -> Any:
@@ -76,12 +73,20 @@ def _run(
     resource_ids: list[str] | None = None,
     function_names: list[str] | None = None,
 ) -> list[str]:
-    return asyncio.run(backend.dump_sql(
-        sql,
-        fmt,
-        resource_ids=["res1"] if resource_ids is None else resource_ids,
-        function_names=function_names or [],
-    ))
+    async def go() -> list[str]:
+        urls = await backend.dump_sql(
+            sql,
+            fmt,
+            resource_ids=["res1"] if resource_ids is None else resource_ids,
+            function_names=function_names or [],
+        )
+        # Part-deletion + revision GC run off the response path; flush
+        # them so delete assertions are deterministic.
+        if backend._cleanup_tasks:
+            await asyncio.gather(*list(backend._cleanup_tasks))
+        return urls
+
+    return asyncio.run(go())
 
 
 def _expected_prefix(sql: str, fmt: str = "csv") -> str:
@@ -103,7 +108,7 @@ def _expected_prefix(sql: str, fmt: str = "csv") -> str:
 def test_cache_hit_skips_dry_run_and_export() -> None:
     """Blobs already under the (qhash, fmt, rev) prefix → signed URLs
     straight from GCS; zero BigQuery jobs."""
-    blob = _blob("sql_dumps/h/csv/rev_000.csv", "https://cached")
+    blob = _blob("sql_dumps/h/csv/rev.composed.csv", "https://cached")
     backend, _ = _engine_with_storage([blob])
 
     urls = _run(backend)
@@ -117,11 +122,15 @@ def test_cache_miss_dry_runs_then_exports() -> None:
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
+    bucket_obj.blob.return_value.generate_signed_url.return_value = (
+        "https://composed"
+    )
     backend.client.query.side_effect = [_dry_job(), _export_job()]
 
     urls = _run(backend)
 
-    assert urls == ["https://fresh"]
+    # csv shards compose into one object → single signed URL.
+    assert urls == ["https://composed"]
     assert backend.client.query.call_count == 2
     # First call is the RO dry run; second is the EXPORT DATA statement.
     dry_call = backend.client.query.call_args_list[0]
@@ -140,7 +149,7 @@ def test_cache_miss_dry_runs_then_exports() -> None:
 def test_cache_prefix_matches_qhash_and_table_rev_scheme() -> None:
     """Pre-check prefix is `sql_dumps/<sha256(qualified sql)[:16]>/<fmt>/
     <sha256(rid:modified_us pairs)[:16]>`."""
-    blob = _blob("x", "https://cached")
+    blob = _blob("rev.composed.csv", "https://cached")
     backend, storage_client = _engine_with_storage([blob])
     bucket_obj = storage_client.bucket.return_value
 
@@ -152,7 +161,7 @@ def test_cache_prefix_matches_qhash_and_table_rev_scheme() -> None:
 
 
 def test_cache_prefix_stable_across_identical_calls() -> None:
-    blob = _blob("x", "https://cached")
+    blob = _blob("rev.composed.csv", "https://cached")
     backend, storage_client = _engine_with_storage([blob])
     bucket_obj = storage_client.bucket.return_value
 
@@ -168,7 +177,7 @@ def test_cache_prefix_stable_across_identical_calls() -> None:
 def test_rev_changes_when_any_referenced_table_changes() -> None:
     """Multi-table SQL: bumping either table's `modified` produces a new
     revision prefix; the other table alone can't satisfy the cache."""
-    blob = _blob("x", "https://cached")
+    blob = _blob("rev.composed.csv", "https://cached")
     backend, storage_client = _engine_with_storage([blob])
     bucket_obj = storage_client.bucket.return_value
 
@@ -237,16 +246,19 @@ def test_table_modified_none_is_non_cacheable() -> None:
 def test_gc_cacheable_removes_all_old_revs_immediately() -> None:
     """A cacheable (table-versioned) export deletes every superseded
     revision on the miss that replaces it — no age gate — so a table
-    change promptly reclaims the old export. The current rev stays."""
+    change promptly reclaims the old export. The current rev stays.
+
+    Uses `parquet` so the compose path (csv/ndjson) doesn't delete the
+    current shard — this test only exercises stale-revision GC."""
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
 
     sql = "SELECT * FROM res1"
-    prefix = _expected_prefix(sql)
+    prefix = _expected_prefix(sql, fmt="parquet")
     base = prefix.rsplit("/", 1)[0]
-    current = _blob(f"{prefix}_000.csv", "https://fresh")
-    old_stale = _blob(f"{base}/oldrev_000.csv", age_hours=3.0)
-    young_stale = _blob(f"{base}/youngrev_000.csv", age_hours=0.0)
+    current = _blob(f"{prefix}_000.parquet", "https://fresh")
+    old_stale = _blob(f"{base}/oldrev_000.parquet", age_hours=3.0)
+    young_stale = _blob(f"{base}/youngrev_000.parquet", age_hours=0.0)
 
     bucket_obj.list_blobs.side_effect = [
         [],                                  # pre-check (cache miss)
@@ -255,7 +267,7 @@ def test_gc_cacheable_removes_all_old_revs_immediately() -> None:
     ]
     backend.client.query.side_effect = [_dry_job(), _export_job()]
 
-    urls = _run(backend, sql=sql)
+    urls = _run(backend, sql=sql, fmt="parquet")
 
     assert urls == ["https://fresh"]
     assert current.delete.call_count == 0
@@ -265,9 +277,8 @@ def test_gc_cacheable_removes_all_old_revs_immediately() -> None:
 
 
 def test_gc_stale_blobs_no_age_gate_deletes_all_non_current() -> None:
-    """`_gc_stale_blobs(min_age=None)` (the cacheable path) deletes every
+    """`_delete_old_cache(min_age=None)` (the cacheable path) deletes every
     blob outside the current revision, ignoring age."""
-    backend = BigQueryBackend(mode="ro")
     keep = "sql_dumps/h/csv/current"
     current = _blob(f"{keep}_000.csv")
     old = _blob("sql_dumps/h/csv/old_000.csv", age_hours=5.0)
@@ -275,7 +286,7 @@ def test_gc_stale_blobs_no_age_gate_deletes_all_non_current() -> None:
     rw_gcs = MagicMock()
     rw_gcs.list_blobs.return_value = [current, old, young]
 
-    deleted = backend._gc_stale_blobs(
+    deleted = _delete_old_cache(
         rw_gcs, sweep_prefix="sql_dumps/h/csv/", keep_prefix=keep,
         min_age=None,
     )
@@ -287,10 +298,9 @@ def test_gc_stale_blobs_no_age_gate_deletes_all_non_current() -> None:
 
 
 def test_gc_stale_blobs_age_gate_keeps_young() -> None:
-    """`_gc_stale_blobs(min_age=…)` (the non-cacheable path) deletes only
+    """`_delete_old_cache(min_age=…)` (the non-cacheable path) deletes only
     superseded blobs older than the cutoff; younger ones (whose signed
     URLs may still be live) survive."""
-    backend = BigQueryBackend(mode="ro")
     keep = "sql_dumps/h/csv/current"
     current = _blob(f"{keep}_000.csv")
     old = _blob("sql_dumps/h/csv/old_000.csv", age_hours=5.0)
@@ -298,7 +308,7 @@ def test_gc_stale_blobs_age_gate_keeps_young() -> None:
     rw_gcs = MagicMock()
     rw_gcs.list_blobs.return_value = [current, old, young]
 
-    deleted = backend._gc_stale_blobs(
+    deleted = _delete_old_cache(
         rw_gcs, sweep_prefix="sql_dumps/h/csv/", keep_prefix=keep,
         min_age=dt.timedelta(hours=1),
     )
@@ -410,24 +420,218 @@ def test_csv_export_iso_casts_timestamps_from_dry_run_schema() -> None:
 
     export_sql = backend.client.query.call_args_list[1].args[0]
     assert "format='CSV'" in export_sql
-    assert "header=true" in export_sql
+    # header=false: the single header is composed in as a separate member.
+    assert "header=false" in export_sql
     assert (
         "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `ts`, 'UTC')" in export_sql
     )
 
 
-def test_multi_shard_parquet_raises_413() -> None:
+def test_multi_shard_parquet_returns_every_url() -> None:
+    """Parquet isn't composable, so all shard URLs come back."""
     shards = [
-        _blob("p_000.parquet"),
-        _blob("p_001.parquet"),
+        _blob("p_000.parquet", "https://p0"),
+        _blob("p_001.parquet", "https://p1"),
     ]
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], shards, shards]
     backend.client.query.side_effect = [_dry_job(), _export_job()]
 
-    with pytest.raises(PayloadTooLargeError, match="multiple parquet shards"):
-        _run(backend, fmt="parquet")
+    assert _run(backend, fmt="parquet") == ["https://p0", "https://p1"]
+
+
+# --- compose (single-URL) ----------------------------------------------------
+
+
+def _distinct_blob_factory() -> tuple[Any, dict[str, Any]]:
+    """`bucket.blob(name)` side_effect returning a distinct mock per name
+    (each with a `url:<name>` signed URL). Real GCS gives distinct objects;
+    the default MagicMock returns one shared blob, which hides compose."""
+    made: dict[str, Any] = {}
+
+    def factory(name: str) -> Any:
+        m = made.get(name)
+        if m is None:
+            m = MagicMock()
+            m.name = name
+            m.generate_signed_url.return_value = f"url:{name}"
+            made[name] = m
+        return m
+
+    return factory, made
+
+
+def test_csv_multishard_composes_header_and_shards_into_one_url() -> None:
+    """csv: a header member + the header-less shards are composed into ONE
+    object; the parts are deleted; a single composite URL comes back."""
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    shard0 = _blob("sql_dumps/h/csv/rev_000.csv")
+    shard1 = _blob("sql_dumps/h/csv/rev_001.csv")
+    bucket_obj.list_blobs.side_effect = [[], [shard0, shard1], [shard0, shard1]]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+    factory, made = _distinct_blob_factory()
+    bucket_obj.blob.side_effect = factory
+
+    urls = _run(backend, fmt="csv")
+
+    composite = next(n for n in made if n.endswith(".composed.csv"))
+    header = next(n for n in made if n.endswith(".header.csv"))
+    assert urls == [f"url:{composite}"]                 # single URL
+    made[header].upload_from_string.assert_called_once()  # header written
+    made[composite].compose.assert_called_once()
+    sources = made[composite].compose.call_args.args[0]
+    assert made[header] is sources[0]                   # header sorts first
+    assert shard0 in sources and shard1 in sources
+    assert shard0.delete.called and shard1.delete.called  # parts removed
+
+
+def test_ndjson_multishard_composes_without_header() -> None:
+    """ndjson: shards compose directly (no header member) into one URL."""
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    shard0 = _blob("sql_dumps/h/ndjson/rev_000.json")
+    shard1 = _blob("sql_dumps/h/ndjson/rev_001.json")
+    bucket_obj.list_blobs.side_effect = [[], [shard0, shard1], [shard0, shard1]]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+    factory, made = _distinct_blob_factory()
+    bucket_obj.blob.side_effect = factory
+
+    urls = _run(backend, fmt="ndjson")
+
+    assert not any(n.endswith(".header.json") for n in made)  # no header
+    composite = next(n for n in made if n.endswith(".composed.json"))
+    assert urls == [f"url:{composite}"]
+    sources = made[composite].compose.call_args.args[0]
+    assert shard0 in sources and shard1 in sources
+
+
+def test_ndjson_single_shard_is_not_composed() -> None:
+    """A lone ndjson shard is already one URL — no compose, 302 to it."""
+    new_blob = _blob("sql_dumps/h/ndjson/rev_000.json", "https://one")
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+
+    urls = _run(backend, fmt="ndjson")
+
+    assert urls == ["https://one"]
+    bucket_obj.blob.assert_not_called()   # no compose/header object
+
+
+def test_compose_chains_beyond_32_sources() -> None:
+    """>32 shards → compose is chained in batches of ≤32 (the composite
+    itself counts as one source in later calls)."""
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    shards = [_blob(f"sql_dumps/h/ndjson/rev_{i:03d}.json") for i in range(40)]
+    bucket_obj.list_blobs.side_effect = [[], shards, shards]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+    factory, made = _distinct_blob_factory()
+    bucket_obj.blob.side_effect = factory
+
+    _run(backend, fmt="ndjson")
+
+    composite = made[next(n for n in made if n.endswith(".composed.json"))]
+    # 40 sources → compose(32), then compose(composite + 8) = 2 calls.
+    assert composite.compose.call_count == 2
+    first = composite.compose.call_args_list[0].args[0]
+    second = composite.compose.call_args_list[1].args[0]
+    assert len(first) == 32
+    assert second[0] is composite and len(second) == 1 + 8
+
+
+# --- cache-hit validation (self-healing) --------------------------------------
+
+
+def test_legacy_multishard_csv_hit_is_rebuilt_to_composite() -> None:
+    """A pre-compose cache (multiple raw csv shards, no composite) must
+    not be served as a stream: the hit is invalidated, the stale blobs
+    are deleted, and the export+compose reruns → single 302 URL."""
+    legacy = [
+        _blob("sql_dumps/h/csv/rev_000.csv"),
+        _blob("sql_dumps/h/csv/rev_001.csv"),
+    ]
+    fresh = _blob("sql_dumps/h/csv/rev_000.csv", "https://fresh-shard")
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [
+        legacy,     # pre-check (ro): invalid hit (no composite)
+        legacy,     # re-list (rw) for the clear
+        [fresh],    # post-export refresh
+        [],         # GC sweep
+    ]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+    factory, made = _distinct_blob_factory()
+    bucket_obj.blob.side_effect = factory
+
+    urls = _run(backend, fmt="csv")
+
+    for b in legacy:
+        assert b.delete.called            # stale cache cleared
+    assert backend.client.query.call_count == 2   # re-exported
+    composite = next(n for n in made if n.endswith(".composed.csv"))
+    assert urls == [f"url:{composite}"]   # single URL again
+
+
+def test_lone_raw_csv_shard_hit_is_rebuilt() -> None:
+    """One raw (non-composed) csv shard = a run that died between export
+    and compose; it is header-less, so serving it would drop the header.
+    The hit is invalidated and rebuilt."""
+    raw = _blob("sql_dumps/h/csv/rev_000.csv")
+    fresh = _blob("sql_dumps/h/csv/rev_000.csv", "https://fresh-shard")
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[raw], [raw], [fresh], []]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+    factory, made = _distinct_blob_factory()
+    bucket_obj.blob.side_effect = factory
+
+    urls = _run(backend, fmt="csv")
+
+    assert raw.delete.called
+    composite = next(n for n in made if n.endswith(".composed.csv"))
+    assert urls == [f"url:{composite}"]
+
+
+def test_ndjson_single_shard_hit_is_valid() -> None:
+    """ndjson needs no header member, so a genuine single shard is a
+    perfectly good hit — no rebuild, no BigQuery jobs."""
+    blob = _blob("sql_dumps/h/ndjson/rev_000.json", "https://cached")
+    backend, _ = _engine_with_storage([blob])
+
+    urls = _run(backend, fmt="ndjson")
+
+    assert urls == ["https://cached"]
+    assert backend.client.query.call_count == 0
+
+
+def test_ndjson_multishard_hit_is_rebuilt() -> None:
+    """Multiple ndjson blobs on a hit (legacy cache) → invalidated and
+    recomposed into one URL."""
+    legacy = [
+        _blob("sql_dumps/h/ndjson/rev_000.json"),
+        _blob("sql_dumps/h/ndjson/rev_001.json"),
+    ]
+    fresh = [
+        _blob("sql_dumps/h/ndjson/rev_000.json"),
+        _blob("sql_dumps/h/ndjson/rev_001.json"),
+    ]
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [legacy, legacy, fresh, []]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+    factory, made = _distinct_blob_factory()
+    bucket_obj.blob.side_effect = factory
+
+    urls = _run(backend, fmt="ndjson")
+
+    for b in legacy:
+        assert b.delete.called
+    composite = next(n for n in made if n.endswith(".composed.json"))
+    assert urls == [f"url:{composite}"]
 
 
 # --- guards & error mapping --------------------------------------------------
@@ -470,6 +674,33 @@ def test_missing_table_raises_not_found() -> None:
         _run(backend)
 
 
+def test_export_job_too_large_maps_to_413() -> None:
+    """A ">1 GB single URI" failure raised by the export job surfaces as
+    413, not a generic 500."""
+    backend, storage_client = _engine_with_storage([])
+    storage_client.bucket.return_value.list_blobs.side_effect = [[]]
+    failing = MagicMock()
+    failing.result.side_effect = RuntimeError(
+        "Cannot export more than 1 GB to a single URI; use the wildcard"
+    )
+    backend.client.query.side_effect = [_dry_job(), failing]
+
+    with pytest.raises(PayloadTooLargeError, match="exceeds 1 GB"):
+        _run(backend, fmt="parquet")
+
+
+def test_export_job_failure_maps_to_server_error() -> None:
+    """Any other export failure is a 500 carrying the upstream message."""
+    backend, storage_client = _engine_with_storage([])
+    storage_client.bucket.return_value.list_blobs.side_effect = [[]]
+    failing = MagicMock()
+    failing.result.side_effect = RuntimeError("quota exceeded")
+    backend.client.query.side_effect = [_dry_job(), failing]
+
+    with pytest.raises(ServerError, match="quota exceeded"):
+        _run(backend)
+
+
 def test_dry_run_failure_maps_to_validation_error() -> None:
     """SQL that doesn't compile against the real schema fails the RO dry
     run → clean 400, before any RW/export work."""
@@ -482,21 +713,22 @@ def test_dry_run_failure_maps_to_validation_error() -> None:
 
 def test_zero_table_sql_exports_without_get_table() -> None:
     """`SELECT 1`-style queries reference no tables: no `get_table`
-    calls, stable empty-pairs rev, export still runs."""
-    new_blob = _blob("s_000.csv", "https://fresh")
+    calls, stable empty-pairs rev, export still runs. (parquet → no
+    compose, so the single shard's URL comes straight back.)"""
+    new_blob = _blob("s_000.parquet", "https://fresh")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
     backend.client.query.side_effect = [_dry_job(), _export_job()]
 
-    urls = _run(backend, sql="SELECT 1", resource_ids=[])
+    urls = _run(backend, sql="SELECT 1", resource_ids=[], fmt="parquet")
 
     assert urls == ["https://fresh"]
     assert backend.client.get_table.call_count == 0
 
 
 # =============================================================================
-# Endpoint: GET /datastore/dump/sql
+# Endpoint: GET /datastore/dump/query
 # =============================================================================
 
 
@@ -527,19 +759,6 @@ def _patch_dump_sql(urls_or_exc: list[str] | Exception):
         return urls_or_exc
 
     return patch.object(BigQueryBackend, "dump_sql", fake), calls
-
-
-def test_single_shard_redirects(client: TestClient) -> None:
-    url = "https://storage.googleapis.com/bkt/sql_dumps/x.csv?Sig=1"
-    patcher, _ = _patch_dump_sql([url])
-    with patcher:
-        response = client.get(
-            DUMP_SQL_URL,
-            params={"sql": "SELECT 1 LIMIT 10", "format": "csv"},
-            follow_redirects=False,
-        )
-    assert response.status_code == 302
-    assert response.headers["location"] == url
 
 
 def test_forwards_sql_and_names_verbatim(
@@ -621,10 +840,10 @@ def test_bogus_format_rejected(client: TestClient) -> None:
 
 
 def test_missing_sql_names_the_field(client: TestClient) -> None:
-    """`/datastore/dump/sql` resolves to the SQL route (declared before
-    `/{resource_id}`, so `sql` is a reserved resource name) — a missing
+    """`/datastore/dump/query` resolves to the SQL route (declared before
+    `/{resource_id}`, so `query` is a reserved resource name) — a missing
     `sql` param is a validation error on this endpoint, not a 404 dump
-    of a table called 'sql'."""
+    of a table called 'query'."""
     response = client.get(DUMP_SQL_URL)
     assert response.status_code == 400
     body = response.json()
@@ -632,48 +851,35 @@ def test_missing_sql_names_the_field(client: TestClient) -> None:
     assert "sql" in body["error"]["fields"]
 
 
-def test_multi_shard_csv_streams_one_file(client: TestClient) -> None:
-    """N shard URLs → one streamed CSV body with the header deduped and
-    a `query_<hash8>.csv` attachment filename."""
-    shards = {
-        "url-1": b"c1,c2\na,1\n",
-        "url-2": b"c1,c2\nb,2\n",
-    }
-    patcher, _ = _patch_dump_sql(list(shards.keys()))
-    sql = "SELECT 1 LIMIT 5"
-    with patcher, _patch_httpx_stream(shards):
-        response = client.get(
-            DUMP_SQL_URL,
-            params={"sql": sql, "format": "csv"},
-            follow_redirects=False,
-        )
+def test_every_single_file_format_redirects(client: TestClient) -> None:
+    """Composed to one object by the engine → always a 302; the pod
+    never touches the bytes for any format."""
+    for fmt in ("csv", "gzip", "ndjson", "parquet"):
+        patcher, _ = _patch_dump_sql([f"https://signed/one.{fmt}"])
+        with patcher:
+            response = client.get(
+                DUMP_SQL_URL,
+                params={"sql": "SELECT 1 LIMIT 5", "format": fmt},
+                follow_redirects=False,
+            )
+        assert response.status_code == 302, fmt
+
+
+def test_multi_file_parquet_returns_url_list(client: TestClient) -> None:
+    """A sharded parquet export is returned as a JSON list of signed
+    URLs (readers open the files as one dataset) — not a 413."""
+    urls = ["https://signed/p0.parquet", "https://signed/p1.parquet"]
+    patcher, _ = _patch_dump_sql(urls)
+    with patcher:
+        response = client.get(DUMP_SQL_URL, params={
+            "sql": "SELECT 1 LIMIT 5", "format": "parquet",
+        })
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/csv")
-    qhash8 = hashlib.sha256(sql.encode()).hexdigest()[:8]
-    assert response.headers["content-disposition"] == (
-        f'attachment; filename="query_{qhash8}.csv"'
-    )
-    assert response.text.splitlines() == ["c1,c2", "a,1", "b,2"]
+    body = response.json()
+    assert body == {"format": "parquet", "count": 2, "files": urls}
 
 
-def test_multi_shard_ndjson_streams_one_file(client: TestClient) -> None:
-    shards = {
-        "url-1": b'{"id":1}\n',
-        "url-2": b'{"id":2}\n',
-    }
-    patcher, _ = _patch_dump_sql(list(shards.keys()))
-    with patcher, _patch_httpx_stream(shards):
-        response = client.get(
-            DUMP_SQL_URL,
-            params={"sql": "SELECT 1 LIMIT 5", "format": "ndjson"},
-            follow_redirects=False,
-        )
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/x-ndjson")
-    assert response.text == '{"id":1}\n{"id":2}\n'
-
-
-def test_parquet_too_large_returns_413(client: TestClient) -> None:
+def test_payload_too_large_error_maps_to_413(client: TestClient) -> None:
     patcher, _ = _patch_dump_sql(
         PayloadTooLargeError("exported as multiple parquet shards"),
     )

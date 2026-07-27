@@ -143,7 +143,8 @@ class DatastoreBackend(ABC):
         function_names: list[str],
     ) -> list[str]:
         """Export the result of a vetted SELECT as `fmt`; return signed
-        URLs (one per shard).
+        URLs — normally one (engines may merge shards into a single
+        object), more only for formats that cannot be merged.
 
         `resource_ids` / `function_names` are the names already parsed
         (and authorized / allow-listed) by the schema + service layers —

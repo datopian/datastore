@@ -331,10 +331,10 @@ def test_each_table_authorized_once_for_joins(
     assert fake_ckan.authorize_calls - before == 2
 
 
-# 8. Download param moved to /datastore/dump/sql ----------------------------
+# 8. Download param moved to /datastore/dump/query --------------------------
 
 def test_download_param_no_longer_accepted(client: TestClient) -> None:
-    """SQL downloads live at `GET /datastore/dump/sql?sql=&format=` now;
+    """SQL downloads live at `GET /datastore/dump/query?sql=&format=` now;
     `extra="forbid"` rejects the retired `download` param here."""
     response = client.get(SQL_URL, params={
         "sql": "SELECT 1 LIMIT 10", "download": "csv",

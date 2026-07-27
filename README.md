@@ -31,7 +31,7 @@ Copy [.env.example](.env.example) and fill it in. The essentials:
 | `AUTH_TYPE` | `ckan` | Auth provider: `ckan` · `jwt` · `anonymous` |
 | `CKAN_URL` | — | CKAN base URL (required when `AUTH_TYPE=ckan`) |
 | `BIGQUERY_PROJECT` / `BIGQUERY_DATASET` | — | Required when `DATASTORE_ENGINE=bigquery` |
-| `BIGQUERY_EXPORT_BUCKET` | — | GCS bucket for downloads (`/datastore/dump/{resource_id}`, `/datastore/dump/sql`) |
+| `BIGQUERY_EXPORT_BUCKET` | — | GCS bucket for downloads (`/datastore/dump/{resource_id}`, `/datastore/dump/query`) |
 | `REDIS_URL` | — | Cache backend; empty → in-process cache |
 
 **Note on the export bucket:** configure a ~24h object-lifecycle rule on
