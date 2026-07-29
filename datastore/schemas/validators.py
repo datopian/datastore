@@ -326,9 +326,9 @@ def parse_sql_references(sql: str, *, dialect: str = "postgres") -> tuple[list[s
 
 
 def parse_sql_pagination(
-    sql: str, *, dialect: str = "postgres",
-) -> tuple[int, int]:
-    """Extract `(limit, offset)` from a SELECT. LIMIT is required.
+    sql: str, *, dialect: str = "postgres", require_limit: bool = True,
+) -> tuple[int | None, int]:
+    """Extract `(limit, offset)` from a SELECT.
 
     `datastore_search_sql` lets callers ship raw SQL but the API still
     wants page metadata + links — so we parse the LIMIT/OFFSET out of
@@ -337,6 +337,12 @@ def parse_sql_pagination(
     raises `ValueError`; callers should be explicit so the server can
     paginate properly and so an unbounded SELECT can't lock streaming
     open.
+
+    `require_limit=False` (download mode — the result is exported as a
+    file, not streamed as a page) allows the LIMIT to be absent, in
+    which case `limit` comes back as `None` and the full result set is
+    meant. OFFSET without LIMIT is rejected either way — BigQuery
+    can't execute a bare OFFSET, so fail fast with a clean message.
 
     OFFSET defaults to 0 when absent. Non-integer LIMIT/OFFSET
     expressions (e.g. `LIMIT @x`) raise too — pagination needs a
@@ -351,20 +357,27 @@ def parse_sql_pagination(
         raise ValueError(f"could not parse SQL: {e}") from e
 
     limit_node = tree.args.get("limit")
+    limit: int | None = None
     if limit_node is None:
-        raise ValueError(
-            "SQL must include a LIMIT clause (e.g. 'LIMIT 100'); "
-            "an explicit page size is required for pagination links "
-            "and to prevent unbounded SELECTs"
+        if require_limit:
+            raise ValueError(
+                "SQL must include a LIMIT clause (e.g. 'LIMIT 100'); "
+                "an explicit page size is required for pagination links "
+                "and to prevent unbounded SELECTs"
+            )
+        if tree.args.get("offset") is not None:
+            raise ValueError("OFFSET without LIMIT is not supported")
+    else:
+        limit_expr = (
+            limit_node.expression if isinstance(limit_node, exp.Limit) else None
         )
-    limit_expr = limit_node.expression if isinstance(limit_node, exp.Limit) else None
-    if not isinstance(limit_expr, exp.Literal) or not limit_expr.is_int:
-        raise ValueError(
-            "LIMIT must be a constant integer literal"
-        )
-    limit = int(limit_expr.this)
-    if limit < 0:
-        raise ValueError("LIMIT must be >= 0")
+        if not isinstance(limit_expr, exp.Literal) or not limit_expr.is_int:
+            raise ValueError(
+                "LIMIT must be a constant integer literal"
+            )
+        limit = int(limit_expr.this)
+        if limit < 0:
+            raise ValueError("LIMIT must be >= 0")
 
     offset = 0
     offset_node = tree.args.get("offset")

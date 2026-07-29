@@ -18,9 +18,17 @@ import json
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
+import pytest
 from datastore.core.config import Config
-from datastore.services.read import _build_pagination_links, search_datastore
+from datastore.core.exceptions import ValidationError
+from datastore.infrastructure.engines.bigquery import BigQueryBackend
+from datastore.services.read import (
+    _build_pagination_links,
+    dump_sql_datastore,
+    search_datastore,
+)
 
 
 def _ctx() -> SimpleNamespace:
@@ -302,3 +310,56 @@ def test_links_prev_clamps_to_zero_on_partial_first_page() -> None:
         "/path", limit=50, offset=20, total=100,
     )
     assert "offset=0" in links["prev"]
+
+
+# --- dump_sql_datastore ----------------------------------------------------
+
+
+def test_dump_sql_service_rejects_disallowed_functions() -> None:
+    """The same allow-list gate as `search_sql_datastore` runs before
+    any engine work in download mode."""
+    with pytest.raises(ValidationError, match="pg_read_file"):
+        asyncio.run(dump_sql_datastore(_ctx(), {
+            "sql": "SELECT pg_read_file('/x') LIMIT 1",
+            "fmt": "csv",
+            "resource_ids": [],
+            "function_names": ["pg_read_file"],
+        }))
+
+
+def test_dump_sql_service_forwards_args_and_returns_urls() -> None:
+    """No LIMIT clamp, no reshaping — the service forwards the parsed
+    SQL facts to the engine and returns its signed URLs as-is."""
+    captured: dict[str, Any] = {}
+
+    async def fake(
+        self: BigQueryBackend,
+        sql: str,
+        fmt: str,
+        *,
+        resource_ids: list[str],
+        function_names: list[str],
+    ) -> list[str]:
+        captured.update(
+            sql=sql,
+            fmt=fmt,
+            resource_ids=resource_ids,
+            function_names=function_names,
+        )
+        return ["https://signed/1"]
+
+    with patch.object(BigQueryBackend, "dump_sql", fake):
+        urls = asyncio.run(dump_sql_datastore(_ctx(), {
+            "sql": "SELECT * FROM r1 LIMIT 50000",
+            "fmt": "ndjson",
+            "resource_ids": ["r1"],
+            "function_names": ["count"],
+        }))
+
+    assert urls == ["https://signed/1"]
+    assert captured == {
+        "sql": "SELECT * FROM r1 LIMIT 50000",
+        "fmt": "ndjson",
+        "resource_ids": ["r1"],
+        "function_names": ["count"],
+    }

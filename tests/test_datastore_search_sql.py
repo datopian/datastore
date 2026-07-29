@@ -21,7 +21,10 @@ belong with the real BigQuery backend.
 from __future__ import annotations
 
 import pytest
-from datastore.schemas.validators import parse_sql_references
+from datastore.schemas.validators import (
+    parse_sql_pagination,
+    parse_sql_references,
+)
 from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
@@ -326,3 +329,40 @@ def test_each_table_authorized_once_for_joins(
     })
     assert response.status_code == 200
     assert fake_ckan.authorize_calls - before == 2
+
+
+# 8. Download param moved to /datastore/dump/query --------------------------
+
+def test_download_param_no_longer_accepted(client: TestClient) -> None:
+    """SQL downloads live at `GET /datastore/dump/query?sql=&format=` now;
+    `extra="forbid"` rejects the retired `download` param here."""
+    response = client.get(SQL_URL, params={
+        "sql": "SELECT 1 LIMIT 10", "download": "csv",
+    })
+    assert response.status_code == 400
+    assert response.json()["error"]["__type"] == "Validation Error"
+
+
+# 9. parse_sql_pagination (unit) ---------------------------------------------
+
+
+def test_parse_sql_pagination_requires_limit_by_default() -> None:
+    with pytest.raises(ValueError, match="LIMIT"):
+        parse_sql_pagination("SELECT 1")
+
+
+def test_parse_sql_pagination_optional_limit_absent() -> None:
+    assert parse_sql_pagination("SELECT 1", require_limit=False) == (None, 0)
+
+
+def test_parse_sql_pagination_optional_limit_present() -> None:
+    """A LIMIT/OFFSET present in the SQL is honored as written even when
+    not required."""
+    assert parse_sql_pagination(
+        "SELECT 1 LIMIT 5 OFFSET 2", require_limit=False,
+    ) == (5, 2)
+
+
+def test_parse_sql_pagination_offset_without_limit_rejected() -> None:
+    with pytest.raises(ValueError, match="OFFSET without LIMIT"):
+        parse_sql_pagination("SELECT 1 OFFSET 10", require_limit=False)

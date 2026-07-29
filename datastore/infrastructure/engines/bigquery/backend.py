@@ -16,6 +16,10 @@ File layout (top to bottom):
      build on those two.
   4. CKAN action methods (`create`, `upsert`, `search`, `search_sql`,
      `delete`, `info`, `get_columns`, `healthcheck`).
+
+Downloads (`dump` / `dump_sql` — the cache → export → compose → sign
+pipeline) live in [export.py](export.py); the methods here are one-line
+delegates into that module.
 """
 
 from __future__ import annotations
@@ -27,7 +31,6 @@ from typing import Any
 from datastore.core.config import Config
 from datastore.core.exceptions import (
     NotFoundError,
-    PayloadTooLargeError,
     ServerError,
     ValidationError,
 )
@@ -37,6 +40,7 @@ from datastore.infrastructure.engines.base import (
     SearchResult,
     WriteResult,
 )
+from datastore.infrastructure.engines.bigquery import export as bq_export
 from datastore.infrastructure.engines.bigquery.lib import (
     PK_CONFLICT_SENTINEL,
     SYSTEM_COLUMN_NAMES,
@@ -45,7 +49,6 @@ from datastore.infrastructure.engines.bigquery.lib import (
     default_order_by,
     delete_sql,
     drop_columns_sql,
-    format_select_column,
     insert_guarded_sql,
     insert_sql,
     merge_sql,
@@ -82,6 +85,9 @@ class BigQueryBackend(DatastoreBackend):
         self.config = config
         self.client: Any = None
         self._health: tuple[float, bool] | None = None
+        # In-flight fire-and-forget cleanup tasks (compose part deletion,
+        # revision GC) — tracked so tests can await them deterministically.
+        self._cleanup_tasks: set[Any] = set()
 
     def initialize(self) -> None:
         """Build the BigQuery client when project + dataset are configured.
@@ -937,198 +943,28 @@ class BigQueryBackend(DatastoreBackend):
             return 0
         return int(rows[0]["n"])
 
+    # ----- downloads (pipeline lives in bigquery/export.py) ---------------
+
     async def dump(self, resource_id: str, fmt: str) -> list[str]:
-        """Submit `EXPORT DATA`; poll non-blockingly; return signed URLs.
+        """Whole-table download → signed URL(s). See `export.py`."""
+        return await bq_export.dump(self, resource_id, fmt)
 
-        - All formats use a wildcard URI because BigQuery SQL
-          `EXPORT DATA` requires one; Parquet must still produce one
-          shard because parquet shards cannot be byte-concatenated.
-        - Cache key = `table.modified`; unchanged tables skip the extract.
-        - Older revisions are GC'd on cache miss.
-        - All BQ + GCS calls are offloaded via `asyncio.to_thread`; the
-          poll loop releases the worker between `job.reload` calls.
-        """
-        import asyncio
-        from datetime import timedelta
-        from uuid import uuid4
-
-        if self.client is None:
-            return []
-
-        bucket = (
-            getattr(self.config, "BIGQUERY_EXPORT_BUCKET", "") or ""
-        ).strip()
-        if not bucket:
-            raise ServerError(
-                "BIGQUERY_EXPORT_BUCKET is not configured — "
-                "/datastore/dump cannot run without an export bucket."
-            )
-
-        from google.cloud import bigquery
-
-        # Clients: ro for reads (BQ get_table, GCS list); rw for the
-        # rest (BQ EXPORT DATA writes shards under its identity; GCS
-        # delete + sign). One bucket handle per client.
-        rw_bq = self._build_bq_client("rw")
-        ro_gcs = self._build_storage_client("ro").bucket(bucket)
-        rw_gcs = self._build_storage_client("rw").bucket(bucket)
-
-        table_ref = bigquery.TableReference.from_string(
-            f"{self.config.BIGQUERY_PROJECT}"
-            f".{self.config.BIGQUERY_DATASET}.{resource_id}"
+    async def dump_sql(
+        self,
+        sql: str,
+        fmt: str,
+        *,
+        resource_ids: list[str],
+        function_names: list[str],
+    ) -> list[str]:
+        """SQL-result download → signed URL(s). See `export.py`."""
+        return await bq_export.dump_sql(
+            self,
+            sql,
+            fmt,
+            resource_ids=resource_ids,
+            function_names=function_names,
         )
-        from google.api_core.exceptions import NotFound
-
-        try:
-            table = await asyncio.to_thread(self.client.get_table, table_ref)
-        except NotFound as e:
-            raise NotFoundError(
-                f"resource {resource_id!r} is not declared; nothing to dump"
-            ) from e
-        except Exception as e:
-            raise ServerError(
-                f"BigQuery get_table failed for resource {resource_id!r}: {e}"
-            ) from e
-
-        rev = (
-            f"{int(table.modified.timestamp() * 1_000_000):x}"
-            if table.modified is not None
-            else uuid4().hex[:12]
-        )
-        ext = _FMT[fmt]["ext"]
-        prefix = f"dumps/{resource_id}/{fmt}/{rev}"
-        uri = f"gs://{bucket}/{prefix}_*.{ext}"
-
-        async def _list(b: Any, p: str) -> list[Any]:
-            return sorted(
-                await asyncio.to_thread(lambda: list(b.list_blobs(prefix=p))),
-                key=lambda x: x.name,
-            )
-
-        blobs = await _list(ro_gcs, prefix)
-
-        if not blobs:
-            # `header=true` is the documented default for CSV but some
-            # client versions / project configs treat it as false; be
-            # explicit so the column names always land in shard 0.
-            # NDJSON / Parquet ignore the option. `format=gzip` is CSV
-            # with BigQuery-side GZIP compression.
-            extra_opts = ", header=true" if fmt in {"csv", "gzip"} else ""
-            if fmt == "gzip":
-                extra_opts += ", compression='GZIP'"
-            sql = (
-                f"EXPORT DATA OPTIONS("
-                f"uri='{uri}', format='{_FMT[fmt]['bq']}', overwrite=true"
-                f"{extra_opts}"
-                ") AS "
-                f"SELECT {_build_export_select(table.schema, fmt)} FROM "
-                f"`{table_ref.project}.{table_ref.dataset_id}.{table_ref.table_id}` "
-                f"ORDER BY `_id`"
-            )
-            try:
-                job = await asyncio.to_thread(rw_bq.query, sql)
-            except Exception as e:
-                raise ServerError(
-                    f"BigQuery EXPORT DATA submit failed for resource "
-                    f"{resource_id!r}: {e}"
-                ) from e
-
-            while True:
-                await asyncio.to_thread(job.reload)
-                if job.state == "DONE":
-                    break
-                await asyncio.sleep(_DUMP_POLL_INTERVAL_SECONDS)
-
-            if job.error_result:
-                err_msg = (job.error_result or {}).get("message", "")
-                if _is_export_too_large(RuntimeError(err_msg)):
-                    raise PayloadTooLargeError(
-                        f"resource {resource_id!r} exceeds 1 GB after export "
-                        f"as {fmt!r}; single-file download isn't possible. "
-                        "Try `format=csv` or `format=ndjson` for sharded "
-                        "multi-file downloads instead."
-                    )
-                raise ServerError(
-                    f"BigQuery EXPORT DATA failed for resource "
-                    f"{resource_id!r}: {err_msg}"
-                )
-
-            log.info(
-                "BigQuery dump cache MISS: resource=%s format=%s rev=%s",
-                resource_id, fmt, rev,
-            )
-            blobs = await _list(rw_gcs, prefix)
-            if not blobs:
-                raise ServerError(
-                    f"BigQuery EXPORT DATA wrote no shards for resource "
-                    f"{resource_id!r}; check job logs."
-                )
-
-            # GC stale revisions under dumps/<rid>/<fmt>/. Best-effort.
-            def _gc() -> int:
-                deleted = 0
-                for old in rw_gcs.list_blobs(prefix=f"dumps/{resource_id}/{fmt}/"):
-                    if old.name.startswith(prefix):
-                        continue
-                    try:
-                        old.delete()
-                        deleted += 1
-                    except Exception as gc_err:  # noqa: BLE001
-                        log.warning("dump GC: failed to delete %s: %s", old.name, gc_err)
-                return deleted
-
-            try:
-                gc_count = await asyncio.to_thread(_gc)
-                if gc_count:
-                    log.info(
-                        "BigQuery dump GC: resource=%s format=%s removed=%d",
-                        resource_id, fmt, gc_count,
-                    )
-            except Exception as gc_err:  # noqa: BLE001
-                log.warning(
-                    "BigQuery dump GC failed for resource=%s format=%s: %s",
-                    resource_id, fmt, gc_err,
-                )
-        else:
-            log.info(
-                "BigQuery dump cache HIT: resource=%s format=%s rev=%s shards=%d",
-                resource_id, fmt, rev, len(blobs),
-            )
-            # Re-fetch via rw so the blobs we sign carry rw credentials
-            # (signing needs IAM signBlob under workload identity).
-            blobs = await _list(rw_gcs, prefix)
-
-        if fmt == "parquet" and len(blobs) > 1:
-            raise PayloadTooLargeError(
-                f"resource {resource_id!r} exported as multiple parquet "
-                "shards; single-file download isn't possible. Try "
-                "`format=csv` or `format=ndjson` for sharded multi-file "
-                "downloads instead."
-            )
-
-        expiry = timedelta(
-            hours=getattr(self.config, "BIGQUERY_EXPORT_URL_EXPIRY_HOURS", 1),
-        )
-
-        def _sign_all() -> list[str]:
-            out: list[str] = []
-            for i, blob in enumerate(blobs):
-                filename = (
-                    f"{resource_id}.{ext}"
-                    if len(blobs) == 1
-                    else f"{resource_id}_{i + 1:02d}.{ext}"
-                )
-                out.append(
-                    blob.generate_signed_url(
-                        version="v4",
-                        expiration=expiry,
-                        method="GET",
-                        response_disposition=f'attachment; filename="{filename}"',
-                    )
-                )
-            return out
-
-        return await asyncio.to_thread(_sign_all)
 
     def _build_bq_client(self, mode: str) -> Any:
         """Construct an on-demand BigQuery client for `mode` ("ro" / "rw").
@@ -1322,59 +1158,3 @@ _FRIENDLY_BQ_TYPE: dict[str, str] = {
     "json":       "object",
     "bytes":      "string",
 }
-
-
-# --- EXPORT DATA helpers -----------------------------------------------------
-
-# Seconds between BigQuery job-status polls during a dump. Each poll
-# is a quick metadata HTTP call (~tens of ms); between polls the worker
-# thread is released so other requests can run. Bumping this down makes
-# small jobs complete faster, bumping it up means fewer reload calls
-# per job — 1 s is a safe middle.
-_DUMP_POLL_INTERVAL_SECONDS = 1.0
-
-# Per-format filename extension + BigQuery EXPORT DATA `format` value.
-# BigQuery writes newline-delimited JSON to `.json` files; we keep that
-# extension on the GCS object so clients see the file type they expect.
-_FMT: dict[str, dict[str, str]] = {
-    "csv":     {"ext": "csv",     "bq": "CSV"},
-    "gzip":    {"ext": "csv.gz",  "bq": "CSV"},
-    "ndjson":  {"ext": "json",    "bq": "JSON"},
-    "parquet": {"ext": "parquet", "bq": "PARQUET"},
-}
-
-
-def _build_export_select(schema: Any, fmt: str) -> str:
-    """SELECT column list for EXPORT DATA.
-
-    Parquet preserves native logical types, but BigQuery cannot export
-    native JSON columns to Parquet. Keep `*` for the common no-JSON path;
-    otherwise cast only JSON columns to strings. For CSV / NDJSON, every
-    column goes through `format_select_column` (in `bigquery/lib.py`) —
-    the same helper `datastore_search` uses — so a given column renders
-    identically in a dump and in a search response.
-    """
-    if fmt == "parquet":
-        fields = list(schema)
-        if not any((f.field_type or "").upper() == "JSON" for f in fields):
-            return "*"
-        return ", ".join(
-            f"TO_JSON_STRING(`{f.name}`) AS `{f.name}`"
-            if (f.field_type or "").upper() == "JSON"
-            else f"`{f.name}`"
-            for f in fields
-        )
-    return ", ".join(
-        format_select_column(f.name, f.field_type) for f in schema
-    )
-
-
-def _is_export_too_large(exc: BaseException) -> bool:
-    """Does this BigQuery error look like ">1 GB single-file rejection"?
-
-    BigQuery's exact wording shifts across SDK versions; both phrasings
-    we've seen contain `single URI` or `wildcard`. False negatives just
-    surface as a generic 500 instead of 413 — annoying but not silent.
-    """
-    msg = str(exc).lower()
-    return "single uri" in msg or "wildcard" in msg

@@ -12,10 +12,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
-from fastapi.testclient import TestClient
-
 from datastore.core.config import get_config
 from datastore.main import create_app
+from fastapi.testclient import TestClient
 
 
 @contextmanager

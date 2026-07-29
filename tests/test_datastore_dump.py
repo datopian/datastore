@@ -1,29 +1,28 @@
 """Tests for `GET /datastore/dump/{resource_id}`.
 
-Engine returns a list of signed-URL shards:
-  - len == 1 → endpoint 302s to the URL (no server bandwidth).
-  - len > 1  → endpoint stream-concats shards from GCS via async httpx.
+The engine returns one signed URL (csv / gzip / ndjson shards are
+composed into a single object), so every format 302s. Only a sharded
+parquet export comes back as several URLs, which the endpoint fetches
+and streams as one zip.
 
-We patch `BigQueryBackend.dump` to control how many "shards" the
-engine reports, and patch `httpx.AsyncClient` for the stream-concat
-tests so they don't try to fetch real URLs.
+We patch `BigQueryBackend.dump` to control what the engine reports, and
+`app.state.http` to serve the signed URLs from memory.
 """
 
 from __future__ import annotations
 
-import gzip
-from collections.abc import AsyncIterator
+import io
+import zipfile
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-from datastore.core.exceptions import PayloadTooLargeError, ServerError
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
-from datastore.infrastructure.engines.bigquery.backend import (
-    _build_export_select,
+from datastore.infrastructure.engines.bigquery.export import (
+    _export_select_list,
     _is_export_too_large,
 )
-from datastore.services.dump import _skip_first_line
 from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
@@ -38,6 +37,17 @@ def _patch_dump(urls_or_exc: list[str] | Exception):
             raise urls_or_exc
         return urls_or_exc
     return patch.object(BigQueryBackend, "dump", fake)
+
+
+def stub_signed_urls(client: TestClient, parts: dict[str, bytes]) -> None:
+    """Serve `parts` (url → body) from `app.state.http`, the client the
+    zip writer fetches the signed URLs with."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=parts[str(request.url)])
+
+    client.app.state.http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    )
 
 
 # --- single shard: 302 redirect -------------------------------------------
@@ -63,92 +73,56 @@ def test_each_format_supports_single_shard_redirect(
     assert response.status_code == 302
 
 
-# --- multi-shard: stream-concat -------------------------------------------
+# --- several shards: one streamed zip -------------------------------------
 
 
-def test_multi_shard_csv_stream_concat_dedups_header(
-    client: TestClient,
-) -> None:
-    """Header from shard 1 only; shards 2..N have their first line
-    dropped before bytes hit the client."""
-    shards = {
-        "url-1": b"col1,col2\na,1\nb,2\n",
-        "url-2": b"col1,col2\nc,3\nd,4\n",
-        "url-3": b"col1,col2\ne,5\n",
+def test_multi_file_parquet_streams_one_zip(client: TestClient) -> None:
+    """A sharded parquet export is fetched back and framed into a single
+    zip, so the caller still gets one file from one URL."""
+    parts = {
+        "https://signed/p0.parquet": b"PAR1-first-shard-bytes",
+        "https://signed/p1.parquet": b"PAR1-second-shard-bytes",
     }
+    stub_signed_urls(client, parts)
 
-    with _patch_dump(list(shards.keys())), _patch_httpx_stream(shards):
-        response = client.get(DUMP_URL, follow_redirects=False)
+    with _patch_dump(list(parts)):
+        response = client.get(DUMP_URL, params={"format": "parquet"})
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/csv")
-    assert response.headers["content-disposition"] == (
-        'attachment; filename="balancing_auction_results_2025.csv"'
+    assert response.headers["content-type"] == "application/zip"
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="balancing_auction_results_2025.zip"'
     )
-    # Header once, then all rows in order.
-    assert response.text.splitlines() == [
-        "col1,col2",
-        "a,1", "b,2",
-        "c,3", "d,4",
-        "e,5",
+
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    # `testzip` walks every member and checks its CRC — the framing has
+    # to be right, not merely parseable.
+    assert archive.testzip() is None
+    assert archive.namelist() == [
+        "balancing_auction_results_2025_01.parquet",
+        "balancing_auction_results_2025_02.parquet",
     ]
+    assert [archive.read(n) for n in archive.namelist()] == list(parts.values())
 
 
-def test_multi_shard_ndjson_pure_byte_concat(client: TestClient) -> None:
-    """Each NDJSON shard is self-contained; bytes concatenate cleanly."""
-    shards = {
-        "url-1": b'{"id":1}\n{"id":2}\n',
-        "url-2": b'{"id":3}\n',
-    }
-    with _patch_dump(list(shards.keys())), _patch_httpx_stream(shards):
-        response = client.get(
-            DUMP_URL, params={"format": "ndjson"}, follow_redirects=False,
-        )
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/x-ndjson")
-    assert response.text == (
-        '{"id":1}\n{"id":2}\n'
-        '{"id":3}\n'
-    )
+def test_zip_members_are_stored_not_deflated(client: TestClient) -> None:
+    """Parquet is already compressed — deflating it would cost CPU for
+    no size win, so members go in uncompressed."""
+    body = b"PAR1" + b"x" * 4096
+    parts = {"https://signed/a.parquet": body, "https://signed/b.parquet": body}
+    stub_signed_urls(client, parts)
 
+    with _patch_dump(list(parts)):
+        response = client.get(DUMP_URL, params={"format": "parquet"})
 
-def test_multi_shard_gzip_stream_concat_dedups_header(
-    client: TestClient,
-) -> None:
-    """Gzip CSV shards are decompressed, header-deduped, then emitted
-    as one gzip-compressed CSV file."""
-    shards = {
-        "url-1": gzip.compress(b"col1,col2\na,1\nb,2\n"),
-        "url-2": gzip.compress(b"col1,col2\nc,3\nd,4\n"),
-        "url-3": gzip.compress(b"col1,col2\ne,5\n"),
-    }
-
-    with _patch_dump(list(shards.keys())), _patch_httpx_stream(shards):
-        response = client.get(
-            DUMP_URL, params={"format": "gzip"}, follow_redirects=False,
-        )
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/gzip")
-    assert response.headers["content-disposition"] == (
-        'attachment; filename="balancing_auction_results_2025.csv.gz"'
-    )
-    assert gzip.decompress(response.content).decode().splitlines() == [
-        "col1,col2",
-        "a,1", "b,2",
-        "c,3", "d,4",
-        "e,5",
-    ]
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    for info in archive.infolist():
+        assert info.compress_type == zipfile.ZIP_STORED
+        assert info.compress_size == len(body)
 
 
 # --- error paths ----------------------------------------------------------
-
-
-def test_too_large_parquet_returns_413(client: TestClient) -> None:
-    with _patch_dump(PayloadTooLargeError("exceeds 1 GB after parquet export")):
-        response = client.get(DUMP_URL, params={"format": "parquet"})
-    assert response.status_code == 413
-    assert response.json()["error"]["__type"] == "Payload Too Large"
 
 
 def test_unknown_format_returns_validation_error(client: TestClient) -> None:
@@ -197,7 +171,7 @@ def test_build_export_select_iso_casts_timestamp_and_datetime() -> None:
         _bq_field("delivery_local", "DATETIME"),
         _bq_field("delivery_day", "DATE"),
     ]
-    select = _build_export_select(schema, fmt="csv")
+    select = _export_select_list(schema, fmt="csv")
     assert (
         "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `delivery_start`, 'UTC')"
         in select
@@ -215,7 +189,7 @@ def test_build_export_select_iso_casts_timestamp_and_datetime() -> None:
 
 def test_build_export_select_parquet_returns_star() -> None:
     schema = [_bq_field("delivery_start", "TIMESTAMP")]
-    assert _build_export_select(schema, fmt="parquet") == "*"
+    assert _export_select_list(schema, fmt="parquet") == "*"
 
 
 def test_build_export_select_parquet_casts_json_columns() -> None:
@@ -224,24 +198,10 @@ def test_build_export_select_parquet_casts_json_columns() -> None:
         _bq_field("bidder_metadata", "JSON"),
         _bq_field("delivery_start", "TIMESTAMP"),
     ]
-    assert _build_export_select(schema, fmt="parquet") == (
+    assert _export_select_list(schema, fmt="parquet") == (
         "`id`, TO_JSON_STRING(`bidder_metadata`) AS `bidder_metadata`, "
         "`delivery_start`"
     )
-
-
-def test_build_export_select_gzip_matches_csv_formatting() -> None:
-    schema = [_bq_field("delivery_start", "TIMESTAMP")]
-    assert _build_export_select(schema, fmt="gzip") == _build_export_select(
-        schema, fmt="csv",
-    )
-
-
-def _bq_field(name: str, field_type: str) -> Any:
-    f = MagicMock()
-    f.name = name
-    f.field_type = field_type
-    return f
 
 
 # --- helpers: too-large heuristic -----------------------------------------
@@ -257,125 +217,6 @@ def test_too_large_marker_is_recognised(message: str) -> None:
 
 def test_unrelated_error_is_not_classified_as_too_large() -> None:
     assert _is_export_too_large(RuntimeError("auth failed")) is False
-
-
-# --- helpers: CSV header-skip -------------------------------------------
-
-
-def test_skip_first_line_drops_header_and_forwards_rest() -> None:
-    """`_skip_first_line` strips up to and including the first `\\n`,
-    then byte-forwards everything else unchanged."""
-    import asyncio
-
-    async def chunks() -> AsyncIterator[bytes]:
-        yield b"col1,col2\n"
-        yield b"a,1\n"
-        yield b"b,2\n"
-
-    async def run() -> bytes:
-        out = bytearray()
-        async for chunk in _skip_first_line(chunks()):
-            out.extend(chunk)
-        return bytes(out)
-
-    assert asyncio.run(run()) == b"a,1\nb,2\n"
-
-
-def test_skip_first_line_handles_header_split_across_chunks() -> None:
-    """The newline may not arrive in the first chunk — verify the
-    buffer accumulates until the newline is found."""
-    import asyncio
-
-    async def chunks() -> AsyncIterator[bytes]:
-        yield b"col1,"   # no newline yet
-        yield b"col2\n"
-        yield b"row,1\n"
-
-    async def run() -> bytes:
-        out = bytearray()
-        async for chunk in _skip_first_line(chunks()):
-            out.extend(chunk)
-        return bytes(out)
-
-    assert asyncio.run(run()) == b"row,1\n"
-
-
-# --- engine: placeholder + bucket-missing guards -------------------------
-
-
-def test_dump_polling_releases_event_loop_between_reloads() -> None:
-    """Polling loop should `asyncio.sleep` between `job.reload` calls
-    so other coroutines on the same loop keep running. Verified by
-    interleaving a ticker — if the dump call hogged the loop, the
-    ticker would barely advance during the polls.
-
-    The job is flagged with `error_result` once it transitions to DONE
-    so `dump()` raises immediately after the polling loop, without
-    reaching the post-extract GCS read."""
-    import asyncio
-
-    # `_engine_with_storage` stubs `google.cloud.storage` and gives the
-    # backend a real `table.modified` so the pre-extract cache lookup
-    # (empty here → cache miss → polling branch) doesn't blow up.
-    backend, storage_client = _engine_with_storage([])
-    bucket_obj = storage_client.bucket.return_value
-    # Cache lookup returns no shards → fall through into the extract /
-    # poll branch. The post-extract retry is never reached because the
-    # job ends with an error.
-    bucket_obj.list_blobs.return_value = []
-
-    job = MagicMock()
-    job.state = "PENDING"
-    reload_calls = 0
-
-    def fake_reload() -> None:
-        nonlocal reload_calls
-        reload_calls += 1
-        if reload_calls >= 3:
-            job.state = "DONE"
-            # Flag an error so dump raises right after the loop and
-            # doesn't try to read the GCS shard list.
-            job.error_result = {"message": "test-only error"}
-
-    job.error_result = None
-    job.reload = fake_reload
-    backend.client.query.return_value = job
-
-    # Speed up the test: 50 ms poll interval.
-    with patch(
-        "datastore.infrastructure.engines.bigquery.backend"
-        "._DUMP_POLL_INTERVAL_SECONDS",
-        0.05,
-    ):
-        async def run() -> int:
-            ticks = 0
-
-            async def tick() -> None:
-                nonlocal ticks
-                while True:
-                    await asyncio.sleep(0)
-                    ticks += 1
-
-            ticker = asyncio.create_task(tick())
-            try:
-                with pytest.raises(ServerError, match="test-only error"):
-                    await backend.dump("res-1", "csv")
-            finally:
-                ticker.cancel()
-                try:
-                    await ticker
-                except asyncio.CancelledError:
-                    pass
-            return ticks
-
-        ticks = asyncio.run(run())
-        # 2 sleeps × 50 ms = 100 ms minimum of loop-yielding time;
-        # the ticker should rack up far more iterations than the
-        # number of reload calls if the loop is genuinely free.
-        assert ticks > reload_calls * 10, (
-            f"event loop appears blocked during polling: "
-            f"only {ticks} ticker passes for {reload_calls} reloads"
-        )
 
 
 # --- engine: GCS-backed cache by table.modified --------------------------
@@ -434,34 +275,43 @@ def _engine_with_storage(storage_blobs: list[Any]) -> tuple[BigQueryBackend, Any
     return backend, storage_client
 
 
+def _bq_field(name: str, field_type: str) -> Any:
+    f = MagicMock()
+    f.name = name
+    f.field_type = field_type
+    return f
+
+
 def _fake_blob(name: str, signed_url: str = "https://signed/x") -> Any:
+    import datetime as _dt
+
     blob = MagicMock()
     blob.name = name
     blob.generate_signed_url.return_value = signed_url
+    # A real datetime so the GC age gate can compare it. Fresh by
+    # default → spared; tests wanting it swept set an older value.
+    blob.time_created = _dt.datetime.now(_dt.timezone.utc)
     return blob
 
 
-def test_dump_cache_hit_skips_extract_job() -> None:
-    """When GCS already has shards for this `(rid, fmt, table.modified)`,
-    `dump()` returns signed URLs straight from the cache — no
-    `client.query` call to BigQuery."""
+def _run_dump(backend: BigQueryBackend, resource_id: str, fmt: str) -> list[str]:
+    """Run `dump()` and flush its background cleanup (compose part
+    deletion, revision GC) so delete assertions are deterministic."""
     import asyncio
 
-    blob = _fake_blob("dumps/res-1/csv/<rev>.csv", "https://cached")
-    backend, _ = _engine_with_storage([blob])
+    async def go() -> list[str]:
+        urls = await backend.dump(resource_id, fmt)
+        if backend._cleanup_tasks:
+            await asyncio.gather(*list(backend._cleanup_tasks))
+        return urls
 
-    urls = asyncio.run(backend.dump("res-1", "csv"))
-
-    assert urls == ["https://cached"]
-    # No extract job submitted — that's the whole point of caching.
-    assert backend.client.query.call_count == 0
+    return asyncio.run(go())
 
 
 def test_dump_cache_miss_submits_extract_then_returns_urls() -> None:
-    """First call to `list_blobs` returns empty (cache miss);
-    `dump()` submits the extract, then `list_blobs` returns the
-    written shards on the post-extract retry."""
-    import asyncio
+    """First call to `list_blobs` returns empty (cache miss); `dump()`
+    submits the extract, then the csv shards are composed into ONE object
+    and its single signed URL is returned."""
 
     new_blob = _fake_blob("dumps/res-1/csv/<rev>_000.csv", "https://fresh")
     backend, storage_client = _engine_with_storage([])
@@ -469,62 +319,62 @@ def test_dump_cache_miss_submits_extract_then_returns_urls() -> None:
     # Pre-extract: empty. Post-extract refresh: one shard. GC sweep:
     # same one shard (nothing stale to delete on first dump ever).
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
+    # The composite object's signed URL (csv always composes).
+    bucket_obj.blob.return_value.generate_signed_url.return_value = (
+        "https://composed"
+    )
 
     # Job goes straight to DONE without errors.
-    job = MagicMock()
-    job.state = "DONE"
-    job.error_result = None
+    job = MagicMock()          # `job.result()` returns without raising
     backend.client.query.return_value = job
 
-    urls = asyncio.run(backend.dump("res-1", "csv"))
+    urls = _run_dump(backend, "res-1", "csv")
 
-    assert urls == ["https://fresh"]
+    # csv shards are composed into one object → a single 302 URL.
+    assert urls == ["https://composed"]
+    bucket_obj.blob.return_value.compose.assert_called()
     # Exactly one extract submitted on cache miss.
     assert backend.client.query.call_count == 1
 
 
-def test_dump_gzip_export_uses_csv_with_gzip_compression() -> None:
-    """`format=gzip` is a CSV export with BigQuery-side gzip compression
-    and `.csv.gz` object names."""
-    import asyncio
+def test_dump_gzip_exports_headerless_and_composes() -> None:
+    """`format=gzip` exports header-less GZIP shards under its own cache
+    prefix; the composed object gets one gzip header member in front, so
+    the download is a plain 302 with no compression work in the pod."""
 
     new_blob = _fake_blob("dumps/res-1/gzip/<rev>_000.csv.gz", "https://fresh")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
 
-    job = MagicMock()
-    job.state = "DONE"
-    job.error_result = None
+    job = MagicMock()          # `job.result()` returns without raising
     backend.client.query.return_value = job
 
-    urls = asyncio.run(backend.dump("res-1", "gzip"))
+    _run_dump(backend, "res-1", "gzip")
 
-    assert urls == ["https://fresh"]
     sql = backend.client.query.call_args.args[0]
     assert "format='CSV'" in sql
-    assert "header=true" in sql
     assert "compression='GZIP'" in sql
+    assert "header=false" in sql          # header comes from the composed member
     assert "_*.csv.gz" in sql
+    prefixes = {c.kwargs["prefix"] for c in bucket_obj.list_blobs.call_args_list}
+    assert all(p.startswith("dumps/res-1/gzip/") for p in prefixes)
 
 
 def test_dump_parquet_export_uses_wildcard_uri() -> None:
     """BigQuery SQL EXPORT DATA requires a wildcard URI even for
     formats where this endpoint only accepts a single shard.
     """
-    import asyncio
 
     new_blob = _fake_blob("dumps/res-1/parquet/<rev>_000.parquet", "https://fresh")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
 
-    job = MagicMock()
-    job.state = "DONE"
-    job.error_result = None
+    job = MagicMock()          # `job.result()` returns without raising
     backend.client.query.return_value = job
 
-    urls = asyncio.run(backend.dump("res-1", "parquet"))
+    urls = _run_dump(backend, "res-1", "parquet")
 
     assert urls == ["https://fresh"]
     sql = backend.client.query.call_args.args[0]
@@ -532,85 +382,45 @@ def test_dump_parquet_export_uses_wildcard_uri() -> None:
     assert "_*.parquet" in sql
 
 
-def test_dump_multi_shard_parquet_returns_413() -> None:
-    import asyncio
-
-    blobs = [
-        _fake_blob("dumps/res-1/parquet/<rev>_000.parquet"),
-        _fake_blob("dumps/res-1/parquet/<rev>_001.parquet"),
-    ]
+def test_dump_exports_into_an_attempt_and_publishes_success() -> None:
+    """The whole-table dump uses the same layout as the SQL dump: shards
+    under `<rev>/<attempt>/`, `_SUCCESS` written last."""
+    shard = _fake_blob("dumps/res-1/parquet/<rev>/att1/part_000.parquet", "https://p0")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
-    bucket_obj.list_blobs.side_effect = [[], blobs, blobs]
+    bucket_obj.list_blobs.side_effect = [[], [shard], [shard]]
+    backend.client.query.return_value = MagicMock()
 
-    job = MagicMock()
-    job.state = "DONE"
-    job.error_result = None
-    backend.client.query.return_value = job
+    urls = _run_dump(backend, "res-1", "parquet")
 
-    with pytest.raises(PayloadTooLargeError, match="multiple parquet shards"):
-        asyncio.run(backend.dump("res-1", "parquet"))
+    assert urls == ["https://p0"]
+    # The export URI is scoped to a private attempt dir under the shared
+    # revision prefix: `<rev>/<attempt>/part_*.ext`.
+    uri = backend.client.query.call_args.args[0].split("uri='")[1].split("'")[0]
+    path, _, filename = uri.removeprefix("gs://bkt/").rpartition("/")
+    assert filename == "part_*.parquet"
+    rev, attempt = path.removeprefix("dumps/res-1/parquet/").split("/")
+    assert rev and attempt and rev != attempt
+    # `_SUCCESS` published, and it is the only object created.
+    created = [c.args[0] for c in bucket_obj.blob.call_args_list]
+    assert [n.rsplit("/", 1)[1] for n in created] == ["_SUCCESS"]
 
 
-def test_dump_cache_miss_deletes_older_revisions() -> None:
-    """After a successful extract on cache miss, blobs from any older
-    revision under `dumps/<rid>/<fmt>/` should be deleted to keep
-    storage from growing unbounded across table updates. The current
-    revision's blobs stay."""
-    import asyncio
-    import datetime as dt
-
+def test_dump_ignores_an_attempt_without_success() -> None:
+    """A half-written attempt from a concurrent request is invisible to
+    the whole-table dump too — it re-exports rather than serving it."""
+    inflight = _fake_blob("dumps/res-1/parquet/<rev>/att1/part_000.parquet")
+    fresh = _fake_blob("dumps/res-1/parquet/<rev>/att2/part_000.parquet", "https://ok")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[inflight], [fresh], []]
+    backend.client.query.return_value = MagicMock()
 
-    # Match the rev that backend.dump() computes from table.modified
-    # (`_engine_with_storage` sets it to 2026-01-01 UTC).
-    table_modified = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
-    rev = f"{int(table_modified.timestamp() * 1_000_000):x}"
-    new_blob = _fake_blob(
-        f"dumps/res-1/csv/{rev}_000.csv", "https://fresh"
-    )
-    old_blob_a = _fake_blob("dumps/res-1/csv/oldrev1_000.csv")
-    old_blob_b = _fake_blob("dumps/res-1/csv/oldrev2_000.csv")
+    urls = _run_dump(backend, "res-1", "parquet")
 
-    # Calls in order:
-    #   1) pre-extract cache lookup (prefix=dumps/.../<rev>) → empty
-    #   2) post-extract refresh    (prefix=dumps/.../<rev>) → [new]
-    #   3) GC sweep                (prefix=dumps/res-1/csv/) → [new, old_a, old_b]
-    bucket_obj.list_blobs.side_effect = [
-        [],
-        [new_blob],
-        [new_blob, old_blob_a, old_blob_b],
-    ]
-
-    job = MagicMock()
-    job.state = "DONE"
-    job.error_result = None
-    backend.client.query.return_value = job
-
-    urls = asyncio.run(backend.dump("res-1", "csv"))
-
-    assert urls == ["https://fresh"]
-    # The current revision must not be deleted.
-    assert new_blob.delete.call_count == 0
-    # Both older revisions get cleaned up.
-    assert old_blob_a.delete.call_count == 1
-    assert old_blob_b.delete.call_count == 1
-
-
-def test_dump_cache_hit_does_not_delete_anything() -> None:
-    """A cache hit must not trigger GC — there's no new revision to
-    supersede the existing one."""
-    import asyncio
-
-    cached = _fake_blob("dumps/res-1/csv/<rev>_000.csv", "https://cached")
-    backend, _ = _engine_with_storage([cached])
-
-    urls = asyncio.run(backend.dump("res-1", "csv"))
-
-    assert urls == ["https://cached"]
-    # No extract → no GC.
-    assert cached.delete.call_count == 0
+    assert urls == ["https://ok"]
+    assert backend.client.query.call_count == 1   # exported its own attempt
+    assert inflight.delete.call_count == 0        # never touched
 
 
 def test_dump_cache_key_changes_when_table_modified_advances() -> None:
@@ -627,7 +437,7 @@ def test_dump_cache_key_changes_when_table_modified_advances() -> None:
     # Each dump-on-cache-hit lists twice: ro lookup + rw re-fetch for
     # signing. Both calls must return the same blob.
     table.modified = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
-    first_old = _fake_blob("dumps/res-1/csv/old.csv", "https://old")
+    first_old = _fake_blob("dumps/res-1/csv/old.composed.csv", "https://old")
     bucket_obj.list_blobs.side_effect = [[first_old], [first_old]]
     asyncio.run(backend.dump("res-1", "csv"))
     # Both calls used the same prefix (the cache-hit rev) — take the
@@ -636,7 +446,7 @@ def test_dump_cache_key_changes_when_table_modified_advances() -> None:
 
     # Bump the table; new call hits a different prefix.
     table.modified = dt.datetime(2026, 2, 1, tzinfo=dt.timezone.utc)
-    second_new = _fake_blob("dumps/res-1/csv/new.csv", "https://new")
+    second_new = _fake_blob("dumps/res-1/csv/new.composed.csv", "https://new")
     bucket_obj.list_blobs.side_effect = [[second_new], [second_new]]
     asyncio.run(backend.dump("res-1", "csv"))
     second_prefix = bucket_obj.list_blobs.call_args_list[-2].kwargs["prefix"]
@@ -646,71 +456,4 @@ def test_dump_cache_key_changes_when_table_modified_advances() -> None:
     )
 
 
-def test_dump_returns_empty_list_in_placeholder_mode() -> None:
-    import asyncio
-
-    backend = BigQueryBackend(mode="ro")
-    assert asyncio.run(backend.dump("res-1", "csv")) == []
-
-
-def test_dump_raises_when_export_bucket_unset() -> None:
-    import asyncio
-
-    backend = BigQueryBackend(mode="ro")
-    backend.client = MagicMock()
-    backend.config = MagicMock()
-    backend.config.BIGQUERY_PROJECT = "proj-1"
-    backend.config.BIGQUERY_DATASET = "ds-1"
-    backend.config.BIGQUERY_EXPORT_BUCKET = ""
-
-    with pytest.raises(ServerError, match="BIGQUERY_EXPORT_BUCKET"):
-        asyncio.run(backend.dump("res-1", "csv"))
-
-
 # --- test infrastructure --------------------------------------------------
-
-
-def _patch_httpx_stream(shards: dict[str, bytes]):
-    """Patch `httpx.AsyncClient.stream` so its async context-manager
-    returns a fake `Response` whose `aiter_bytes` walks the bytes for
-    that URL. Lets us drive the stream-concat helpers without hitting
-    the network."""
-
-    def make_resp(data: bytes) -> Any:
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock(return_value=None)
-
-        async def aiter_bytes(chunk_size: int = 64 * 1024):
-            # Walk the fixture bytes in `chunk_size` slices so callers
-            # see real chunk boundaries (matters for the header-skip
-            # path which may span chunks).
-            for i in range(0, len(data), chunk_size):
-                yield data[i:i + chunk_size]
-
-        resp.aiter_bytes = aiter_bytes
-        return resp
-
-    class FakeStreamCtx:
-        def __init__(self, url: str) -> None:
-            self._url = url
-
-        async def __aenter__(self) -> Any:
-            return make_resp(shards[self._url])
-
-        async def __aexit__(self, *a: Any) -> None:
-            pass
-
-    class FakeClient:
-        async def __aenter__(self) -> "FakeClient":
-            return self
-
-        async def __aexit__(self, *a: Any) -> None:
-            pass
-
-        def stream(self, method: str, url: str) -> FakeStreamCtx:
-            return FakeStreamCtx(url)
-
-    return patch(
-        "datastore.services.dump.httpx.AsyncClient",
-        MagicMock(return_value=FakeClient()),
-    )

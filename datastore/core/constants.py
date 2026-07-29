@@ -1,5 +1,23 @@
 from __future__ import annotations
 
+from typing import Literal
+
+# Download formats served by the export pipeline (`/datastore/dump/…` and
+# `datastore_search_sql?download=…`). Lives here — not in `api/` — because
+# both the request schemas (pydantic layer) and the endpoints (starlette
+# layer) need it, and `schemas/` must not import from `api/`.
+DUMP_FORMATS: tuple[str, ...] = ("csv", "gzip", "ndjson", "parquet")
+DumpFormat = Literal["csv", "gzip", "ndjson", "parquet"]
+
+# File extension per dump format — names the download and, for a
+# multi-file export, each member inside the zip.
+DUMP_EXTENSIONS: dict[str, str] = {
+    "csv": "csv",
+    "gzip": "csv.gz",
+    "ndjson": "json",
+    "parquet": "parquet",
+}
+
 POSTGRES_TYPES: dict[str, str] = {
     # integer
     "int2": "int2",

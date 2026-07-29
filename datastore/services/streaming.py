@@ -25,6 +25,11 @@ Every chunk is yielded as `bytes` one at a time so peak memory stays
 CSV / TSV rows are embedded inside a JSON string value, so each row's
 text is JSON-escaped via `orjson.dumps(s)[1:-1]` before being yielded
 between the records field's opening / closing `"` quotes.
+
+`zip_archive_writer` at the bottom is the odd one out: it serves the
+download endpoints rather than `datastore_search`, and packs several
+already-exported files into one archive. Same discipline — bytes are
+yielded a chunk at a time and never accumulated.
 """
 
 from __future__ import annotations
@@ -32,7 +37,8 @@ from __future__ import annotations
 import base64
 import csv
 import io
-from collections.abc import Iterator
+import zipfile
+from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal
 from typing import Any
 
@@ -315,3 +321,85 @@ def _json_string_inner(s: str) -> bytes:
     value chunk-by-chunk across many rows without materialising it.
     """
     return orjson.dumps(s)[1:-1]
+
+
+# ---------------------------------------------------------------------------
+# Zip archive over already-exported files (multi-file download)
+# ---------------------------------------------------------------------------
+
+# Read size from storage, and roughly how often bytes reach the client.
+_ZIP_CHUNK_BYTES = 1 << 20
+
+# Per-operation timeout while pulling a part. The client's default is
+# tuned for CKAN's small JSON calls; a multi-GB shard needs far more
+# headroom, and a timeout mid-archive truncates the download.
+_ZIP_FETCH_TIMEOUT = 300.0
+
+
+class _ZipSink:
+    """The write-only file object `zipfile` builds the archive into.
+
+    `ZipFile` probes for `tell()`; finding none it switches to its
+    non-seekable mode, which writes each member's sizes and CRC in a
+    trailing data descriptor instead of seeking back to patch the local
+    header. That is precisely what makes the archive streamable.
+    """
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+
+    def write(self, data: bytes) -> int:
+        self._buf += data
+        return len(data)
+
+    def flush(self) -> None:
+        return None
+
+    def __len__(self) -> int:
+        return len(self._buf)
+
+    def drain(self) -> bytes:
+        """Hand over everything buffered so far and reset."""
+        out = bytes(self._buf)
+        del self._buf[:]
+        return out
+
+
+async def zip_archive_writer(
+    http: Any,
+    members: list[tuple[str, str]],
+) -> AsyncIterator[bytes]:
+    """Stream a zip of `members` — `(filename, url)` pairs — as it builds.
+
+    Each URL is fetched a chunk at a time and framed straight into the
+    archive, so peak memory is one chunk rather than one file. `http` is
+    an `httpx.AsyncClient` supplied by the caller (services never build
+    their own).
+
+    Entries are **stored, never deflated**: the payload is parquet,
+    already compressed, so deflating would burn 30–100 MB/s of CPU for
+    no size win. The archive is pure framing, and `force_zip64` keeps a
+    member over 4 GiB from blowing up at close.
+
+    This is the one download path where the server carries the bytes, so
+    it inherits the costs: no `Content-Length` (hence no progress bar),
+    and no range support, so a dropped connection restarts the transfer.
+    """
+    sink = _ZipSink()
+    with zipfile.ZipFile(
+        sink, mode="w", compression=zipfile.ZIP_STORED, allowZip64=True
+    ) as archive:
+        for filename, url in members:
+            with archive.open(filename, mode="w", force_zip64=True) as entry:
+                async with http.stream(
+                    "GET", url, timeout=_ZIP_FETCH_TIMEOUT
+                ) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes(_ZIP_CHUNK_BYTES):
+                        entry.write(chunk)
+                        if len(sink) >= _ZIP_CHUNK_BYTES:
+                            yield sink.drain()
+            # Member closed → its data descriptor is in the buffer.
+            yield sink.drain()
+    # Archive closed → central directory + EOCD.
+    yield sink.drain()

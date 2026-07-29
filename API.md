@@ -71,6 +71,7 @@ token (except under `anonymous`).
 | POST | `/api/3/action/datastore_delete` | Delete rows, drop columns, or drop the table |
 | GET | `/api/3/action/datastore_search` | Search a resource (streaming) |
 | GET | `/api/3/action/datastore_search_sql` | Run a read-only SQL `SELECT` (streaming) |
+| GET | `/datastore/dump/query` | Download the result of a SQL `SELECT` as a file |
 | GET | `/api/3/action/datastore_info` | Schema + row stats for a resource |
 | GET | `/datastore/dump/{resource_id}` | Download a whole resource (CSV/NDJSON/Parquet) |
 | GET | `/` · `/health` · `/ready` | Welcome / liveness / readiness |
@@ -306,6 +307,7 @@ GET /api/3/action/datastore_search
 Run a single read-only `SELECT` / `WITH` statement and stream the result. Tables
 are referenced by `resource_id`; each is authorized individually, and functions
 are checked against the engine's allow-list. Include a `LIMIT` (required).
+To export the result as a file instead, use [`GET /datastore/dump/query`](#get-datastoredumpquery).
 
 ### Query parameters
 
@@ -380,16 +382,73 @@ row stats — a column-level metadata catalog without a side store.
 ## `GET /datastore/dump/{resource_id}`
 
 Download an entire resource. Pick the format with `?format=csv` (default),
-`ndjson`, or `parquet`.
+`gzip`, `ndjson`, or `parquet`.
 
-- **Small export (single shard):** `302` redirect to a signed GCS URL (bytes go
-  straight from storage to the client).
-- **Large export (multiple shards, CSV/NDJSON):** a streamed body
-  (`200`, ~constant memory).
-- Parquet over the single-shard limit returns `413` — switch to CSV/NDJSON.
+- **csv / gzip / ndjson** — `302` redirect to a signed GCS URL, at any size.
+  Shards from a large export are stitched into one object server-side, so the
+  bytes go straight from storage to the client (resumable, no server
+  bandwidth, no server CPU). `gzip` is compressed by BigQuery at export time.
+- **parquet** — `302` when the export is a single file. Parquet shards can't be
+  merged (footer + magic bytes), so a sharded export instead returns `200` with
+  a **zip** of the parts (`Content-Type: application/zip`, members named
+  `<resource_id>_NN.parquet`). Entries are stored, not deflated — parquet is
+  already compressed. This is the one download the server streams itself, so
+  it has no `Content-Length` and can't be resumed; unzip before querying.
 
 Requires `read` permission on the resource and a configured export bucket
 (`BIGQUERY_EXPORT_BUCKET`).
+
+`query` is a **reserved name** on this route — `/datastore/dump/query` is the SQL
+download endpoint below, so a resource literally named `query` can't be dumped
+by this URL.
+
+---
+
+## `GET /datastore/dump/query`
+
+Download the result of a **SQL `SELECT`** as a single file — filtered
+downloads at any size. Same validation as `datastore_search_sql` (single
+`SELECT`/`WITH`, per-table auth, function allow-list); the response is the
+file itself, not the CKAN envelope.
+
+### Query parameters
+
+| Name | Type | Notes |
+|---|---|---|
+| `sql` | string | A single `SELECT`/`WITH`; no multi-statement, no DML/DDL. `LIMIT` optional. |
+| `format` | string | `csv` (default) \| `gzip` (gzipped CSV) \| `ndjson` \| `parquet`. |
+
+### Example
+
+```http
+GET /datastore/dump/query
+    ?sql=SELECT * FROM "c6153a74-43cb-4edf-8bdf-bb664feca937" WHERE accepted = true
+    &format=csv
+```
+
+### Response
+
+Identical to `/datastore/dump/{resource_id}` above:
+
+- **csv / gzip / ndjson** — `302` to a signed GCS URL at any size (shards are
+  composed into one object). The URL expires after
+  `BIGQUERY_EXPORT_URL_EXPIRY_HOURS` (default 1h).
+- **parquet** — `302` for one file; a sharded export returns `200` with a
+  streamed zip of the parts, members named `query_NN.parquet`.
+
+### Rules (vs the JSON API)
+
+- `LIMIT` is **optional** — absent exports the full result set; present it is
+  honored as written, and the `SEARCH_RESULT_ROWS_MAX` cap does not apply
+  (`OFFSET` without `LIMIT` is rejected).
+- Repeated downloads of the same SQL are served from a GCS cache until any
+  referenced table changes; SQL calling non-deterministic functions
+  (`now()`, `current_date`, …) re-exports on every request.
+- Row order in the file follows the SQL's `ORDER BY` when it sorts on output
+  columns (BigQuery preserves it across shards, which are composed in order). Without one, results fall
+  back to `_id` order when the query outputs `_id` (e.g. `SELECT *`) — the
+  same order the JSON API pages in; otherwise order is undefined.
+- Requires a configured export bucket (`BIGQUERY_EXPORT_BUCKET`).
 
 ---
 

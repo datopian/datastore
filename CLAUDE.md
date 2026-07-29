@@ -10,7 +10,7 @@ storage backend (BigQuery Datastore or Ducklake as future support).
 - **Pluggable storage backend** selected by `DATASTORE_ENGINE` (`bigquery` today; `ducklake` planned).
 - **Pluggable auth** selected by `AUTH_TYPE` (`ckan` / `jwt` / `anonymous`). Provider lives in `datastore/auth/<name>/`; only the CKAN provider touches the network, and its TTL cache is local to that provider.
 - **Standalone-capable** — runs without an upstream CKAN under `AUTH_TYPE=anonymous` or `AUTH_TYPE=jwt`. CKAN is only required when `AUTH_TYPE=ckan`.
-- **Streaming search responses** (peak memory ≈ 1 row) for `datastore_search` / `datastore_search_sql`.
+- **Streaming search responses** (peak memory ≈ 1 row) for `datastore_search` / `datastore_search_sql`; the sharded-parquet download streams a zip at ≈ 1 chunk.
 - Strict request validation, structured CKAN-shaped error envelopes.
 
 
@@ -187,7 +187,8 @@ datastore-api/
 │   │   │                             #                  dispatch, pagination links,
 │   │   │                             #                  function allow-list)
 │   │   └── streaming.py              #   streaming.py – byte-yielding writers
-│   │                                 #                  (objects/lists/csv/tsv)
+│   │                                 #                  (objects/lists/csv/tsv
+│   │                                 #                   + zip_archive_writer)
 │   │
 │   │ ── 6. INFRASTRUCTURE (adapters to the outside world) ─
 │   └── infrastructure/
@@ -208,6 +209,8 @@ datastore-api/
 │           |   |                       # registry imports `Backend`, so the
 │           |   |                       # concrete class name is engine-private.
 │           |   ├── backend.py        # DatastoreBackend subclass (placeholder)
+│           |   ├── export.py         # Download pipeline (dump/dump_sql):
+│           |   |                       # cache → EXPORT DATA → compose → sign
 │           |   ├── client.py         # google-cloud-bigquery `Client` construction
 │           |   ├── lib.py            # Backend-specific helpers (optional)
 │           |   └── allowed_functions.txt  # Per-engine datastore_search_sql
@@ -423,6 +426,7 @@ Each endpoint takes a single `ContextDep`. The handler calls `context.authorize(
 | POST | `/api/3/action/datastore_delete` | **implemented** | `DatastoreDeleteRequest` | `DatastoreDeleteResponse` |
 | GET  | `/api/3/action/datastore_search` | **implemented** (streaming) | `DatastoreSearchRequest` | `DatastoreSearchResponse` |
 | GET  | `/api/3/action/datastore_search_sql` | **implemented** (streaming) | `DatastoreSearchSQLRequest` | `DatastoreSearchResponse` |
+| GET  | `/datastore/dump/query` | **implemented** | `sql=<SELECT…>`, `format=csv\|gzip\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 | GET  | `/api/3/action/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
 | GET  | `/datastore/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 
@@ -437,26 +441,35 @@ The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, pa
 
 ### 5.3 `GET /datastore/dump/{resource_id}`
 
-Full-table download, **one URL → one file** from the caller's point of view. Bytes never sit in API memory — small dumps redirect to GCS, large dumps stream-concat through async httpx.
+Full-table download, **one URL → one file** from the caller's point of
+view. Bytes never pass through API memory — the one exception is a
+sharded parquet export, which is zipped on the way out.
 
-Pipeline:
+Pipeline (`_prepare_download` in [bigquery/export.py](datastore/infrastructure/engines/bigquery/export.py)):
 
-1. **Resolve cache key** — read `table.modified` from BigQuery, compute `rev = hex(microsec_epoch(modified))`, prefix becomes `dumps/<rid>/<fmt>/<rev>`.
-2. **GCS cache lookup** — `list_blobs(prefix=…)`. Non-empty → skip steps 3-5; log `cache HIT`.
-3. **Submit `EXPORT DATA`** — Parquet → single-file URI `gs://<bucket>/<prefix>.parquet`; CSV/NDJSON → wildcard URI `gs://<bucket>/<prefix>_*.<ext>` so BigQuery shards >1 GB exports. The SELECT casts `TIMESTAMP` + `DATETIME` columns to ISO 8601 for CSV/NDJSON; Parquet keeps native types.
-4. **Poll non-blockingly** — `await asyncio.to_thread(job.reload)` + `await asyncio.sleep(_DUMP_POLL_INTERVAL_SECONDS)` between iterations. Worker thread is held only during the brief `reload` call, not the wait.
-5. **GC stale revisions** — after a successful extract, sweep `dumps/<rid>/<fmt>/` and delete any blob that doesn't start with the current `prefix`. Best-effort, failures logged. Storage stays bounded to one rev per `(rid, fmt)`.
-6. **Sign URLs** — V4 signed URLs with `response-content-disposition: attachment; filename="<rid>.<ext>"` (single shard) or `<rid>_NN.<ext>` (multi-shard, 1-indexed, zero-padded). Signing offloaded to a thread (IAM round-trip under workload identity).
-7. **Return**:
-   - 1 URL → `RedirectResponse(302)`. Bytes flow GCS → client; server is **out of the byte path**.
-   - N URLs → `StreamingResponse` over `services.dump.stream_*_shards` (async httpx, 64 KiB chunks, serial shard walk, CSV header-dedup via `_skip_first_line`, NDJSON pure byte-concat).
+1. **Resolve cache key** — read `table.modified`, `rev = hex(microsec_epoch(modified))`, prefix `dumps/<rid>/<fmt>/<rev>/`. Everything this service writes lives under the single `dumps/` root — table dumps keyed on the resource id, query dumps on a SQL hash — so one lifecycle rule covers it all. Every request for that (resource, format, table version) shares the **revision directory**; each individual export writes into its own `<attempt-uuid>/` beneath it:
 
-Per-stream resource profile (multi-shard branch): ~64 KiB resident memory, **0** worker threads, byte-copy CPU only, async cancellation propagates from client disconnect → httpx → GCS connection released.
+```
+dumps/<rid>/<fmt>/<rev>/          ← cache key, shared by all requests
+        └── <attempt-uuid>/       ← one export's private scratch
+                ├── part_*.<ext>
+                ├── data.<ext>    ← composed (csv/gzip, ndjson >1 shard)
+                └── _SUCCESS      ← written last; publishes the attempt
+```
+2. **Cache lookup** (`_complete_attempt`) — one `list_blobs(prefix=…)`, grouped by attempt directory; serve the newest attempt carrying `_SUCCESS`. Attempts without it are in-flight or abandoned: never served, never deleted on the response path. Within the winner a composed `data.<ext>` is the whole download; `part_*` shards beside it are leftovers awaiting background deletion. Parquet never composes, so its shards *are* the download.
+3. **Submit `EXPORT DATA`** — wildcard URI `gs://<bucket>/<prefix><attempt>/part_*.<ext>`. The wildcard is mandatory (BigQuery rejects a bare URI — *"Option 'uri' value must be a wild card URI"*) and shards by write parallelism, not size, so a 40 MB result routinely lands as several files. `job.result()` waits, holding one worker thread for the export's duration. CSV **and gzip** export **header-less** (gzip adds `compression='GZIP'`, so BigQuery does the compressing); the SELECT casts `TIMESTAMP` + `DATETIME` to ISO 8601 for CSV/NDJSON and `TO_JSON_STRING` for JSON columns on Parquet.
+4. **Compose** — csv/gzip/ndjson shards are stitched into ONE object server-side with GCS `compose` (≤32 sources per call, chained beyond that). csv and gzip compose a synthesized header member in first — plain bytes for csv, a gzip member for gzip — so the result carries exactly one header. (Verified against the real bucket: BigQuery's gzip objects carry **no** `Content-Encoding`, so compose byte-concats them and multi-member gzip decompresses as one file.) Parquet is never composable (footer + magic bytes) and stays as shards. Compose sources are the explicit shard list from **this attempt only** — never a fresh listing — so nothing foreign can be swept into the output.
+5. **Publish** — write the zero-byte `<prefix><attempt>/_SUCCESS`. This is the commit point: the attempt is unreadable before it, readable after, so no caller ever sees a half-written export. Written *after* the compose, so it can never become file content.
+6. **Cleanup — in the background** (`_cleanup_in_background`; never on the response path): the compose source shards are deleted, and superseded attempts + revisions under `dumps/<rid>/<fmt>/` are swept (`_delete_old_cache` — this request's own attempt is never touched, and the sweep is **always age-gated by the signed-URL expiry** so a sibling attempt that may still be exporting, or whose URLs are live, survives).
+7. **Sign URLs** — V4 with `response-content-disposition: attachment; filename="<rid>.<ext>"` (one file) or `<rid>_NN.<ext>` (multi-file parquet, 1-indexed). Signing is offloaded to a thread (IAM round-trip under workload identity).
+8. **Return** (`download_response` in [api/endpoints/dump.py](datastore/api/endpoints/dump.py)):
+   - 1 URL → `RedirectResponse(302)`. Bytes flow GCS → client; the server is **out of the byte path** for every format, and downloads are resumable.
+   - N URLs (sharded parquet only) → `200` + **a streamed zip** of the parts (`zip_archive_writer` in [services/streaming.py](datastore/services/streaming.py)). The API fetches each signed URL over `app.state.http` and frames it into the archive a chunk at a time, so one export is always one file at one URL. Entries are `ZIP_STORED` (parquet is already compressed; deflating costs CPU for no size win) and `force_zip64=True` (member sizes aren't known up front). This is the **only** path where the server carries the bytes — no `Content-Length`, no range support, and a fetch failure mid-archive truncates a response that already returned 200.
 
 Errors:
-- Parquet >1 GB → `EXPORT DATA` job fails with a "single URI / wildcard" message; classifier in `_is_export_too_large` flips it to `PayloadTooLargeError` (413). Caller switches to `format=csv` or `format=ndjson`.
-- Any other BigQuery / GCS failure → `ServerError` (500) with the upstream message.
+- Any BigQuery / GCS failure → `ServerError` (500) with the upstream message. A ">1 GB single URI" failure is classified by `_is_export_too_large` into `PayloadTooLargeError` (413) — defensive only, since the wildcard URI means BigQuery shards instead of failing.
 - `BIGQUERY_EXPORT_BUCKET` unset → `ServerError` at request time (the lifespan doesn't fail-fast because dump is an optional capability).
+- **Concurrency.** Requests for the same (query, table version) share a revision directory but export into **separate attempt directories**, so they can never overwrite each other's objects, and neither is servable until its own `_SUCCESS` lands. The residual cost is that both run an export — duplicate billed scans, bounded and rare. Fixing that needs single-flighting (an in-process lock, or a deterministic BigQuery job id so the loser waits on the winner's job); it is a cost optimisation, not a correctness one, and is deliberately not implemented.
 
 Required IAM. Dump follows a strict **ro for reading, rw for writing/updating** model — see [bigquery/client.py](datastore/infrastructure/engines/bigquery/client.py) `load_credentials` + `_build_bq_client` / `_build_storage_client` on the backend:
 
@@ -466,17 +479,33 @@ Required IAM. Dump follows a strict **ro for reading, rw for writing/updating** 
 | `list_blobs` cache lookup | RO GCS | Reading GCS objects. |
 | `client.query("EXPORT DATA …")` | RW BQ (built on demand) | BigQuery writes shards to GCS under this SA's identity — it's a write op even though the SQL surface is `SELECT`. |
 | Post-extract `list_blobs` refresh | RW GCS | Blobs are passed straight to `generate_signed_url` next; we want them bound to the rw client. |
+| `compose` (csv/ndjson) | RW GCS | Server-side concat into one object: reads each source's metadata (`storage.objects.get` — **`list` alone is not enough**) and creates the composite. |
+| `upload_from_string` (csv header member) | RW GCS | The one-row header composed in front of the header-less csv shards. |
 | `delete` (GC) | RW GCS | Writing/deleting objects. |
 | `generate_signed_url` | RW GCS | Under workload identity this calls IAM `signBlob`, which typically only the rw SA holds via `iam.serviceAccountTokenCreator`. |
 
 Concrete perm sets:
 
 - **RO SA** (`BIGQUERY_CREDENTIALS_RO`) — `bigquery.tables.get` + `storage.objects.list`.
-- **RW SA** (`BIGQUERY_CREDENTIALS`) — `bigquery.jobs.create` + `bigquery.tables.export` + `bigquery.tables.getData` + `storage.objects.{create,list,delete}` + `iam.serviceAccountTokenCreator`.
+- **RW SA** (`BIGQUERY_CREDENTIALS`) — `bigquery.jobs.create` + `bigquery.tables.export` + `bigquery.tables.getData` + `storage.objects.{create,get,list,delete}` + `iam.serviceAccountTokenCreator`. **`get` is required by `compose`** (it reads each source object); a role with only create/list/delete 403s on the compose step.
 
 A single SA works if both perm sets land on the same identity — `BIGQUERY_CREDENTIALS_RO` empty falls through to ADC; same env var can drive both. `_build_bq_client` and `_build_storage_client` on the backend are deliberately small + stub-friendly so tests inject mocks without monkey-patching `google.cloud.*` globally.
 
-A 24h object-lifecycle rule on the bucket is a useful belt-and-braces: the engine GCs older revs already, but lifecycle catches anything stranded by a crashed dump.
+A 24h object-lifecycle rule on the bucket is **required** in practice: the engine GCs older revs already, but lifecycle is the only thing that cleans abandoned `dumps/<qhash>/` prefixes (SQL downloads whose query is never re-issued — see below) and anything stranded by a crashed dump.
+
+### SQL download (`GET /datastore/dump/query`)
+
+`GET /datastore/dump/query?sql=<SELECT…>&format=csv|gzip|ndjson|parquet` exports the result of an arbitrary vetted SELECT through the same pipeline as `/datastore/dump/{resource_id}` — engine method `dump_sql` in [bigquery/export.py](datastore/infrastructure/engines/bigquery/export.py), response shaping shared via `download_response` in [api/endpoints/dump.py](datastore/api/endpoints/dump.py) (302 for the composed file · gzip streamed · JSON URL list for multi-file parquet). Same SQL validation + per-table auth as `datastore_search_sql` (`DatastoreDumpSQLRequest` subclasses its request schema); the action API itself stays pure JSON envelope. The route is declared before `/datastore/dump/{resource_id}`, making `query` a reserved resource name on the dump family.
+
+Deltas vs the whole-table dump:
+
+- **LIMIT is optional, uncapped.** `datastore_search_sql` requires a LIMIT literal; the dump request schema relaxes it (`parse_sql_pagination(require_limit=…)` via the `_REQUIRE_LIMIT` class flag), honors a present LIMIT as written, and `SEARCH_RESULT_ROWS_MAX` does not apply. OFFSET without LIMIT is rejected.
+- **Cache key** = `dumps/<qhash>/<fmt>/<rev>/`: `qhash` = sha256 of the qualified SQL, `rev` = sha256 over every referenced table's `(rid, modified)` pair — any table change → new rev. Query dumps share the `dumps/` root with table dumps; the identity segment is a 16-hex hash rather than a resource id, so the two only collide if a table is literally named like one.
+- **Non-deterministic SQL bypasses the cache.** Queries calling `now()`, `current_date`, … (`_NON_DETERMINISTIC_SQL_FUNCTIONS`) skip the lookup and export under a fresh uuid rev per run.
+- **RO dry run → RW export.** The user SQL is dry-run on the RO client first (free; clean 400 on SQL that doesn't compile; yields the output schema for the same per-format casts `dump()` uses — ISO timestamps for CSV/NDJSON, `TO_JSON_STRING` for JSON→parquet). The `EXPORT DATA` itself must run under the RW SA (it writes GCS objects); containment = single-statement/SELECT-only schema validation + per-table authorize + function allow-list + the user SQL riding in subquery position (`AS SELECT … FROM (<sql>)`).
+- **Age-gated GC.** Stale revisions under `dumps/<qhash>/<fmt>/` are deleted only once older than the signed-URL expiry, so a re-export can't kill shards whose URLs are still live.
+- **Row order** (`_outer_order_by`): BigQuery ignores a subquery's ORDER BY without LIMIT, so ordering lives on the **outer** exported query — a user's top-level `ORDER BY` is hoisted there when its keys are output columns; with no ORDER BY, `ORDER BY _id` is applied when `_id` is in the output (mirrors JSON mode's `default_order_by`). Otherwise the file is unordered. BigQuery preserves outer ORDER BY globally across shards; shards concat in name order.
+- Every cache miss is a **billed query** (EXPORT DATA never uses BigQuery's result cache); `maximum_bytes_billed` is a possible future cost cap.
 
 The GCS client is built with the same credentials as the BigQuery client for the active engine mode (`load_credentials(config, mode)` in [bigquery/client.py](datastore/infrastructure/engines/bigquery/client.py)). Without this shim, a service-account JSON loaded via `BIGQUERY_CREDENTIALS_RO` would drive BigQuery but `storage.Client(...)` would silently fall back to ADC — a near-invisible identity split. Workload identity / `GOOGLE_APPLICATION_CREDENTIALS`-style setups still work because `load_credentials` returns `None` for ADC and the storage client follows the same default-credentials path.
 
@@ -763,7 +792,7 @@ Optional fields appear in `result` only when requested:
 
 ### 6.4 `GET /api/3/datastore_search_sql`
 
-**Query params**: `sql` (required), `limit` (default 32000).
+**Query params**: `sql` (required; must carry a `LIMIT` literal). To export the result as a file instead of the JSON envelope, use `GET /datastore/dump/query?sql=…&format=…` (LIMIT optional + uncapped there — see §5.3 "SQL download").
 
 **Example request — daily clearing-price summary**
 ```
