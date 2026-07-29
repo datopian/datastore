@@ -283,9 +283,14 @@ def _bq_field(name: str, field_type: str) -> Any:
 
 
 def _fake_blob(name: str, signed_url: str = "https://signed/x") -> Any:
+    import datetime as _dt
+
     blob = MagicMock()
     blob.name = name
     blob.generate_signed_url.return_value = signed_url
+    # A real datetime so the GC age gate can compare it. Fresh by
+    # default → spared; tests wanting it swept set an older value.
+    blob.time_created = _dt.datetime.now(_dt.timezone.utc)
     return blob
 
 
@@ -375,6 +380,47 @@ def test_dump_parquet_export_uses_wildcard_uri() -> None:
     sql = backend.client.query.call_args.args[0]
     assert "format='PARQUET'" in sql
     assert "_*.parquet" in sql
+
+
+def test_dump_exports_into_an_attempt_and_publishes_success() -> None:
+    """The whole-table dump uses the same layout as the SQL dump: shards
+    under `<rev>/<attempt>/`, `_SUCCESS` written last."""
+    shard = _fake_blob("dumps/res-1/parquet/<rev>/att1/part_000.parquet", "https://p0")
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[], [shard], [shard]]
+    backend.client.query.return_value = MagicMock()
+
+    urls = _run_dump(backend, "res-1", "parquet")
+
+    assert urls == ["https://p0"]
+    # The export URI is scoped to a private attempt dir under the shared
+    # revision prefix: `<rev>/<attempt>/part_*.ext`.
+    uri = backend.client.query.call_args.args[0].split("uri='")[1].split("'")[0]
+    path, _, filename = uri.removeprefix("gs://bkt/").rpartition("/")
+    assert filename == "part_*.parquet"
+    rev, attempt = path.removeprefix("dumps/res-1/parquet/").split("/")
+    assert rev and attempt and rev != attempt
+    # `_SUCCESS` published, and it is the only object created.
+    created = [c.args[0] for c in bucket_obj.blob.call_args_list]
+    assert [n.rsplit("/", 1)[1] for n in created] == ["_SUCCESS"]
+
+
+def test_dump_ignores_an_attempt_without_success() -> None:
+    """A half-written attempt from a concurrent request is invisible to
+    the whole-table dump too — it re-exports rather than serving it."""
+    inflight = _fake_blob("dumps/res-1/parquet/<rev>/att1/part_000.parquet")
+    fresh = _fake_blob("dumps/res-1/parquet/<rev>/att2/part_000.parquet", "https://ok")
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[inflight], [fresh], []]
+    backend.client.query.return_value = MagicMock()
+
+    urls = _run_dump(backend, "res-1", "parquet")
+
+    assert urls == ["https://ok"]
+    assert backend.client.query.call_count == 1   # exported its own attempt
+    assert inflight.delete.call_count == 0        # never touched
 
 
 def test_dump_cache_key_changes_when_table_modified_advances() -> None:

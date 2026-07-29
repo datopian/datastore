@@ -6,11 +6,12 @@ helpers each step uses.
     1. ENTRY POINTS   `dump` (whole table) · `dump_sql` (vetted SELECT)
                       — derive the cache key + export SQL, nothing else
     2. WORKFLOW       `_prepare_download`:
-                          HIT?  cached file for (query, table version)?
+                          HIT?  newest attempt with a `_SUCCESS` marker
                                 └─ yes ──▶ sign → 302 (no BigQuery)
-                          EXPORT   EXPORT DATA → header-less shards
+                          EXPORT   EXPORT DATA → shards, own attempt dir
                           COMPOSE  csv/ndjson shards → ONE object
-                          GC       old revisions — in the BACKGROUND
+                          PUBLISH  write `_SUCCESS`
+                          GC       old attempts/revisions — BACKGROUND
                           SIGN     V4 URL(s) → 302
     3. STEP HELPERS   one per workflow step, in the order used
     4. SQL BUILDERS   pure text/bytes helpers
@@ -63,6 +64,15 @@ _CONTENT_TYPE = {
 # GCS `compose` accepts ≤32 sources per call; more are chained.
 _COMPOSE_MAX_SOURCES = 32
 
+# Written last, once the bytes are final. An attempt without it is
+# invisible — mid-export or abandoned, either way not servable.
+_SUCCESS = "_SUCCESS"
+
+# Bucket root. Everything this service writes lives under one prefix, so
+# a lifecycle rule can target it directly. Table dumps key on the
+# resource id, query dumps on a SQL hash — both sit directly beneath.
+_EXPORT_ROOT = "dumps"
+
 # SQL functions whose results change per run → the cache must be bypassed.
 _NON_DETERMINISTIC_SQL_FUNCTIONS = frozenset(
     {
@@ -89,26 +99,28 @@ _FORMAT_HINT = "`format=csv` or `format=ndjson`"
 
 async def dump(backend: Any, resource_id: str, fmt: str) -> list[str]:
     """Whole-table download → signed URLs. Cache key
-    `dumps/<rid>/<fmt>/<rev>` with `rev` = `table.modified`."""
+    `dumps/<rid>/<fmt>/<rev>/` with `rev` = `table.modified`."""
     if backend.client is None:
         return []
 
     bucket = _get_export_bucket(backend)
     table = await _get_table(backend, resource_id)
 
+    # No `modified` → no stable version to key on, so the cache can't be
+    # read and every request exports.
+    cacheable = table.modified is not None
     rev = (
         f"{int(table.modified.timestamp() * 1_000_000):x}"
-        if table.modified is not None
+        if cacheable
         else uuid4().hex[:12]
     )
-    prefix = f"dumps/{resource_id}/{fmt}/{rev}"
-    uri = f"gs://{bucket}/{prefix}_*.{_FMT[fmt]['ext']}"
+    prefix = f"{_EXPORT_ROOT}/{resource_id}/{fmt}/{rev}/"
     source = (
         f"`{backend.config.BIGQUERY_PROJECT}"
         f".{backend.config.BIGQUERY_DATASET}.{resource_id}`"
     )
 
-    async def build_export_sql() -> tuple[str, bytes | None]:
+    async def build_export_sql(uri: str) -> tuple[str, bytes | None]:
         # Schema is already known from get_table — no dry run needed.
         sql = _export_data_sql(
             uri,
@@ -129,9 +141,9 @@ async def dump(backend: Any, resource_id: str, fmt: str) -> list[str]:
         bucket=bucket,
         prefix=prefix,
         fmt=fmt,
-        cacheable=True,
+        cacheable=cacheable,
         build_export_sql=build_export_sql,
-        sweep_prefix=f"dumps/{resource_id}/{fmt}/",
+        sweep_prefix=f"{_EXPORT_ROOT}/{resource_id}/{fmt}/",
         filename_base=resource_id,
         what=f"resource {resource_id!r}",
     )
@@ -147,7 +159,7 @@ async def dump_sql(
 ) -> list[str]:
     """SQL-result download → signed URLs.
 
-    Cache key `sql_dumps/<qhash>/<fmt>/<rev>`: `qhash` = hash of the
+    Cache key `dumps/<qhash>/<fmt>/<rev>/`: `qhash` = hash of the
     qualified SQL, `rev` = hash of every referenced table's `modified`.
     Non-deterministic SQL (`now()`, …) is never cached (uuid rev). A
     free RO dry run validates the SQL and yields the output schema for
@@ -191,10 +203,9 @@ async def dump_sql(
         rev = uuid4().hex[:12]
 
     qhash = hashlib.sha256(qualified_sql.encode()).hexdigest()[:16]
-    prefix = f"sql_dumps/{qhash}/{fmt}/{rev}"
-    uri = f"gs://{bucket}/{prefix}_*.{_FMT[fmt]['ext']}"
+    prefix = f"{_EXPORT_ROOT}/{qhash}/{fmt}/{rev}/"
 
-    async def build_export_sql() -> tuple[str, bytes | None]:
+    async def build_export_sql(uri: str) -> tuple[str, bytes | None]:
         # RO dry run (free): validates the SQL + yields the output
         # schema. Deferred — a cache hit never pays for it.
         dry_cfg = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
@@ -227,12 +238,9 @@ async def dump_sql(
         fmt=fmt,
         cacheable=cacheable,
         build_export_sql=build_export_sql,
-        sweep_prefix=f"sql_dumps/{qhash}/{fmt}/",
+        sweep_prefix=f"{_EXPORT_ROOT}/{qhash}/{fmt}/",
         filename_base=f"query_{qhash[:8]}",
         what=f"sql query {qhash[:8]}",
-        # Cacheable rev → old rev unreachable → delete now. uuid rev →
-        # age-gate by URL expiry (a rapid re-run must not kill live URLs).
-        gc_min_age=None if cacheable else _url_expiry(backend),
     )
 
 
@@ -248,84 +256,68 @@ async def _prepare_download(
     prefix: str,
     fmt: str,
     cacheable: bool,
-    build_export_sql: Callable[[], Awaitable[tuple[str, bytes | None]]],
+    build_export_sql: Callable[[str], Awaitable[tuple[str, bytes | None]]],
     sweep_prefix: str,
     filename_base: str,
     what: str,
-    gc_min_age: timedelta | None = None,
 ) -> list[str]:
     """The download workflow shared by `dump` and `dump_sql`:
 
-    1. HIT?    list `prefix`; unusable entries are cleared + rebuilt
-    2. EXPORT  on miss: `build_export_sql()` → EXPORT DATA (rw)
-    3. COMPOSE csv/ndjson shards (+ csv header) into ONE object
-    4. GC      old revisions — in the background
-    5. SIGN    V4 URLs and return them
+        list prefix → an attempt with `_SUCCESS`?  sign its files
+                    → otherwise  export · compose · publish · GC
+
+    Every export writes into its own `<prefix><attempt>/`, and an attempt
+    is invisible until its `_SUCCESS` lands. Two requests for the same
+    (query, table version) therefore cost a duplicate export at worst —
+    neither can overwrite the other's objects or read a half-written one.
     """
-    rw_bq = backend._build_bq_client("rw")
     ro_gcs = backend._build_storage_client("ro").bucket(bucket)
     rw_gcs = backend._build_storage_client("rw").bucket(bucket)
 
-    # 1. cache lookup — and self-heal an unusable entry.
-    blobs = await _list_files_sorted(ro_gcs, prefix) if cacheable else []
-    if blobs:
-        servable = _serve_with_cached(fmt, blobs)
-        if servable is None:
-            log.info(
-                "BigQuery cache rebuild: %s prefix=%s",
-                what,
-                prefix,
-            )
-            await _clear_cached(rw_gcs, prefix)
-            blobs = []
-        else:
-            blobs = servable
+    blobs: list[Any] = []
+    if cacheable and _complete_attempt(await _list_files_sorted(ro_gcs, prefix), fmt):
+        # Re-list via rw: signing needs rw creds, and a blob signs through
+        # whichever client listed it.
+        blobs = _complete_attempt(await _list_files_sorted(rw_gcs, prefix), fmt) or []
 
     if blobs:
-        log.info(
-            "BigQuery export cache HIT: %s prefix=%s shards=%d",
-            what,
-            prefix,
-            len(blobs),
-        )
-        # Re-list via rw (signing needs rw creds); filter again.
-        rw_blobs = await _list_files_sorted(rw_gcs, prefix)
-        blobs = _serve_with_cached(fmt, rw_blobs) or rw_blobs
+        log.info("BigQuery export cache HIT: %s prefix=%s", what, prefix)
     else:
-        # 2. export
-        export_sql, header_bytes = await build_export_sql()
+        attempt = f"{prefix}{uuid4().hex[:12]}/"
+        rw_bq = backend._build_bq_client("rw")
+        export_sql, header_bytes = await build_export_sql(
+            f"gs://{bucket}/{attempt}part_*.{_FMT[fmt]['ext']}"
+        )
         await _run_export_job(rw_bq, export_sql, what=what, fmt=fmt)
-        log.info("BigQuery export cache MISS: %s prefix=%s", what, prefix)
-        blobs = await _list_files_sorted(rw_gcs, prefix)
+        log.info("BigQuery export cache MISS: %s attempt=%s", what, attempt)
+        blobs = await _list_files_sorted(rw_gcs, attempt)
         if not blobs:
             raise ServerError(
                 f"BigQuery EXPORT DATA wrote no shards for {what}; " "check job logs."
             )
 
-        # 3. compose csv/ndjson into one object (single 302 URL).
         blobs = await _compose_single_file(
-            backend,
-            rw_gcs,
-            prefix,
-            fmt,
-            blobs,
-            header_bytes,
+            backend, rw_gcs, attempt, fmt, blobs, header_bytes
         )
 
-        # 4. GC old revisions — backgrounded; the response never waits.
+        # Publishes the attempt. Written after the compose, so it can
+        # never be a compose source.
+        await asyncio.to_thread(
+            rw_gcs.blob(f"{attempt}{_SUCCESS}").upload_from_string, b""
+        )
+
         def gc() -> None:
             removed = _delete_old_cache(
                 rw_gcs,
                 sweep_prefix=sweep_prefix,
-                keep_prefix=prefix,
-                min_age=gc_min_age,
+                keep_prefix=attempt,
+                min_age=_url_expiry(backend),
             )
             if removed:
                 log.info("BigQuery export GC: %s removed=%d", what, removed)
 
         _cleanup_in_background(backend, gc, what=f"old cache {what}")
 
-    # 5. sign
     return await _signed_urls(
         backend,
         blobs,
@@ -349,27 +341,45 @@ async def _list_files_sorted(bucket: Any, prefix: str) -> list[Any]:
     )
 
 
-def _serve_with_cached(fmt: str, blobs: list[Any]) -> list[Any] | None:
-    """Servable file(s) from a cache-hit listing, or `None` → rebuild.
+def _complete_attempt(blobs: list[Any], fmt: str) -> list[Any] | None:
+    """Files of the newest attempt carrying `_SUCCESS`, else `None`.
 
-    csv/ndjson: serve the `.composed.` file (leftover parts ignored);
-    ndjson also accepts a lone shard. gzip/parquet: served as-is.
+    A listing of `<prefix>` spans every attempt made for this (query,
+    table version). Only a published one counts, so an in-flight or
+    abandoned attempt can't be served or mistaken for a finished one.
+
+    Within the winner, the composed `data.<ext>` is the whole download
+    when it exists; `part_*` shards beside it are leftovers awaiting
+    background deletion. Parquet never composes, so its shards *are* the
+    download.
     """
-    if fmt in ("csv", "gzip", "ndjson"):
-        composed = [b for b in blobs if ".composed." in b.name]
-        if composed:
-            return composed
-        if fmt == "ndjson" and len(blobs) == 1:
-            return blobs
+    attempts: dict[str, list[Any]] = {}
+    for blob in blobs:
+        attempts.setdefault(blob.name.rsplit("/", 1)[0], []).append(blob)
+
+    published = {
+        name: objs
+        for name, objs in attempts.items()
+        if any(o.name.endswith(f"/{_SUCCESS}") for o in objs)
+    }
+    if not published:
         return None
-    return blobs
+
+    newest = max(published, key=lambda a: _published_at(published[a]))
+    files = [o for o in published[newest] if not o.name.endswith(f"/{_SUCCESS}")]
+    composed = [o for o in files if o.name.endswith(f"/data.{_FMT[fmt]['ext']}")]
+    return composed or files
 
 
-async def _clear_cached(rw_gcs: Any, prefix: str) -> None:
-    """Delete everything under `prefix` — an unusable cache entry, about
-    to be rebuilt by a fresh export."""
-    blobs = await _list_files_sorted(rw_gcs, prefix)
-    await asyncio.to_thread(_delete_blobs, blobs, "cache rebuild")
+def _published_at(objs: list[Any]) -> datetime:
+    """When an attempt's `_SUCCESS` landed — picks between attempts that
+    both finished."""
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    for obj in objs:
+        if obj.name.endswith(f"/{_SUCCESS}"):
+            created = getattr(obj, "time_created", None)
+            return created if isinstance(created, datetime) else epoch
+    return epoch
 
 
 async def _run_export_job(
@@ -408,7 +418,7 @@ async def _run_export_job(
 async def _compose_single_file(
     backend: Any,
     rw_gcs: Any,
-    prefix: str,
+    attempt: str,
     fmt: str,
     shards: list[Any],
     header_bytes: bytes | None,
@@ -429,12 +439,12 @@ async def _compose_single_file(
         extras: list[Any] = []
 
         if header_bytes is not None:  # csv header member, sorts first
-            header = rw_gcs.blob(f"{prefix}.header.{ext}")
+            header = rw_gcs.blob(f"{attempt}header.{ext}")
             header.upload_from_string(header_bytes, content_type=content_type)
             sources = [header, *sources]
             extras.append(header)
 
-        composite = rw_gcs.blob(f"{prefix}.composed.{ext}")
+        composite = rw_gcs.blob(f"{attempt}data.{ext}")
         composite.content_type = content_type
         composite.compose(sources[:_COMPOSE_MAX_SOURCES])
         i = _COMPOSE_MAX_SOURCES
@@ -449,7 +459,7 @@ async def _compose_single_file(
     composite, parts = await asyncio.to_thread(compose)
     log.debug(
         "BigQuery compose: %s <- %d shard(s) in %.0fms",
-        prefix,
+        attempt,
         len(shards),
         (time.perf_counter() - t0) * 1000,
     )
@@ -459,7 +469,7 @@ async def _compose_single_file(
     _cleanup_in_background(
         backend,
         lambda: _delete_blobs(parts, "compose sources"),
-        what=f"source shards {prefix}",
+        what=f"source shards {attempt}",
     )
     return [composite]
 
@@ -471,15 +481,15 @@ def _delete_old_cache(
     keep_prefix: str,
     min_age: timedelta | None = None,
 ) -> int:
-    """Delete **older cache revisions** under `sweep_prefix`; the current
-    revision (`keep_prefix`) is never touched. (Post-compose shard
-    cleanup is separate — see `_compose_single_file`.) `min_age` keeps
-    younger files whose signed URLs may still be live (uuid revs)."""
+    """Delete older attempts and revisions under `sweep_prefix`; this
+    request's own attempt (`keep_prefix`) is never touched. `min_age`
+    spares anything younger than the signed-URL lifetime — covering both
+    a sibling attempt still exporting and one whose URLs are live."""
     cutoff = datetime.now(timezone.utc) - min_age if min_age else None
 
     def is_stale(blob: Any) -> bool:
         if blob.name.startswith(keep_prefix):
-            return False  # the current revision
+            return False  # this request's own attempt
         created = getattr(blob, "time_created", None)
         if cutoff is not None and created is not None and created > cutoff:
             return False  # URLs may still be live

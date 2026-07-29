@@ -20,6 +20,7 @@ import asyncio
 import datetime as dt
 import hashlib
 import io
+import threading
 import zipfile
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -102,7 +103,15 @@ def _expected_prefix(sql: str, fmt: str = "csv") -> str:
         dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc).timestamp() * 1_000_000
     )
     rev = hashlib.sha256(f"res1:{us}".encode()).hexdigest()[:16]
-    return f"sql_dumps/{qhash}/{fmt}/{rev}"
+    return f"dumps/{qhash}/{fmt}/{rev}/"
+
+
+def _attempt(base: str, *files: str, attempt: str = "att1") -> list[Any]:
+    """One **published** attempt: the named files plus `_SUCCESS`."""
+    return [
+        *(_blob(f"{base}{attempt}/{f}", f"https://signed/{f}") for f in files),
+        _blob(f"{base}{attempt}/_SUCCESS"),
+    ]
 
 
 # --- cache behaviour --------------------------------------------------------
@@ -111,17 +120,16 @@ def _expected_prefix(sql: str, fmt: str = "csv") -> str:
 def test_cache_hit_skips_dry_run_and_export() -> None:
     """Blobs already under the (qhash, fmt, rev) prefix → signed URLs
     straight from GCS; zero BigQuery jobs."""
-    blob = _blob("sql_dumps/h/csv/rev.composed.csv", "https://cached")
-    backend, _ = _engine_with_storage([blob])
+    backend, _ = _engine_with_storage(_attempt("dumps/h/csv/rev/", "data.csv"))
 
     urls = _run(backend)
 
-    assert urls == ["https://cached"]
+    assert urls == ["https://signed/data.csv"]
     assert backend.client.query.call_count == 0
 
 
 def test_cache_miss_dry_runs_then_exports() -> None:
-    new_blob = _blob("sql_dumps/h/csv/rev_000.csv", "https://fresh")
+    new_blob = _blob("dumps/h/csv/rev_000.csv", "https://fresh")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
@@ -140,7 +148,7 @@ def test_cache_miss_dry_runs_then_exports() -> None:
     assert dry_call.kwargs["job_config"].dry_run is True
     export_sql = backend.client.query.call_args_list[1].args[0]
     assert "EXPORT DATA OPTIONS(" in export_sql
-    assert "sql_dumps/" in export_sql
+    assert "dumps/" in export_sql
     assert "overwrite=true" in export_sql
     # The user SQL rides in subquery position; projection comes from the
     # dry run's output schema; no `_id` ordering is injected.
@@ -150,10 +158,11 @@ def test_cache_miss_dry_runs_then_exports() -> None:
 
 
 def test_cache_prefix_matches_qhash_and_table_rev_scheme() -> None:
-    """Pre-check prefix is `sql_dumps/<sha256(qualified sql)[:16]>/<fmt>/
-    <sha256(rid:modified_us pairs)[:16]>`."""
-    blob = _blob("rev.composed.csv", "https://cached")
-    backend, storage_client = _engine_with_storage([blob])
+    """Pre-check prefix is `dumps/<sha256(qualified sql)[:16]>/
+    <fmt>/<sha256(rid:modified_us pairs)[:16]>/`."""
+    backend, storage_client = _engine_with_storage(
+        _attempt("dumps/h/csv/rev/", "data.csv")
+    )
     bucket_obj = storage_client.bucket.return_value
 
     sql = "SELECT * FROM res1"
@@ -164,8 +173,9 @@ def test_cache_prefix_matches_qhash_and_table_rev_scheme() -> None:
 
 
 def test_cache_prefix_stable_across_identical_calls() -> None:
-    blob = _blob("rev.composed.csv", "https://cached")
-    backend, storage_client = _engine_with_storage([blob])
+    backend, storage_client = _engine_with_storage(
+        _attempt("dumps/h/csv/rev/", "data.csv")
+    )
     bucket_obj = storage_client.bucket.return_value
 
     _run(backend)
@@ -180,8 +190,9 @@ def test_cache_prefix_stable_across_identical_calls() -> None:
 def test_rev_changes_when_any_referenced_table_changes() -> None:
     """Multi-table SQL: bumping either table's `modified` produces a new
     revision prefix; the other table alone can't satisfy the cache."""
-    blob = _blob("rev.composed.csv", "https://cached")
-    backend, storage_client = _engine_with_storage([blob])
+    backend, storage_client = _engine_with_storage(
+        _attempt("dumps/h/csv/rev/", "data.csv")
+    )
     bucket_obj = storage_client.bucket.return_value
 
     t1, t2 = MagicMock(), MagicMock()
@@ -207,8 +218,8 @@ def test_non_deterministic_sql_bypasses_cache() -> None:
     uuid rev each run — two calls, two exports, two prefixes."""
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
-    b1 = _blob("sql_dumps/h/csv/u1_000.csv", "https://one")
-    b2 = _blob("sql_dumps/h/csv/u2_000.csv", "https://two")
+    b1 = _blob("dumps/h/csv/u1_000.csv", "https://one")
+    b2 = _blob("dumps/h/csv/u2_000.csv", "https://two")
     # No pre-check list per run — only post-export refresh + GC sweep.
     bucket_obj.list_blobs.side_effect = [[b1], [b1], [b2], [b2]]
     backend.client.query.side_effect = [
@@ -246,51 +257,50 @@ def test_table_modified_none_is_non_cacheable() -> None:
     assert refresh_1 != refresh_2
 
 
-def test_gc_cacheable_removes_all_old_revs_immediately() -> None:
-    """A cacheable (table-versioned) export deletes every superseded
-    revision on the miss that replaces it — no age gate — so a table
-    change promptly reclaims the old export. The current rev stays.
+def test_gc_spares_young_attempts_and_reaps_old_revisions() -> None:
+    """The sweep is age-gated by the signed-URL lifetime: a young sibling
+    attempt may still be exporting or hold live URLs, so it survives; a
+    superseded revision past the expiry is reclaimed. This request's own
+    attempt always stays.
 
-    Uses `parquet` so the compose path (csv/ndjson) doesn't delete the
-    current shard — this test only exercises stale-revision GC."""
+    Uses `parquet` so the compose path doesn't also delete shards."""
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
 
     sql = "SELECT * FROM res1"
     prefix = _expected_prefix(sql, fmt="parquet")
-    base = prefix.rsplit("/", 1)[0]
-    current = _blob(f"{prefix}_000.parquet", "https://fresh")
-    old_stale = _blob(f"{base}/oldrev_000.parquet", age_hours=3.0)
-    young_stale = _blob(f"{base}/youngrev_000.parquet", age_hours=0.0)
+    base = prefix.rstrip("/").rsplit("/", 1)[0]
+    current = _blob(f"{prefix}att1/part_000.parquet", "https://fresh")
+    old_rev = _blob(f"{base}/oldrev/att9/part_000.parquet", age_hours=3.0)
+    young_sibling = _blob(f"{prefix}att2/part_000.parquet", age_hours=0.0)
 
     bucket_obj.list_blobs.side_effect = [
         [],                                  # pre-check (cache miss)
         [current],                           # post-export refresh
-        [current, old_stale, young_stale],   # GC sweep
+        [current, old_rev, young_sibling],   # GC sweep
     ]
     backend.client.query.side_effect = [_dry_job(), _export_job()]
 
     urls = _run(backend, sql=sql, fmt="parquet")
 
     assert urls == ["https://fresh"]
-    assert current.delete.call_count == 0
-    # Both superseded revs go immediately, regardless of age.
-    assert old_stale.delete.call_count == 1
-    assert young_stale.delete.call_count == 1
+    assert current.delete.call_count == 0        # our own attempt
+    assert young_sibling.delete.call_count == 0  # may still be exporting
+    assert old_rev.delete.call_count == 1        # past the URL expiry
 
 
 def test_gc_stale_blobs_no_age_gate_deletes_all_non_current() -> None:
     """`_delete_old_cache(min_age=None)` (the cacheable path) deletes every
     blob outside the current revision, ignoring age."""
-    keep = "sql_dumps/h/csv/current"
+    keep = "dumps/h/csv/current"
     current = _blob(f"{keep}_000.csv")
-    old = _blob("sql_dumps/h/csv/old_000.csv", age_hours=5.0)
-    young = _blob("sql_dumps/h/csv/young_000.csv", age_hours=0.0)
+    old = _blob("dumps/h/csv/old_000.csv", age_hours=5.0)
+    young = _blob("dumps/h/csv/young_000.csv", age_hours=0.0)
     rw_gcs = MagicMock()
     rw_gcs.list_blobs.return_value = [current, old, young]
 
     deleted = _delete_old_cache(
-        rw_gcs, sweep_prefix="sql_dumps/h/csv/", keep_prefix=keep,
+        rw_gcs, sweep_prefix="dumps/h/csv/", keep_prefix=keep,
         min_age=None,
     )
 
@@ -304,15 +314,15 @@ def test_gc_stale_blobs_age_gate_keeps_young() -> None:
     """`_delete_old_cache(min_age=…)` (the non-cacheable path) deletes only
     superseded blobs older than the cutoff; younger ones (whose signed
     URLs may still be live) survive."""
-    keep = "sql_dumps/h/csv/current"
+    keep = "dumps/h/csv/current"
     current = _blob(f"{keep}_000.csv")
-    old = _blob("sql_dumps/h/csv/old_000.csv", age_hours=5.0)
-    young = _blob("sql_dumps/h/csv/young_000.csv", age_hours=0.0)
+    old = _blob("dumps/h/csv/old_000.csv", age_hours=5.0)
+    young = _blob("dumps/h/csv/young_000.csv", age_hours=0.0)
     rw_gcs = MagicMock()
     rw_gcs.list_blobs.return_value = [current, old, young]
 
     deleted = _delete_old_cache(
-        rw_gcs, sweep_prefix="sql_dumps/h/csv/", keep_prefix=keep,
+        rw_gcs, sweep_prefix="dumps/h/csv/", keep_prefix=keep,
         min_age=dt.timedelta(hours=1),
     )
 
@@ -470,8 +480,8 @@ def test_csv_multishard_composes_header_and_shards_into_one_url() -> None:
     object; the parts are deleted; a single composite URL comes back."""
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
-    shard0 = _blob("sql_dumps/h/csv/rev_000.csv")
-    shard1 = _blob("sql_dumps/h/csv/rev_001.csv")
+    shard0 = _blob("dumps/h/csv/rev/att1/part_000.csv")
+    shard1 = _blob("dumps/h/csv/rev/att1/part_001.csv")
     bucket_obj.list_blobs.side_effect = [[], [shard0, shard1], [shard0, shard1]]
     backend.client.query.side_effect = [_dry_job(), _export_job()]
     factory, made = _distinct_blob_factory()
@@ -479,8 +489,8 @@ def test_csv_multishard_composes_header_and_shards_into_one_url() -> None:
 
     urls = _run(backend, fmt="csv")
 
-    composite = next(n for n in made if n.endswith(".composed.csv"))
-    header = next(n for n in made if n.endswith(".header.csv"))
+    composite = next(n for n in made if n.endswith("data.csv"))
+    header = next(n for n in made if n.endswith("header.csv"))
     assert urls == [f"url:{composite}"]                 # single URL
     made[header].upload_from_string.assert_called_once()  # header written
     made[composite].compose.assert_called_once()
@@ -494,8 +504,8 @@ def test_ndjson_multishard_composes_without_header() -> None:
     """ndjson: shards compose directly (no header member) into one URL."""
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
-    shard0 = _blob("sql_dumps/h/ndjson/rev_000.json")
-    shard1 = _blob("sql_dumps/h/ndjson/rev_001.json")
+    shard0 = _blob("dumps/h/ndjson/rev/att1/part_000.json")
+    shard1 = _blob("dumps/h/ndjson/rev/att1/part_001.json")
     bucket_obj.list_blobs.side_effect = [[], [shard0, shard1], [shard0, shard1]]
     backend.client.query.side_effect = [_dry_job(), _export_job()]
     factory, made = _distinct_blob_factory()
@@ -503,8 +513,8 @@ def test_ndjson_multishard_composes_without_header() -> None:
 
     urls = _run(backend, fmt="ndjson")
 
-    assert not any(n.endswith(".header.json") for n in made)  # no header
-    composite = next(n for n in made if n.endswith(".composed.json"))
+    assert not any(n.endswith("header.json") for n in made)  # no header
+    composite = next(n for n in made if n.endswith("data.json"))
     assert urls == [f"url:{composite}"]
     sources = made[composite].compose.call_args.args[0]
     assert shard0 in sources and shard1 in sources
@@ -512,7 +522,7 @@ def test_ndjson_multishard_composes_without_header() -> None:
 
 def test_ndjson_single_shard_is_not_composed() -> None:
     """A lone ndjson shard is already one URL — no compose, 302 to it."""
-    new_blob = _blob("sql_dumps/h/ndjson/rev_000.json", "https://one")
+    new_blob = _blob("dumps/h/ndjson/rev/att1/part_000.json", "https://one")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
@@ -521,7 +531,9 @@ def test_ndjson_single_shard_is_not_composed() -> None:
     urls = _run(backend, fmt="ndjson")
 
     assert urls == ["https://one"]
-    bucket_obj.blob.assert_not_called()   # no compose/header object
+    # Only the `_SUCCESS` marker is created — no composite, no header.
+    created = [c.args[0] for c in bucket_obj.blob.call_args_list]
+    assert [n.rsplit("/", 1)[1] for n in created] == ["_SUCCESS"]
 
 
 def test_compose_chains_beyond_32_sources() -> None:
@@ -529,7 +541,7 @@ def test_compose_chains_beyond_32_sources() -> None:
     itself counts as one source in later calls)."""
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
-    shards = [_blob(f"sql_dumps/h/ndjson/rev_{i:03d}.json") for i in range(40)]
+    shards = [_blob(f"dumps/h/ndjson/rev/att1/part_{i:03d}.json") for i in range(40)]
     bucket_obj.list_blobs.side_effect = [[], shards, shards]
     backend.client.query.side_effect = [_dry_job(), _export_job()]
     factory, made = _distinct_blob_factory()
@@ -537,13 +549,156 @@ def test_compose_chains_beyond_32_sources() -> None:
 
     _run(backend, fmt="ndjson")
 
-    composite = made[next(n for n in made if n.endswith(".composed.json"))]
+    composite = made[next(n for n in made if n.endswith("data.json"))]
     # 40 sources → compose(32), then compose(composite + 8) = 2 calls.
     assert composite.compose.call_count == 2
     first = composite.compose.call_args_list[0].args[0]
     second = composite.compose.call_args_list[1].args[0]
     assert len(first) == 32
     assert second[0] is composite and len(second) == 1 + 8
+
+
+def test_attempt_without_success_is_invisible() -> None:
+    """An attempt mid-export (or one that died) has no `_SUCCESS`, so it
+    is never served — this request exports its own attempt instead, and
+    never deletes the other one."""
+    inflight = [
+        _blob("dumps/h/csv/rev/att1/part_000.csv"),
+        _blob("dumps/h/csv/rev/att1/part_001.csv"),
+    ]
+    fresh = _blob("dumps/h/csv/rev/att2/part_000.csv")
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [inflight, [fresh], []]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+    factory, made = _distinct_blob_factory()
+    bucket_obj.blob.side_effect = factory
+
+    urls = _run(backend, fmt="csv")
+
+    assert backend.client.query.call_count == 2          # exported its own
+    composite = next(n for n in made if n.endswith("data.csv"))
+    assert urls == [f"url:{composite}"]
+    for b in inflight:
+        assert b.delete.call_count == 0                  # left alone
+
+
+def test_published_attempt_wins_over_an_inflight_one() -> None:
+    """A finished attempt is served even while a sibling is still
+    exporting — the in-flight objects are never mixed in."""
+    done = _attempt("dumps/h/csv/rev/", "data.csv")
+    inflight = _blob("dumps/h/csv/rev/att2/part_000.csv", "https://partial")
+    backend, _ = _engine_with_storage([*done, inflight])
+
+    urls = _run(backend)
+
+    assert urls == ["https://signed/data.csv"]
+    assert backend.client.query.call_count == 0
+
+
+def test_success_marker_is_never_composed_or_signed() -> None:
+    """`_SUCCESS` is written after the compose returns, and compose takes
+    this attempt's explicit shard list — never a fresh listing. It also
+    never reaches the served set. A stray member would break gzip
+    outright, not merely garble it."""
+    shards = [
+        _blob("dumps/h/csv/rev/att1/part_000.csv"),
+        _blob("dumps/h/csv/rev/att1/part_001.csv"),
+    ]
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[], shards, shards]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+    factory, made = _distinct_blob_factory()
+    bucket_obj.blob.side_effect = factory
+
+    urls = _run(backend, fmt="csv")
+
+    composite = made[next(n for n in made if n.endswith("data.csv"))]
+    sources = composite.compose.call_args.args[0]
+    assert not any("_SUCCESS" in getattr(s, "name", "") for s in sources)
+    assert not any("_SUCCESS" in u for u in urls)
+    made[next(n for n in made if n.endswith("_SUCCESS"))]\
+        .upload_from_string.assert_called_once_with(b"")
+
+
+def test_compose_deletes_shards_and_header_but_not_the_marker() -> None:
+    """After compose the shards and the synthesized header are garbage
+    and go in the background. `_SUCCESS` must survive — deleting it would
+    silently un-publish the attempt, and the next request would re-export."""
+    shards = [
+        _blob("dumps/h/csv/rev/att1/part_000.csv"),
+        _blob("dumps/h/csv/rev/att1/part_001.csv"),
+    ]
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[], shards, shards]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+    factory, made = _distinct_blob_factory()
+    bucket_obj.blob.side_effect = factory
+
+    _run(backend, fmt="csv")
+
+    for shard in shards:
+        assert shard.delete.call_count == 1
+    assert made[next(n for n in made if n.endswith("header.csv"))].delete.called
+    marker = made[next(n for n in made if n.endswith("_SUCCESS"))]
+    assert marker.delete.call_count == 0
+    assert not made[next(n for n in made if n.endswith("data.csv"))].delete.called
+
+
+def test_response_does_not_wait_for_shard_deletion() -> None:
+    """Deleting the compose sources is fire-and-forget: the caller gets
+    its URLs while the deletes are still in flight.
+
+    The gate keeps every delete blocked until after the engine has
+    returned — so if the deletion were ever awaited on the response path,
+    this would block rather than assert.
+    """
+    gate = threading.Event()
+    shards = [
+        _blob("dumps/h/csv/rev/att1/part_000.csv"),
+        _blob("dumps/h/csv/rev/att1/part_001.csv"),
+    ]
+    for shard in shards:
+        shard.delete.side_effect = lambda: gate.wait(5)
+
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[], shards, shards]
+    backend.client.query.side_effect = [_dry_job(), _export_job()]
+
+    async def go() -> list:
+        urls = await backend.dump_sql(
+            "SELECT * FROM res1", "csv", resource_ids=["res1"], function_names=[]
+        )
+        pending = [t for t in backend._cleanup_tasks if not t.done()]
+        gate.set()
+        await asyncio.gather(*backend._cleanup_tasks)
+        return [urls, pending]
+
+    urls, pending = asyncio.run(go())
+
+    assert urls                       # served without waiting
+    assert pending                    # …while cleanup was still running
+    for shard in shards:
+        assert shard.delete.call_count == 1
+
+
+def test_leftover_shards_are_not_served_beside_the_composite() -> None:
+    """A published attempt still holds its pre-compose shards until the
+    background delete runs; only the composed object is handed out."""
+    base = "dumps/h/csv/rev/att1/"
+    backend, _ = _engine_with_storage([
+        _blob(f"{base}data.csv", "https://composed"),
+        _blob(f"{base}part_000.csv", "https://part0"),
+        _blob(f"{base}header.csv", "https://header"),
+        _blob(f"{base}_SUCCESS"),
+    ])
+
+    urls = _run(backend)
+
+    assert urls == ["https://composed"]
 
 
 # --- cache-hit validation (self-healing) --------------------------------------
@@ -554,10 +709,10 @@ def test_legacy_multishard_csv_hit_is_rebuilt_to_composite() -> None:
     not be served as a stream: the hit is invalidated, the stale blobs
     are deleted, and the export+compose reruns → single 302 URL."""
     legacy = [
-        _blob("sql_dumps/h/csv/rev_000.csv"),
-        _blob("sql_dumps/h/csv/rev_001.csv"),
+        _blob("dumps/h/csv/rev/att1/part_000.csv"),
+        _blob("dumps/h/csv/rev/att1/part_001.csv"),
     ]
-    fresh = _blob("sql_dumps/h/csv/rev_000.csv", "https://fresh-shard")
+    fresh = _blob("dumps/h/csv/rev_000.csv", "https://fresh-shard")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [
@@ -575,7 +730,7 @@ def test_legacy_multishard_csv_hit_is_rebuilt_to_composite() -> None:
     for b in legacy:
         assert b.delete.called            # stale cache cleared
     assert backend.client.query.call_count == 2   # re-exported
-    composite = next(n for n in made if n.endswith(".composed.csv"))
+    composite = next(n for n in made if n.endswith("data.csv"))
     assert urls == [f"url:{composite}"]   # single URL again
 
 
@@ -583,8 +738,8 @@ def test_lone_raw_csv_shard_hit_is_rebuilt() -> None:
     """One raw (non-composed) csv shard = a run that died between export
     and compose; it is header-less, so serving it would drop the header.
     The hit is invalidated and rebuilt."""
-    raw = _blob("sql_dumps/h/csv/rev_000.csv")
-    fresh = _blob("sql_dumps/h/csv/rev_000.csv", "https://fresh-shard")
+    raw = _blob("dumps/h/csv/rev/att1/part_000.csv")
+    fresh = _blob("dumps/h/csv/rev_000.csv", "https://fresh-shard")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[raw], [raw], [fresh], []]
@@ -595,19 +750,20 @@ def test_lone_raw_csv_shard_hit_is_rebuilt() -> None:
     urls = _run(backend, fmt="csv")
 
     assert raw.delete.called
-    composite = next(n for n in made if n.endswith(".composed.csv"))
+    composite = next(n for n in made if n.endswith("data.csv"))
     assert urls == [f"url:{composite}"]
 
 
 def test_ndjson_single_shard_hit_is_valid() -> None:
-    """ndjson needs no header member, so a genuine single shard is a
-    perfectly good hit — no rebuild, no BigQuery jobs."""
-    blob = _blob("sql_dumps/h/ndjson/rev_000.json", "https://cached")
-    backend, _ = _engine_with_storage([blob])
+    """ndjson needs no header member, so a published single shard is a
+    perfectly good hit — served directly, no `data.json`."""
+    backend, _ = _engine_with_storage(
+        _attempt("dumps/h/ndjson/rev/", "part_000.json")
+    )
 
     urls = _run(backend, fmt="ndjson")
 
-    assert urls == ["https://cached"]
+    assert urls == ["https://signed/part_000.json"]
     assert backend.client.query.call_count == 0
 
 
@@ -615,12 +771,12 @@ def test_ndjson_multishard_hit_is_rebuilt() -> None:
     """Multiple ndjson blobs on a hit (legacy cache) → invalidated and
     recomposed into one URL."""
     legacy = [
-        _blob("sql_dumps/h/ndjson/rev_000.json"),
-        _blob("sql_dumps/h/ndjson/rev_001.json"),
+        _blob("dumps/h/ndjson/rev/att1/part_000.json"),
+        _blob("dumps/h/ndjson/rev/att1/part_001.json"),
     ]
     fresh = [
-        _blob("sql_dumps/h/ndjson/rev_000.json"),
-        _blob("sql_dumps/h/ndjson/rev_001.json"),
+        _blob("dumps/h/ndjson/rev/att1/part_000.json"),
+        _blob("dumps/h/ndjson/rev/att1/part_001.json"),
     ]
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
@@ -633,7 +789,7 @@ def test_ndjson_multishard_hit_is_rebuilt() -> None:
 
     for b in legacy:
         assert b.delete.called
-    composite = next(n for n in made if n.endswith(".composed.json"))
+    composite = next(n for n in made if n.endswith("data.json"))
     assert urls == [f"url:{composite}"]
 
 
