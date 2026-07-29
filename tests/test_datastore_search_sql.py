@@ -38,6 +38,8 @@ def test_basic_sql_succeeds(client: TestClient) -> None:
     body = response.json()
     assert body["success"] is True
     assert body["result"]["records"] == []  # placeholder yields nothing
+    # Raw SQL always streams the objects shape.
+    assert body["result"]["records_format"] == "objects"
 
 
 def test_with_cte_succeeds(client: TestClient) -> None:
