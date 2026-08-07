@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 from datastore.core.config import Config
+from datastore.core.exceptions import ValidationError
+from datastore.infrastructure.engines.base import InfoResult
 from datastore.services.write import (
     create_datastore,
     delete_datastore,
@@ -75,6 +77,29 @@ def test_existing_resource_skips_resource_create() -> None:
     assert result.primary_key == ["a"]
     assert result.schema["primaryKey"] == ["a"]
     assert ctx.ckan.created == []  # no CKAN call
+
+
+def test_create_rejects_invalid_records_before_creating_resource() -> None:
+    ctx = _ctx()
+    data_dict = {
+        "package": {"id": "pkg-1"},
+        "resource": {"package_id": "pkg-1", "name": "foo"},
+        "schema": {
+            "fields": [
+                {
+                    "name": "status",
+                    "type": "string",
+                    "constraints": {"enum": ["active", "inactive"]},
+                }
+            ]
+        },
+        "records": [{"status": "pending"}],
+    }
+
+    with pytest.raises(ValidationError, match="Frictionless validation"):
+        asyncio.run(create_datastore(ctx, data_dict))
+
+    assert ctx.ckan.created == []
 
 
 def test_new_resource_creates_via_ckan() -> None:
@@ -286,6 +311,50 @@ def test_upsert_returns_typed_result() -> None:
     # exclude_none serializer drops them from the wire body.
     assert result.records is None
     assert result.total is None
+
+
+def test_upsert_rejects_invalid_records_before_engine_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datastore.infrastructure.engines.bigquery import BigQueryBackend
+
+    schema = {
+        "fields": [
+            {
+                "name": "amount",
+                "type": "number",
+                "constraints": {"minimum": 0, "maximum": 100},
+            }
+        ]
+    }
+    writes: list[list[dict[str, Any]]] = []
+
+    monkeypatch.setattr(
+        BigQueryBackend,
+        "info",
+        lambda self, resource_id: InfoResult(schema=schema, meta={}),
+    )
+
+    def fake_upsert(self: Any, **kwargs: Any) -> dict[str, Any]:
+        writes.append(kwargs["records"])
+        return {"total": 1}
+
+    monkeypatch.setattr(BigQueryBackend, "upsert", fake_upsert)
+
+    with pytest.raises(ValidationError) as exc_info:
+        asyncio.run(
+            upsert_datastore(
+                _ctx(),
+                {
+                    "resource_id": "res-1",
+                    "records": [{"amount": 101}],
+                    "method": "upsert",
+                },
+            )
+        )
+
+    assert "maximum" in exc_info.value.fields["records"][0]
+    assert writes == []
 
 
 def test_upsert_default_method_is_upsert() -> None:

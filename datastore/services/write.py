@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from frictionless import Resource, Schema
+from frictionless.exception import FrictionlessException
+
+from datastore.core.exceptions import ValidationError
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.responses import (
     DatastoreCreateResponse,
@@ -19,6 +24,50 @@ if TYPE_CHECKING:  # type-only — no runtime import from api/
 def _utc_now_iso() -> str:
     """Naive UTC ISO timestamp, matching CKAN's stored datetime format."""
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+
+
+def _validate_records(
+    resource_id: str,
+    schema: dict[str, Any],
+    records: list[dict[str, Any]],
+) -> None:
+    """Validate in-memory records against a stored Frictionless schema.
+
+    This deliberately lives in the service layer so every storage backend gets
+    the same row validation behavior. Backends only provide the canonical
+    schema through `InfoResult` and remain responsible for persistence.
+    """
+    if not records or not schema.get("fields"):
+        return
+
+    try:
+        schema_obj = Schema.from_descriptor(schema)
+        resource = Resource(data=records, schema=schema_obj, format="inline")
+        report = resource.validate(
+            parallel=False,
+            limit_errors=1000,
+        )
+    except FrictionlessException as exc:
+        raise ValidationError(
+            f"Stored schema for resource {resource_id!r} failed validation: {exc}"
+        ) from exc
+
+    if report.valid:
+        return
+
+    report_dict = report.to_dict()
+    messages: list[str] = []
+    for task in report_dict.get("tasks", []):
+        for error in task.get("errors", []):
+            message = error.get("message") or "Invalid record"
+            messages.append(str(message))
+
+    error_count = report.stats.get("errors", len(messages))
+    raise ValidationError(
+        f"Records failed Frictionless validation for resource {resource_id!r}: "
+        f"{error_count} error(s)",
+        fields={"records": messages or [json.dumps(report_dict)]},
+    )
 
 
 async def _sync_resource_to_ckan(
@@ -66,6 +115,7 @@ async def create_datastore(
     include_total = bool(data_dict.get("include_total", False))
 
     fields, primary_key = frictionless_schema_to_fields(schema)
+    _validate_records(resource_id=str(resource or "new-resource"), schema=schema, records=records)
 
     if isinstance(resource, dict):
         # Endpoint gates this branch on AUTH_TYPE=ckan, so context.ckan is
@@ -122,6 +172,9 @@ async def upsert_datastore(
     include_total = bool(data_dict.get("include_total", False))
 
     engine = get_datastore_engine(context, mode="rw")
+    info = await asyncio.to_thread(engine.info, resource_id)
+    _validate_records(resource_id=resource_id, schema=info.schema, records=records)
+
     write_result = await asyncio.to_thread(
         engine.upsert,
         resource_id=resource_id,
