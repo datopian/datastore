@@ -96,7 +96,7 @@ def test_create_rejects_invalid_records_before_creating_resource() -> None:
         "records": [{"status": "pending"}],
     }
 
-    with pytest.raises(ValidationError, match="Frictionless validation"):
+    with pytest.raises(ValidationError, match="do not conform to the schema"):
         asyncio.run(create_datastore(ctx, data_dict))
 
     assert ctx.ckan.created == []

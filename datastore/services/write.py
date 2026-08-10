@@ -62,10 +62,8 @@ def _validate_records(
             message = error.get("message") or "Invalid record"
             messages.append(str(message))
 
-    error_count = report.stats.get("errors", len(messages))
     raise ValidationError(
-        f"Records failed Frictionless validation for resource {resource_id!r}: "
-        f"{error_count} error(s)",
+        f"Provided records do not conform to the schema for resource {resource_id!r}",
         fields={"records": messages or [json.dumps(report_dict)]},
     )
 
