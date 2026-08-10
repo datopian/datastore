@@ -283,6 +283,7 @@ GET /api/3/action/datastore_search
   "success": true,
   "result": {
     "fields": [{"id": "auction_id", "type": "integer"}, "..."],
+    "records_format": "objects",
     "records": [
       {"auction_id": 144, "product_code": "DCL", "clearing_price_gbp_per_mwh": 47.82}
     ],
@@ -296,8 +297,10 @@ GET /api/3/action/datastore_search
 ```
 
 - `records_format=lists` → each record is a positional array (column order = `fields`).
-- `records_format=csv` / `tsv` → `records` is a single text body (header row first),
-  still inside the JSON envelope.
+- `records_format=csv` / `tsv` → `records` is a single text body of data rows,
+  still inside the JSON envelope; column names are on `fields`, not in the text.
+- `result.records_format` echoes the format that was applied, so a client can tell
+  which `records` shape it got without re-reading its own query string.
 - Paginate by following `_links.next`; end-of-data is an empty `records` array.
 
 ---

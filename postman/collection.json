@@ -1,6 +1,6 @@
 {
   "info": {
-    "_postman_id": "bba58be7-cd6a-4fc5-bbdf-11830550b9df",
+    "_postman_id": "2d4510dd-5f60-4f1d-860c-2da4b7b394fa",
     "name": "Datastore API",
     "description": "CKAN-compatible datastore API \u2014 auto-generated from `example_payload/`. Set `baseUrl` to your server, `apiKey` to a CKAN API key (anonymous reads are allowed; writes require a key), and `resourceId` to the table you want to hit.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -542,6 +542,84 @@
               ]
             },
             "description": "Custom projection (CSV), multi-column sort, explicit limit / offset / include_total. Drives `_links.next`."
+          },
+          "response": []
+        },
+        {
+          "name": "Search - records_format=lists",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&fields=auction_id,product_code,clearing_price_gbp_per_mwh&records_format=lists&limit=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search"
+              ],
+              "query": [
+                {
+                  "key": "resource_id",
+                  "value": "7a10def4-8e95-46f9-96c7-9f61bdfd1a09"
+                },
+                {
+                  "key": "fields",
+                  "value": "auction_id,product_code,clearing_price_gbp_per_mwh"
+                },
+                {
+                  "key": "records_format",
+                  "value": "lists"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            },
+            "description": "Each record is a positional array in `fields` order \u2014 smaller payload than `objects`. `result.records_format` echoes `lists`."
+          },
+          "response": []
+        },
+        {
+          "name": "Search - records_format=csv",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&fields=auction_id,product_code,clearing_price_gbp_per_mwh&records_format=csv&limit=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "3",
+                "action",
+                "datastore_search"
+              ],
+              "query": [
+                {
+                  "key": "resource_id",
+                  "value": "7a10def4-8e95-46f9-96c7-9f61bdfd1a09"
+                },
+                {
+                  "key": "fields",
+                  "value": "auction_id,product_code,clearing_price_gbp_per_mwh"
+                },
+                {
+                  "key": "records_format",
+                  "value": "csv"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            },
+            "description": "`records` is a single CSV string of data rows inside the usual JSON envelope (column names live on `result.fields`, not in the string); Content-Type stays `application/json`. `tsv` is the same with tabs."
           },
           "response": []
         }

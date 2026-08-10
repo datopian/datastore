@@ -192,6 +192,18 @@ SCENARIOS: dict[str, tuple[str, str]] = {
         "Custom projection (CSV), multi-column sort, explicit limit / "
         "offset / include_total. Drives `_links.next`.",
     ),
+    "datastore_search/records_format_lists": (
+        "Search - records_format=lists",
+        "Each record is a positional array in `fields` order — smaller "
+        "payload than `objects`. `result.records_format` echoes `lists`.",
+    ),
+    "datastore_search/records_format_csv": (
+        "Search - records_format=csv",
+        "`records` is a single CSV string of data rows inside the usual "
+        "JSON envelope (column names live on `result.fields`, not in the "
+        "string); Content-Type stays `application/json`. `tsv` is the "
+        "same with tabs.",
+    ),
     "datastore_search_sql/basic": (
         "SQL - basic SELECT",
         "Plain SELECT with WHERE + LIMIT. Total comes from "
@@ -259,6 +271,7 @@ SCENARIO_ORDER: dict[str, list[str]] = {
     ],
     "datastore_search": [
         "basic", "with_filters", "with_full_text", "paginated_sorted",
+        "records_format_lists", "records_format_csv",
     ],
     "datastore_search_sql": [
         "basic", "aggregate", "with_cte",

@@ -274,6 +274,7 @@ def test_default_records_format_is_json_objects(client: TestClient) -> None:
     body = response.json()
     assert body["success"] is True
     assert body["result"]["records"] == []
+    assert body["result"]["records_format"] == "objects"
 
 
 def test_records_format_lists_returns_json_envelope(client: TestClient) -> None:
@@ -285,6 +286,7 @@ def test_records_format_lists_returns_json_envelope(client: TestClient) -> None:
     body = response.json()
     assert body["success"] is True
     assert body["result"]["records"] == []
+    assert body["result"]["records_format"] == "lists"
 
 
 def test_records_format_csv_returns_json_envelope(client: TestClient) -> None:
@@ -306,6 +308,7 @@ def test_records_format_csv_returns_json_envelope(client: TestClient) -> None:
     assert body["success"] is True
     # Placeholder engine yields no rows → empty records string.
     assert body["result"]["records"] == ""
+    assert body["result"]["records_format"] == "csv"
 
 
 def test_records_format_tsv_returns_json_envelope(client: TestClient) -> None:
@@ -323,6 +326,7 @@ def test_records_format_tsv_returns_json_envelope(client: TestClient) -> None:
     body = response.json()
     # Placeholder engine yields no rows → empty records string.
     assert body["result"]["records"] == ""
+    assert body["result"]["records_format"] == "tsv"
 
 
 def test_invalid_records_format_returns_validation_error(client: TestClient) -> None:

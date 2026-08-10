@@ -160,6 +160,7 @@ class DatastoreSearchResponse(ResponseModel):
             list[dict[str, Any]],
             Field(deprecated="use 'schema' (Frictionless Table Schema) instead"),
         ]
+        records_format: str = "objects"
         records: list[dict[str, Any]]
         limit: int
         offset: int

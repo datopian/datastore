@@ -709,6 +709,7 @@ GET /api/3/datastore_search
       {"id": "clearing_price_gbp_per_mwh", "type": "number"},
       {"id": "volume_mwh",                 "type": "number"}
     ],
+    "records_format": "objects",
     "records": [
       {"auction_id": 152, "product_code": "DCL", "delivery_start": "2025-11-05T18:30:00Z", "clearing_price_gbp_per_mwh": 39.40, "volume_mwh": 95.0},
       {"auction_id": 144, "product_code": "DCL", "delivery_start": "2025-11-04T16:00:00Z", "clearing_price_gbp_per_mwh": 47.82, "volume_mwh": 120.0}
@@ -728,7 +729,9 @@ non-`offset` params preserved. `start` omits `offset` (it defaults to 0);
 empty `records` array on the next page — there's no `prev` field today.
 
 `records_format=lists` returns each record as a positional array (column order matches `fields`).
-`records_format=csv` / `tsv` return a streaming text body with the header row first.
+`records_format=csv` / `tsv` return a streaming text body of data rows (no header row — column names are on `fields`).
+`result.records_format` echoes back the format that was applied (always `objects` for
+`datastore_search_sql`), so a client can tell which `records` shape it got.
 
 ### 6.3 `POST /api/3/datastore_upsert`
 
@@ -822,6 +825,7 @@ GET /api/3/datastore_search_sql?sql=
       {"id": "avg_price",     "type": "number"},
       {"id": "total_volume",  "type": "number"}
     ],
+    "records_format": "objects",
     "records": [
       {"delivery_date": "2025-11-05", "product_code": "DCL", "avg_price": 41.20, "total_volume": 1840.0},
       {"delivery_date": "2025-11-05", "product_code": "DCH", "avg_price": 49.75, "total_volume":  720.5},

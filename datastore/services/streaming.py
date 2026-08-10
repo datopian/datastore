@@ -90,6 +90,7 @@ def stream_objects(
         resource_id=resource_id,
         schema=schema,
         fields=fields,
+        records_format="objects",
         records_chunks=_records_object_array(columns, records),
         limit=limit,
         offset=offset,
@@ -122,6 +123,7 @@ def stream_lists(
         resource_id=resource_id,
         schema=schema,
         fields=fields,
+        records_format="lists",
         records_chunks=_records_array_array(records),
         limit=limit,
         offset=offset,
@@ -155,6 +157,7 @@ def stream_csv(
         resource_id=resource_id,
         schema=schema,
         fields=fields,
+        records_format="csv",
         records_chunks=_records_delimited_string(columns, records, delimiter=","),
         limit=limit,
         offset=offset,
@@ -188,6 +191,7 @@ def stream_tsv(
         resource_id=resource_id,
         schema=schema,
         fields=fields,
+        records_format="tsv",
         records_chunks=_records_delimited_string(columns, records, delimiter="\t"),
         limit=limit,
         offset=offset,
@@ -205,6 +209,7 @@ def _stream_envelope(
     resource_id: str,
     schema: dict[str, Any],
     fields: list[dict[str, Any]],
+    records_format: str,
     records_chunks: Iterator[bytes],
     limit: int,
     offset: int,
@@ -220,6 +225,9 @@ def _stream_envelope(
 
     Column metadata is emitted in both shapes: `schema` (canonical
     Frictionless) and `fields` (legacy `{id, type}` list, deprecated).
+    `records_format` is echoed back next to `records` so a client can tell
+    which of the four shapes it just got without re-reading its own query
+    string (raw-SQL responses are always `objects`).
     `sql` is emitted only when supplied (i.e. for `datastore_search_sql`);
     `datastore_search` leaves it out. `warnings` (deprecated-input notices)
     is emitted at the envelope level — a sibling of `result`, matching
@@ -236,6 +244,8 @@ def _stream_envelope(
     yield orjson.dumps(schema)
     yield b',"fields":'
     yield orjson.dumps(fields)
+    yield b',"records_format":'
+    yield orjson.dumps(records_format)
     yield b',"records":'
     yield from records_chunks
     yield b',"limit":'
@@ -285,13 +295,15 @@ def _records_array_array(records: Iterator[tuple]) -> Iterator[bytes]:
 def _records_delimited_string(
     columns: list[str], records: Iterator[tuple], *, delimiter: str
 ) -> Iterator[bytes]:
-    """`"col1,col2\\nv1,v2\\n..."` — one JSON string containing CSV / TSV text.
+    """`"v1,v2\\nv3,v4\\n..."` — one JSON string containing CSV / TSV text.
+
+    Data rows only — column names are on `result.fields`, not repeated as
+    a header inside the string.
 
     Yields:
       1. `"`            — opening quote of the JSON string value
-      2. header row     — `csv.writer`-encoded then JSON-escaped
-      3. data rows      — same per row
-      4. `"`            — closing quote
+      2. data rows      — `csv.writer`-encoded then JSON-escaped, per row
+      3. `"`            — closing quote
     """
     yield b'"'
     for row in records:
