@@ -56,6 +56,15 @@ class Config(BaseSettings):
         description="Maximum request body size in MB",
     )
 
+    # Analytics
+    ANALYTICS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Emit one JSON analytics event per datastore action / dump "
+            "request. `false` leaves the analytics middleware unmounted."
+        ),
+    )
+
     # CORS
     CORS_ORIGINS: str = Field(
         default="*",
