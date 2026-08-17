@@ -77,7 +77,7 @@ def download_response(
         302: {"description": "Redirect to the signed download URL."},
         200: {
             "description": (
-                "Sharded parquet export — one streamed zip of the parts."
+                "Sharded parquet export - one streamed zip of the parts."
             ),
             "content": {"application/zip": {}},
         },
@@ -88,10 +88,7 @@ async def dump_sql(
     context: Context,
     params: Annotated[DatastoreDumpSQLRequest, Query()],
 ):
-    """Download a vetted SQL SELECT's result as one file (no envelope).
-
-    Same validation as `datastore_search_sql`; `LIMIT` optional and
-    uncapped. Declared before `/{resource_id}` → `query` is reserved.
+    """Download query result as a file.
     """
     for resource_id in params.resource_ids:
         await context.authorize(resource_id=resource_id, permission="read")

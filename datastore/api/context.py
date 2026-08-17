@@ -19,15 +19,16 @@ ConfigDep = Annotated[Config, Depends(get_config)]
 # Declared as a security scheme (not a plain `Header`) so OpenAPI renders
 # an "Authorize" button and the token is set once for every operation
 # instead of leaking as a parameter on each. `auto_error=False` keeps the
-# header optional — `anonymous` auth needs no token.
+# header optional — `anonymous` auth needs no token. The description is a
+# generic fallback: `create_app()` rewrites the scheme for the AUTH_TYPE
+# that is actually running (see `_tailor_auth_scheme` in `datastore/main.py`).
 _auth_header = APIKeyHeader(
     name="Authorization",
     scheme_name="Authorization",
     auto_error=False,
     description=(
-        "API token, per the active `AUTH_TYPE`: a CKAN API key (`ckan`) or a "
-        "signed JWT (`jwt`). Accepts a raw token or `Bearer <token>`. Not "
-        "required under `anonymous`."
+        "API token for the active `AUTH_TYPE`. Accepts a raw token or "
+        "`Bearer <token>`."
     ),
 )
 

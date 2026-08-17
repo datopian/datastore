@@ -334,9 +334,7 @@ class DatastoreSearchSQLRequest(BaseModel):
 
     sql: str = Field(
         description=(
-            "A single read-only `SELECT` / `WITH` statement. Reference "
-            "resources by their id and include a `LIMIT` (required — used for "
-            "pagination + the streaming cap)."
+            "A  Datastore read API with `SELECT` / `WITH` statement."
         ),
         examples=[
             'SELECT * FROM "balancing_auction_results_2025" '
@@ -447,9 +445,7 @@ class DatastoreDumpSQLRequest(DatastoreSearchSQLRequest):
 
     sql: str = Field(
         description=(
-            "A single read-only `SELECT` / `WITH` statement. Reference "
-            "resources by their id. `LIMIT` is optional — absent exports "
-            "the full result set; present it is honored as written."
+            "A  Datastore read API with`SELECT` / `WITH` statement."
         ),
         examples=[
             'SELECT * FROM "balancing_auction_results_2025" '
