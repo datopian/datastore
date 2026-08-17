@@ -154,6 +154,8 @@ class AnalyticsMiddleware:
             "request_id": headers.get(self.REQUEST_ID_HEADER) or uuid.uuid4().hex,
             "service": self.service,
             "method": scope["method"],
+            "endpoint": scope["path"],
+            "query_string": scope.get("query_string", b"").decode("latin-1") or None,
             "action_type": action,
             "status_code": status,
             "user_agent": headers.get("user-agent") or None,

@@ -31,6 +31,8 @@ FIELDS = {
     "request_id",
     "service",
     "method",
+    "endpoint",
+    "query_string",
     "action_type",
     "status_code",
     "user_agent",
@@ -67,6 +69,8 @@ def test_a_search_is_recorded_with_the_whole_field_set(
     assert set(event) == FIELDS
     assert event["service"] == "Datastore"
     assert event["method"] == "GET"
+    assert event["endpoint"] == SEARCH_URL
+    assert event["query_string"] == f"resource_id={RESOURCE}"
     assert event["action_type"] == "datastore_search"
     assert event["status_code"] == 200
 
