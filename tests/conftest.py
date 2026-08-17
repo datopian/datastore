@@ -26,6 +26,10 @@ os.environ.setdefault("CKAN_URL", "http://test-ckan.local")
 # fine because it has no .env). `os.environ[...] =` forces an override,
 # unlike `setdefault` above which respects a CI-supplied value.
 os.environ["AUTH_TYPE"] = "ckan"
+# Analytics defaults to off; the analytics tests assert emitted events
+# through the shared `client` fixture, so force the middleware on for the
+# suite. The disable-path tests monkeypatch it back to "false" per test.
+os.environ["ANALYTICS_ENABLED"] = "true"
 
 from collections.abc import Iterator  # noqa: E402
 from typing import Any  # noqa: E402
@@ -111,6 +115,8 @@ class FakeCKAN:
         if self._api_key and self._api_key in self.deny_keys:
             raise AuthorizationError(f"key '{self._api_key}' is not allowed")
 
+        # The real action names the acting user (resolved from the api key).
+        user = "jhon" if self._api_key else None
         if resource_id is not None:
             existing = self.resources.get(resource_id)
             if existing is None:
@@ -119,13 +125,17 @@ class FakeCKAN:
             package = self.packages.get(pkg_id)
             if package is None:
                 raise NotFoundError(f"package '{pkg_id}' not found")
-            return {"package": package, "resource": existing}
+            return {"package": package, "resource": existing, "user": user}
 
         assert package_id is not None
         package = self.packages.get(package_id)
         if package is None:
             raise NotFoundError(f"package '{package_id}' not found")
-        return {"package": package, "resource": {"package_id": package_id}}
+        return {
+            "package": package,
+            "resource": {"package_id": package_id},
+            "user": user,
+        }
 
     async def resource_create(self, *, resource: dict[str, Any]) -> dict[str, Any]:
         self._guard()

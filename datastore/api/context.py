@@ -7,6 +7,7 @@ from fastapi import Depends
 from fastapi.security import APIKeyHeader
 from starlette.requests import Request
 
+from datastore.analytics import authorization_dict
 from datastore.api import auth as auth_fns
 from datastore.api.auth import Permission
 from datastore.auth.base import AuthProvider
@@ -71,6 +72,7 @@ class RequestContext:
     api_key: str | None = field(repr=False)
     auth_provider: AuthProvider
     ckan: CKANClient | None
+    request: Request | None = None
 
     async def authorize(
         self,
@@ -78,16 +80,21 @@ class RequestContext:
         package_id: str | None = None,
         permission: Permission | None = None,
     ) -> dict[str, Any]:
-        return await auth_fns.authorize(
+        data_dict = await auth_fns.authorize(
             api_key=self.api_key,
             provider=self.auth_provider,
             resource_id=resource_id,
             package_id=package_id,
             permission=permission,
         )
+        if self.request is not None and self.config.ANALYTICS_ENABLED:
+            authorization_dict(self.request, data_dict)
+        data_dict.pop("user", None)
+        return data_dict
 
 
 def get_context(
+    request: Request,
     config: ConfigDep,
     ckan: Annotated[CKANClient | None, Depends(get_ckan_client)],
     provider: Annotated[AuthProvider, Depends(get_auth_provider)],
@@ -99,6 +106,7 @@ def get_context(
         api_key=api_key,
         auth_provider=provider,
         ckan=ckan.bind(api_key) if ckan is not None else None,
+        request=request,
     )
 
 

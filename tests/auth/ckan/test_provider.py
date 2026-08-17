@@ -27,6 +27,7 @@ class FakeCKAN:
         self._result = result or {
             "package": {"id": "pkg-1"},
             "resource": {"id": "res-1", "package_id": "pkg-1"},
+            "user": "jhon",
         }
         self.calls: list[dict[str, Any]] = []
         self.raise_on_authorize: Exception | None = None
@@ -102,9 +103,8 @@ def test_authorize_binds_credential_and_maps_response_to_decision() -> None:
             "permission": "read",
         }
     ]
-    # `subject` carries a hash of the credential (raw key never leaves
-    # this provider). Same shape as `key_id`.
-    assert decision.subject == provider.key_id("token-xyz")
+    # `subject` is the acting username CKAN resolved from the api key.
+    assert decision.subject == "jhon"
     assert decision.resource == {"id": "res-1", "package_id": "pkg-1"}
     assert decision.package == {"id": "pkg-1"}
     assert decision.claims is None
@@ -234,9 +234,9 @@ def test_malformed_cache_entry_falls_through_to_ckan() -> None:
     assert len(ckan.calls) == 1
 
 
-def test_subject_in_cached_decision_is_hashed_not_raw_credential() -> None:
+def test_subject_never_carries_the_raw_credential() -> None:
     # Security: the raw credential must never end up in the cache.
-    # `Decision.subject` is what gets serialised — store the hash.
+    # `Decision.subject` is what gets serialised — store CKAN's username.
     ckan = FakeCKAN()
     provider = _provider(ckan=ckan, cache=InMemoryCache())
 
@@ -245,9 +245,21 @@ def test_subject_in_cached_decision_is_hashed_not_raw_credential() -> None:
         resource_id="res-1", package_id=None, permission="read",
     ))
 
-    assert decision.subject is not None
+    assert decision.subject == "jhon"
     assert "raw-api-key-do-not-leak" not in decision.subject
-    assert decision.subject.startswith("h:")
+
+
+def test_subject_is_none_when_ckan_names_no_user() -> None:
+    # An older CKAN whose datastore_authorize predates the `user` field
+    # (or an anonymous caller) still authorizes — the event just has no user.
+    ckan = FakeCKAN(result={"package": {"id": "pkg-1"}, "resource": {"id": "res-1"}})
+    provider = _provider(ckan=ckan)
+
+    decision = asyncio.run(provider.authorize(
+        credential="tok", resource_id="res-1", package_id=None, permission="read",
+    ))
+
+    assert decision.subject is None
 
 
 # --- key derivation + name --------------------------------------------------
