@@ -18,7 +18,7 @@ uvicorn datastore.main:app --reload   # run dev server
 pytest                            # run tests
 ```
 
-Open `http://localhost:8000/datastore/api/docs` for interactive API docs.
+Open `http://localhost:8000/datastore/api/v2/docs` for interactive API docs.
 
 ## Configuration
 
@@ -31,8 +31,10 @@ Copy [.env.example](.env.example) and fill it in. The essentials:
 | `AUTH_TYPE` | `ckan` | Auth provider: `ckan` · `jwt` · `anonymous` |
 | `CKAN_URL` | — | CKAN base URL (required when `AUTH_TYPE=ckan`) |
 | `BIGQUERY_PROJECT` / `BIGQUERY_DATASET` | — | Required when `DATASTORE_ENGINE=bigquery` |
-| `BIGQUERY_EXPORT_BUCKET` | — | GCS bucket for downloads (`/datastore/dump/{resource_id}`, `/datastore/dump/query`) |
+| `BIGQUERY_EXPORT_BUCKET` | — | GCS bucket for downloads (`/datastore/api/dump/{resource_id}`, `/datastore/api/dump/query`) |
 | `REDIS_URL` | — | Cache backend; empty → in-process cache |
+| `DOCS_PRIMARY_COLOR` / `DOCS_HEADER_COLOR` | — | Swagger UI branding (see [Documentation](#documentation)) |
+| `DOCS_SITE_TITLE` / `DOCS_LOGO_URL` | — | Docs page header title and logo |
 
 **Note on the export bucket:** everything the service writes lives under
 a single `dumps/` prefix — `dumps/<resource_id>/…` for whole-table downloads
@@ -46,7 +48,32 @@ the lifecycle rule.
 ## Documentation
 
 - **[API.md](API.md)** — full API reference (endpoints, request/response, examples).
-- **`GET /datastore/api/docs`** — interactive Swagger UI (also `/datastore/api/redoc` and `/datastore/api/openapi.json`).
+- **`GET /datastore/api/v2/docs`** — interactive Swagger UI (also `/datastore/api/v2/redoc` and `/datastore/api/v2/openapi.json`).
+
+Swagger UI is **vendored** (no CDN), so the docs page works with no outbound
+network access. It shares its stylesheet with `ckanext-openapidocs`, so this
+service's docs and the CKAN portal's look like one family. Rebrand it with env
+vars rather than CSS:
+
+```sh
+DOCS_PRIMARY_COLOR=#7A3864      # links, inline code, Authorize/Execute buttons
+DOCS_SITE_TITLE="NESO Datastore API"
+DOCS_LOGO_URL=/static/logo.png
+```
+
+`DOCS_PRIMARY_COLOR` alone brands the whole page: the header bar inherits it,
+as do links, inline code and the Authorize/Execute buttons. Set
+`DOCS_HEADER_COLOR` only to decouple the bar from the accent — a neutral
+`#1f2937` stops a saturated brand colour competing with the content:
+
+```sh
+DOCS_HEADER_COLOR=#1f2937       # neutral bar, brand-coloured accents
+```
+
+Both colours accept any CSS colour and are validated at startup, since they
+land inside a `<style>` block. Empty values keep the stylesheet's defaults.
+HTTP method badges keep their conventional colours whatever you brand with,
+so reads and writes stay distinguishable.
 - **[CLAUDE.md](CLAUDE.md)** — architecture, design decisions, and layout.
 
 ## License

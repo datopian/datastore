@@ -1,4 +1,4 @@
-"""End-to-end tests for `GET /api/3/action/datastore_info`.
+"""End-to-end tests for `GET /datastore/api/v2/datastore_info`.
 
 Single `resource_id` query parameter; the response envelope's `result`
 holds `meta` (free-form dict) + `fields` (column schema list).
@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
 
-INFO_URL = "/api/3/action/datastore_info"
+INFO_URL = "/datastore/api/v2/datastore_info"
 _RESOURCE_ID = "balancing_auction_results_2025"
 
 

@@ -1,4 +1,4 @@
-"""End-to-end tests for `POST /api/3/action/datastore_upsert`.
+"""End-to-end tests for `POST /datastore/api/v2/datastore_upsert`.
 
 Covers:
     1. all three methods (upsert, insert, update) and the default method
@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
 
-UPSERT_URL = "/api/3/action/datastore_upsert"
+UPSERT_URL = "/datastore/api/v2/datastore_upsert"
 
 _RESOURCE_ID = "balancing_auction_results_2025"
 

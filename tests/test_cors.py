@@ -53,7 +53,7 @@ def test_specific_domain_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_preflight_options(monkeypatch: pytest.MonkeyPatch) -> None:
     with _client_with_origins(monkeypatch, "https://data.example.org") as client:
         r = client.options(
-            "/api/3/action/datastore_create",
+            "/datastore/api/v2/datastore_create",
             headers={
                 "Origin": "https://data.example.org",
                 "Access-Control-Request-Method": "POST",

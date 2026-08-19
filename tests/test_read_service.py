@@ -58,7 +58,7 @@ def _data_dict(**overrides: Any) -> dict[str, Any]:
 
 def _call(
     *, data_dict_overrides: dict[str, Any] | None = None,
-    request_url: str = "http://test/api/3/action/datastore_search?resource_id=res-1",
+    request_url: str = "http://test/datastore/api/v2/datastore_search?resource_id=res-1",
 ) -> dict[str, Any]:
     """Run `search_datastore`, drain its iterator, and parse the JSON body."""
     body_iter: Iterator[bytes] = asyncio.run(search_datastore(
@@ -82,7 +82,7 @@ def test_returns_valid_json_envelope() -> None:
 
 def test_help_field_equals_request_url() -> None:
     """The envelope's `help` field is the request URL passed in."""
-    url = "http://test/api/3/action/datastore_search?resource_id=res-1&limit=10"
+    url = "http://test/datastore/api/v2/datastore_search?resource_id=res-1&limit=10"
     body = _call(request_url=url)
     assert body["help"] == url
 
@@ -181,18 +181,18 @@ def test_links_bare_path_url() -> None:
     """Bare path input → bare path output (no scheme/host to preserve).
     With a known `total > offset + limit`, `next` is emitted."""
     links = _build_pagination_links(
-        "/api/3/action/datastore_search",
+        "/datastore/api/v2/datastore_search",
         limit=100, offset=0, total=500,
     )
-    assert links["start"] == "/api/3/action/datastore_search"
-    assert links["next"] == "/api/3/action/datastore_search?offset=100"
+    assert links["start"] == "/datastore/api/v2/datastore_search"
+    assert links["next"] == "/datastore/api/v2/datastore_search?offset=100"
 
 
 def test_links_strip_offset_from_start() -> None:
     """`start` always drops `offset` (it defaults to 0); `prev` lands
     at `max(0, offset - limit)`; `next` advances by `limit`."""
     links = _build_pagination_links(
-        "/api/3/action/datastore_search?resource_id=res-1&offset=50",
+        "/datastore/api/v2/datastore_search?resource_id=res-1&offset=50",
         limit=10, offset=50, total=200,
     )
     assert "offset" not in links["start"]
@@ -205,7 +205,7 @@ def test_links_preserve_other_query_params() -> None:
     """filters, sort, fields ride along on every emitted URL. Page
     counters travel as ints and don't carry params."""
     url = (
-        "/api/3/action/datastore_search"
+        "/datastore/api/v2/datastore_search"
         "?resource_id=res-1&filters=%7B%22a%22%3A1%7D"
         "&sort=created+desc&fields=a,b"
     )
@@ -228,11 +228,11 @@ def test_links_preserve_other_query_params() -> None:
 def test_links_preserve_scheme_and_host_from_full_url() -> None:
     """Full URL input → full URL output (scheme + host carried through)."""
     links = _build_pagination_links(
-        "http://example.com/api/3/action/datastore_search?limit=100",
+        "http://example.com/datastore/api/v2/datastore_search?limit=100",
         limit=100, offset=0, total=500,
     )
-    assert links["start"].startswith("http://example.com/api/3/action/datastore_search")
-    assert links["next"].startswith("http://example.com/api/3/action/datastore_search")
+    assert links["start"].startswith("http://example.com/datastore/api/v2/datastore_search")
+    assert links["next"].startswith("http://example.com/datastore/api/v2/datastore_search")
     assert "offset=100" in links["next"]
 
 

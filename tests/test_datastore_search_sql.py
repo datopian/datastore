@@ -1,4 +1,4 @@
-"""End-to-end tests for `GET /api/3/action/datastore_search_sql`.
+"""End-to-end tests for `GET /datastore/api/v2/datastore_search_sql`.
 
 Only `sql` is accepted as a query parameter; the response reuses the
 `datastore_search` envelope shape (same writer, same `_links` / `limit` /
@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
 
-SQL_URL = "/api/3/action/datastore_search_sql"
+SQL_URL = "/datastore/api/v2/datastore_search_sql"
 
 
 # 1. Happy path -------------------------------------------------------------
@@ -333,10 +333,10 @@ def test_each_table_authorized_once_for_joins(
     assert fake_ckan.authorize_calls - before == 2
 
 
-# 8. Download param moved to /datastore/dump/query --------------------------
+# 8. Download param moved to /datastore/api/dump/query --------------------------
 
 def test_download_param_no_longer_accepted(client: TestClient) -> None:
-    """SQL downloads live at `GET /datastore/dump/query?sql=&format=` now;
+    """SQL downloads live at `GET /datastore/api/dump/query?sql=&format=` now;
     `extra="forbid"` rejects the retired `download` param here."""
     response = client.get(SQL_URL, params={
         "sql": "SELECT 1 LIMIT 10", "download": "csv",

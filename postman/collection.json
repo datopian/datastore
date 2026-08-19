@@ -1,6 +1,6 @@
 {
   "info": {
-    "_postman_id": "2d4510dd-5f60-4f1d-860c-2da4b7b394fa",
+    "_postman_id": "4a423ff3-570d-4f47-bab9-dbfbfacec483",
     "name": "Datastore API",
     "description": "CKAN-compatible datastore API \u2014 auto-generated from `example_payload/`. Set `baseUrl` to your server, `apiKey` to a CKAN API key (anonymous reads are allowed; writes require a key), and `resourceId` to the table you want to hit.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -45,26 +45,8 @@
   "item": [
     {
       "name": "health",
-      "description": "Liveness / readiness probes live under `/datastore/api` (`/datastore/api/health`, `/datastore/api/ready`); the welcome banner is at the root `/`. Hit any of these to check the server.",
+      "description": "Liveness / readiness probes: `/datastore/api/health` and `/datastore/api/ready`. Hit either to check the server.",
       "item": [
-        {
-          "name": "Welcome",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                ""
-              ]
-            },
-            "description": "Banner / root endpoint. Echoes `APP_MESSAGE`."
-          },
-          "response": []
-        },
         {
           "name": "Health",
           "request": {
@@ -131,14 +113,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_create",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_create",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_create"
               ]
             },
@@ -166,14 +148,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_create",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_create",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_create"
               ]
             },
@@ -201,14 +183,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_create",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_create",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_create"
               ]
             },
@@ -242,14 +224,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_upsert",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_upsert",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_upsert"
               ]
             },
@@ -277,14 +259,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_upsert",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_upsert",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_upsert"
               ]
             },
@@ -312,14 +294,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_upsert",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_upsert",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_upsert"
               ]
             },
@@ -339,14 +321,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_info?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_info?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_info"
               ],
               "query": [
@@ -366,14 +348,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_info?id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_info?id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_info"
               ],
               "query": [
@@ -399,14 +381,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search"
               ],
               "query": [
@@ -426,14 +408,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&filters={\"product_code\": \"DCL\", \"accepted\": true}&limit=100",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&filters={\"product_code\": \"DCL\", \"accepted\": true}&limit=100",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search"
               ],
               "query": [
@@ -461,14 +443,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&q=DRAX&plain=true&language=english&limit=50",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&q=DRAX&plain=true&language=english&limit=50",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search"
               ],
               "query": [
@@ -504,14 +486,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&fields=auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh&sort=delivery_start desc, clearing_price_gbp_per_mwh asc&limit=100&offset=0&include_total=true",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&fields=auction_id,product_code,delivery_start,clearing_price_gbp_per_mwh,volume_mwh&sort=delivery_start desc, clearing_price_gbp_per_mwh asc&limit=100&offset=0&include_total=true",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search"
               ],
               "query": [
@@ -551,14 +533,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&fields=auction_id,product_code,clearing_price_gbp_per_mwh&records_format=lists&limit=100",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&fields=auction_id,product_code,clearing_price_gbp_per_mwh&records_format=lists&limit=100",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search"
               ],
               "query": [
@@ -590,14 +572,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&fields=auction_id,product_code,clearing_price_gbp_per_mwh&records_format=csv&limit=100",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search?resource_id=7a10def4-8e95-46f9-96c7-9f61bdfd1a09&fields=auction_id,product_code,clearing_price_gbp_per_mwh&records_format=csv&limit=100",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search"
               ],
               "query": [
@@ -635,14 +617,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT auction_id, product_code, clearing_price_gbp_per_mwh FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" WHERE accepted = true LIMIT 100",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search_sql?sql=SELECT auction_id, product_code, clearing_price_gbp_per_mwh FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" WHERE accepted = true LIMIT 100",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search_sql"
               ],
               "query": [
@@ -662,14 +644,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price, SUM(volume_mwh) AS total_volume FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" WHERE accepted = true GROUP BY product_code ORDER BY product_code LIMIT 50",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search_sql?sql=SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price, SUM(volume_mwh) AS total_volume FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" WHERE accepted = true GROUP BY product_code ORDER BY product_code LIMIT 50",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search_sql"
               ],
               "query": [
@@ -689,14 +671,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=WITH daily AS (SELECT DATE(delivery_start) AS d, product_code, AVG(clearing_price_gbp_per_mwh) AS price FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" WHERE accepted = true GROUP BY d, product_code) SELECT * FROM daily ORDER BY d DESC, product_code LIMIT 50",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search_sql?sql=WITH daily AS (SELECT DATE(delivery_start) AS d, product_code, AVG(clearing_price_gbp_per_mwh) AS price FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" WHERE accepted = true GROUP BY d, product_code) SELECT * FROM daily ORDER BY d DESC, product_code LIMIT 50",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search_sql"
               ],
               "query": [
@@ -716,14 +698,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT _id, auction_id, product_code, delivery_start FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" ORDER BY _id ASC LIMIT 50 OFFSET 100",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search_sql?sql=SELECT _id, auction_id, product_code, delivery_start FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" ORDER BY _id ASC LIMIT 50 OFFSET 100",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search_sql"
               ],
               "query": [
@@ -743,14 +725,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT a._id AS a_id, b._id AS b_id, a.auction_id, a.product_code FROM \"balancing_auction_results_2025\" a JOIN \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" b ON a.auction_id = b.auction_id WHERE a.product_code = 'DCL' ORDER BY a.auction_id ASC LIMIT 50",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search_sql?sql=SELECT a._id AS a_id, b._id AS b_id, a.auction_id, a.product_code FROM \"balancing_auction_results_2025\" a JOIN \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" b ON a.auction_id = b.auction_id WHERE a.product_code = 'DCL' ORDER BY a.auction_id ASC LIMIT 50",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search_sql"
               ],
               "query": [
@@ -770,14 +752,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_search_sql?sql=SELECT '2025' AS source, auction_id, product_code, delivery_start FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" UNION ALL SELECT '2024' AS source, auction_id, product_code, delivery_start FROM \"balancing_auction_results_2024\" ORDER BY delivery_start DESC LIMIT 100",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_search_sql?sql=SELECT '2025' AS source, auction_id, product_code, delivery_start FROM \"7a10def4-8e95-46f9-96c7-9f61bdfd1a09\" UNION ALL SELECT '2024' AS source, auction_id, product_code, delivery_start FROM \"balancing_auction_results_2024\" ORDER BY delivery_start DESC LIMIT 100",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_search_sql"
               ],
               "query": [
@@ -817,14 +799,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_delete",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_delete",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_delete"
               ]
             },
@@ -852,14 +834,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_delete",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_delete",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_delete"
               ]
             },
@@ -887,14 +869,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_delete",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_delete",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_delete"
               ]
             },
@@ -922,14 +904,14 @@
               }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/3/action/datastore_delete",
+              "raw": "{{baseUrl}}/datastore/api/v2/datastore_delete",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
+                "datastore",
                 "api",
-                "3",
-                "action",
+                "v2",
                 "datastore_delete"
               ]
             },

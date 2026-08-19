@@ -1,7 +1,7 @@
-"""End-to-end tests for `GET /`, `GET /health`, `GET /ready`.
+"""End-to-end tests for the health probes.
 
 Covers:
-    1. /          — welcome envelope
+    1. /          — no route; the service has no landing endpoint
     2. /health    — always 200 while the process is up
     3. /ready     — 200 when both engines pass healthcheck; 503 with a
                     Service Unavailable envelope when either fails
@@ -25,22 +25,17 @@ def _clean_engine_cache() -> Iterator[None]:
     reset_engine_cache()
 
 
-# 1. Welcome ----------------------------------------------------------------
+# 1. No landing endpoint ----------------------------------------------------
 
-def test_welcome_returns_envelope(client: TestClient) -> None:
-    response = client.get("/")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is True
-    assert isinstance(body["result"]["message"], str)
+def test_root_is_not_routed(client: TestClient) -> None:
+    """There is no welcome/landing endpoint — every route lives under the
+    versioned API prefix."""
+    assert client.get("/").status_code == 404
 
 
-def test_welcome_not_mounted_under_action_prefix(client: TestClient) -> None:
-    """Welcome is root-only — `/api/3/action/` is the CKAN action
-    namespace and shouldn't echo a generic landing message."""
-    response = client.get("/api/3/action/")
-    assert response.status_code == 404
+def test_action_prefix_root_is_not_routed(client: TestClient) -> None:
+    """The action namespace itself isn't a route either."""
+    assert client.get("/datastore/api/v2/").status_code == 404
 
 
 # 2. /health ----------------------------------------------------------------

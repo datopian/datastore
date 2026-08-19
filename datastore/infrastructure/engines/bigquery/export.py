@@ -1,4 +1,4 @@
-"""BigQuery download pipeline — `/datastore/dump/{rid}` + `/datastore/dump/query`.
+"""BigQuery download pipeline — `<API_BASE_PREFIX>/dump/{rid}` + `<API_BASE_PREFIX>/dump/query`.
 
 Read top-down: entry points, then the workflow they share, then the
 helpers each step uses.

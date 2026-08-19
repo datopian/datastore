@@ -1,4 +1,4 @@
-"""End-to-end tests for `GET /api/3/action/datastore_search`.
+"""End-to-end tests for `GET /datastore/api/v2/datastore_search`.
 
 `datastore_search` is GET with query parameters. Complex types are
 encoded:
@@ -37,7 +37,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
 
-SEARCH_URL = "/api/3/action/datastore_search"
+SEARCH_URL = "/datastore/api/v2/datastore_search"
 
 _RESOURCE_ID = "balancing_auction_results_2025"
 
@@ -505,7 +505,7 @@ def test_search_objects_response_includes_links(client: TestClient) -> None:
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
     assert set(links) == {"start", "page_size", "page", "total_pages"}
-    assert links["start"].startswith("http://testserver/api/3/action/datastore_search")
+    assert links["start"].startswith("http://testserver/datastore/api/v2/datastore_search")
     assert "offset" not in links["start"]
     assert f"resource_id={_RESOURCE_ID}" in links["start"]
     assert links["page_size"] == 100  # default limit

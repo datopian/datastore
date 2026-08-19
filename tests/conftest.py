@@ -67,6 +67,11 @@ def _isolate_bigquery_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # Pydantic-Settings can't parse "" as int — give the dump-URL TTL a
     # valid placeholder so a stray .env doesn't break startup in tests.
     monkeypatch.setenv("BIGQUERY_EXPORT_URL_EXPIRY_HOURS", "1")
+    for name in (
+        "DOCS_PRIMARY_COLOR", "DOCS_HEADER_COLOR",
+        "DOCS_SITE_TITLE", "DOCS_LOGO_URL",
+    ):
+        monkeypatch.setenv(name, "")
     # `Config` and engine instances are lru-cached / module-level
     # singletons; invalidate so the cleared env actually takes effect.
     get_config.cache_clear()

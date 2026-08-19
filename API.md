@@ -1,11 +1,11 @@
 # Datastore API Reference
 
 A standalone, CKAN-compatible datastore service: tabular CRUD + search over a
-pluggable storage backend. Every action lives under `/api/3/action/` and returns
+pluggable storage backend. Every action lives under `/datastore/api/v2/` and returns
 the CKAN envelope, so existing CKAN datastore clients work unchanged — whether
 this runs alongside CKAN or independently.
 
-- **Interactive docs:** `GET /datastore/api/docs` (Swagger UI) · `GET /datastore/api/redoc` · `GET /datastore/api/openapi.json`
+- **Interactive docs:** `GET /datastore/api/v2/docs` (Swagger UI) · `GET /datastore/api/v2/redoc` · `GET /datastore/api/v2/openapi.json`
 - **Postman:** import [postman/collection.json](postman/collection.json) — one worked request per endpoint.
 
 ---
@@ -66,19 +66,19 @@ token (except under `anonymous`).
 
 | Method | Path | Summary |
 |---|---|---|
-| POST | `/api/3/action/datastore_create` | Declare a resource (and optionally seed rows) |
-| POST | `/api/3/action/datastore_upsert` | Insert / update / upsert rows |
-| POST | `/api/3/action/datastore_delete` | Delete rows, drop columns, or drop the table |
-| GET | `/api/3/action/datastore_search` | Search a resource (streaming) |
-| GET | `/api/3/action/datastore_search_sql` | Run a read-only SQL `SELECT` (streaming) |
-| GET | `/datastore/dump/query` | Download the result of a SQL `SELECT` as a file |
-| GET | `/api/3/action/datastore_info` | Schema + row stats for a resource |
-| GET | `/datastore/dump/{resource_id}` | Download a whole resource (CSV/NDJSON/Parquet) |
-| GET | `/` · `/health` · `/ready` | Welcome / liveness / readiness |
+| POST | `/datastore/api/v2/datastore_create` | Declare a resource (and optionally seed rows) |
+| POST | `/datastore/api/v2/datastore_upsert` | Insert / update / upsert rows |
+| POST | `/datastore/api/v2/datastore_delete` | Delete rows, drop columns, or drop the table |
+| GET | `/datastore/api/v2/datastore_search` | Search a resource (streaming) |
+| GET | `/datastore/api/v2/datastore_search_sql` | Run a read-only SQL `SELECT` (streaming) |
+| GET | `/datastore/api/dump/query` | Download the result of a SQL `SELECT` as a file |
+| GET | `/datastore/api/v2/datastore_info` | Schema + row stats for a resource |
+| GET | `/datastore/api/dump/{resource_id}` | Download a whole resource (CSV/NDJSON/Parquet) |
+| GET | `/datastore/api/health` · `/datastore/api/ready` | Liveness / readiness |
 
 ---
 
-## `POST /api/3/action/datastore_create`
+## `POST /datastore/api/v2/datastore_create`
 
 Declare a resource (table) and optionally seed it with rows. Re-declaring an
 existing resource adds columns and widens types (see below).
@@ -154,7 +154,7 @@ round-tripped by `datastore_info`.
 
 ---
 
-## `POST /api/3/action/datastore_upsert`
+## `POST /datastore/api/v2/datastore_upsert`
 
 Write rows into an existing resource (declare it with `datastore_create` first).
 
@@ -197,7 +197,7 @@ never carries it.
 
 ---
 
-## `POST /api/3/action/datastore_delete`
+## `POST /datastore/api/v2/datastore_delete`
 
 Three modes (`filters` and `fields` are mutually exclusive):
 
@@ -244,7 +244,7 @@ follow-up `datastore_info`:
 
 ---
 
-## `GET /api/3/action/datastore_search`
+## `GET /datastore/api/v2/datastore_search`
 
 Parameterised search; the response is **streamed** (peak memory ≈ one row).
 
@@ -268,7 +268,7 @@ Parameterised search; the response is **streamed** (peak memory ≈ one row).
 ### Example
 
 ```http
-GET /api/3/action/datastore_search
+GET /datastore/api/v2/datastore_search
     ?resource_id=c6153a74-43cb-4edf-8bdf-bb664feca937
     &filters={"product_code":"DCL","accepted":true}
     &sort=delivery_start desc
@@ -305,12 +305,12 @@ GET /api/3/action/datastore_search
 
 ---
 
-## `GET /api/3/action/datastore_search_sql`
+## `GET /datastore/api/v2/datastore_search_sql`
 
 Run a single read-only `SELECT` / `WITH` statement and stream the result. Tables
 are referenced by `resource_id`; each is authorized individually, and functions
 are checked against the engine's allow-list. Include a `LIMIT` (required).
-To export the result as a file instead, use [`GET /datastore/dump/query`](#get-datastoredumpquery).
+To export the result as a file instead, use [`GET /datastore/api/dump/query`](#get-datastoredumpquery).
 
 ### Query parameters
 
@@ -321,7 +321,7 @@ To export the result as a file instead, use [`GET /datastore/dump/query`](#get-d
 ### Example
 
 ```http
-GET /api/3/action/datastore_search_sql?sql=
+GET /datastore/api/v2/datastore_search_sql?sql=
   SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price
   FROM "c6153a74-43cb-4edf-8bdf-bb664feca937"
   WHERE accepted = true
@@ -348,7 +348,7 @@ refuses DML/DDL.
 
 ---
 
-## `GET /api/3/action/datastore_info`
+## `GET /datastore/api/v2/datastore_info`
 
 Returns the column schema (including the `info` data dictionary, verbatim) plus
 row stats — a column-level metadata catalog without a side store.
@@ -382,7 +382,7 @@ row stats — a column-level metadata catalog without a side store.
 
 ---
 
-## `GET /datastore/dump/{resource_id}`
+## `GET /datastore/api/dump/{resource_id}`
 
 Download an entire resource. Pick the format with `?format=csv` (default),
 `gzip`, `ndjson`, or `parquet`.
@@ -401,13 +401,13 @@ Download an entire resource. Pick the format with `?format=csv` (default),
 Requires `read` permission on the resource and a configured export bucket
 (`BIGQUERY_EXPORT_BUCKET`).
 
-`query` is a **reserved name** on this route — `/datastore/dump/query` is the SQL
+`query` is a **reserved name** on this route — `/datastore/api/dump/query` is the SQL
 download endpoint below, so a resource literally named `query` can't be dumped
 by this URL.
 
 ---
 
-## `GET /datastore/dump/query`
+## `GET /datastore/api/dump/query`
 
 Download the result of a **SQL `SELECT`** as a single file — filtered
 downloads at any size. Same validation as `datastore_search_sql` (single
@@ -424,14 +424,14 @@ file itself, not the CKAN envelope.
 ### Example
 
 ```http
-GET /datastore/dump/query
+GET /datastore/api/dump/query
     ?sql=SELECT * FROM "c6153a74-43cb-4edf-8bdf-bb664feca937" WHERE accepted = true
     &format=csv
 ```
 
 ### Response
 
-Identical to `/datastore/dump/{resource_id}` above:
+Identical to `/datastore/api/dump/{resource_id}` above:
 
 - **csv / gzip / ndjson** — `302` to a signed GCS URL at any size (shards are
   composed into one object). The URL expires after
@@ -461,9 +461,8 @@ All return the CKAN envelope.
 
 | Method | Path | Result |
 |---|---|---|
-| GET | `/` | `{"message": "<APP_MESSAGE>"}` |
-| GET | `/health` | `{"status": "ok"}` — liveness; always 200 while the process runs |
-| GET | `/ready` | `{"status": "ready"}` — 200 when both engines pass `healthcheck()`; `503` (`{"status": "not_ready"}`) otherwise |
+| GET | `/datastore/api/health` | `{"status": "ok"}` — liveness; always 200 while the process runs |
+| GET | `/datastore/api/ready` | `{"status": "ready"}` — 200 when both engines pass `healthcheck()`; `503` (`{"status": "not_ready"}`) otherwise |
 
 ---
 

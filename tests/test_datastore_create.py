@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
 
-CREATE_URL = "/api/3/action/datastore_create"
+CREATE_URL = "/datastore/api/v2/datastore_create"
 
 
 def _valid_payload_with_resource_id() -> dict[str, Any]:

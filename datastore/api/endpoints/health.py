@@ -9,22 +9,9 @@ from starlette.responses import JSONResponse
 from datastore.api.responses import _success_response
 from datastore.core.config import get_config
 from datastore.infrastructure.engines.registry import get_datastore_engine
-from datastore.schemas.responses import StatusResponse, WelcomeResponse
-
-welcome_router = APIRouter(tags=["Health"])
-
+from datastore.schemas.responses import StatusResponse
 
 probe_router = APIRouter(tags=["Health"])
-
-
-@welcome_router.get(
-    "/", response_model=WelcomeResponse, summary="Service welcome message"
-)
-def welcome(request: Request):
-    return _success_response(
-        request,
-        WelcomeResponse.Result(message=get_config().APP_MESSAGE),
-    )
 
 
 @probe_router.get(

@@ -1,4 +1,4 @@
-"""End-to-end tests for `POST /api/3/action/datastore_delete`.
+"""End-to-end tests for `POST /datastore/api/v2/datastore_delete`.
 
 Body accepts:
     resource_id / id (one required) — table to delete from
@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
 
-DELETE_URL = "/api/3/action/datastore_delete"
+DELETE_URL = "/datastore/api/v2/datastore_delete"
 _RESOURCE_ID = "balancing_auction_results_2025"
 
 

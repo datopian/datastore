@@ -26,13 +26,13 @@ class ResponseModel(BaseModel):
 
 
 class ErrorEnvelope(BaseModel):
-    """CKAN-shaped error body returned for every 4xx / 5xx response."""
+    """Error body returned for every 4xx / 5xx response."""
 
     model_config = ConfigDict(
         populate_by_name=True,
         json_schema_extra={
             "example": {
-                "help": "https://example.com/api/3/action/datastore_search",
+                "help": "https://example.com/datastore/api/v2/datastore_search",
                 "success": False,
                 "error": {
                     "__type": "Validation Error",
@@ -59,15 +59,6 @@ class ErrorEnvelope(BaseModel):
 
 
 # --- health -----------------------------------------------------------------
-
-
-class WelcomeResponse(ResponseModel):
-    """Response for `GET /`."""
-
-    class Result(BaseModel):
-        message: str
-
-    result: Result
 
 
 class StatusResponse(ResponseModel):

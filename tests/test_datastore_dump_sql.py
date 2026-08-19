@@ -45,7 +45,7 @@ from tests.test_datastore_dump import (
     stub_signed_urls,
 )
 
-DUMP_SQL_URL = "/datastore/dump/query"
+DUMP_SQL_URL = "/datastore/api/dump/query"
 
 _NOW = dt.datetime.now(dt.timezone.utc)
 
@@ -887,7 +887,7 @@ def test_zero_table_sql_exports_without_get_table() -> None:
 
 
 # =============================================================================
-# Endpoint: GET /datastore/dump/query
+# Endpoint: GET /datastore/api/dump/query
 # =============================================================================
 
 
@@ -999,7 +999,7 @@ def test_bogus_format_rejected(client: TestClient) -> None:
 
 
 def test_missing_sql_names_the_field(client: TestClient) -> None:
-    """`/datastore/dump/query` resolves to the SQL route (declared before
+    """`/datastore/api/dump/query` resolves to the SQL route (declared before
     `/{resource_id}`, so `query` is a reserved resource name) — a missing
     `sql` param is a validation error on this endpoint, not a 404 dump
     of a table called 'query'."""

@@ -39,7 +39,7 @@ class ConflictError(APIError):
 
 
 class PayloadTooLargeError(APIError):
-    """Raised when `/datastore/dump/<rid>?format=parquet` exceeds
+    """Raised when `<API_BASE_PREFIX>/dump/<rid>?format=parquet` exceeds
     BigQuery's 1 GB single-file limit. CSV / NDJSON dumps stitch
     multiple shards into one download, but Parquet shards can't be
     byte-concatenated (each shard has its own footer), so big tables

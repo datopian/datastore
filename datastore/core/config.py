@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -39,14 +40,18 @@ def _available_auth_types() -> set[str]:
     return _subdirs(_AUTH_DIR)
 
 
+# Hex / rgb() / hsl() / named CSS colours. Deliberately narrow: these values
+# land inside a `<style>` block on the docs page.
+_CSS_COLOR_RE = re.compile(
+    r"^(#[0-9a-fA-F]{3,8}"
+    r"|rgba?\([\d\s.,%/]+\)"
+    r"|hsla?\([\d\s.,%/deg]+\)"
+    r"|[a-zA-Z]+)$"
+)
+
+
 class Config(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    # Application metadata
-    APP_MESSAGE: str = Field(
-        default="Datastore API",
-        description="Welcome message shown on the root endpoint",
-    )
 
     # Request limits
     MAX_REQUEST_BODY_MB: int = Field(
@@ -70,6 +75,52 @@ class Config(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """`CORS_ORIGINS` split on commas, blanks dropped. `[]` = disabled."""
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    # Swagger UI branding. The docs page writes these into CSS custom
+    # properties that `api/static/theme/theme.css` reads, so a deployment
+    # rebrands through env vars rather than by shipping CSS. Empty values
+    # keep the stylesheet's own defaults.
+    DOCS_PRIMARY_COLOR: str = Field(
+        default="",
+        description=(
+            "Brand colour for links, inline code and the Authorize/Execute "
+            "buttons (any CSS colour). Empty keeps the stylesheet default."
+        ),
+    )
+    DOCS_HEADER_COLOR: str = Field(
+        default="",
+        description=(
+            "Background of the docs page header. Empty means the header takes "
+            "`DOCS_PRIMARY_COLOR`, so setting one colour brands the whole "
+            "page; set this to decouple the bar from the accent colour (a "
+            "neutral `#1f2937` keeps a saturated brand from competing with "
+            "the content)."
+        ),
+    )
+    DOCS_SITE_TITLE: str = Field(
+        default="",
+        description=(
+            "Title shown in the docs page header. Empty falls back to the "
+            "OpenAPI title."
+        ),
+    )
+    DOCS_LOGO_URL: str = Field(
+        default="",
+        description="Logo shown in the docs page header. Empty shows none.",
+    )
+
+    @field_validator("DOCS_PRIMARY_COLOR", "DOCS_HEADER_COLOR")
+    @classmethod
+    def _check_css_color(cls, v: str) -> str:
+        """Drop anything that isn't a CSS colour.
+
+        The value is written into a `<style>` block on the docs page, so it
+        is validated here rather than injected as given.
+        """
+        v = v.strip()
+        if v and not _CSS_COLOR_RE.match(v):
+            raise ValueError(f"{v!r} is not a CSS colour")
+        return v
 
     # Datastore backend. Typed as `str` (not `Literal`) so engines added
     # as local-only sub-packages (gitignored) are auto-accepted without
@@ -146,7 +197,7 @@ class Config(BaseSettings):
     BIGQUERY_EXPORT_BUCKET: str = Field(
         default="",
         description=(
-            "GCS bucket name (no `gs://` prefix) that `/datastore/dump/<rid>` "
+            "GCS bucket name (no `gs://` prefix) that `<API_BASE_PREFIX>/dump/<rid>` "
         ),
     )
     BIGQUERY_EXPORT_URL_EXPIRY_HOURS: int = Field(

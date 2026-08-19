@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-# Download formats served by the export pipeline (`/datastore/dump/…` and
+API_BASE_PREFIX = "/datastore/api"
+API_VERSION = "v2"
+API_PREFIX = f"{API_BASE_PREFIX}/{API_VERSION}"
+# Download formats served by the export pipeline (`<API_BASE_PREFIX>/dump/…` and
 # `datastore_search_sql?download=…`). Lives here — not in `api/` — because
 # both the request schemas (pydantic layer) and the endpoints (starlette
 # layer) need it, and `schemas/` must not import from `api/`.

@@ -1,4 +1,4 @@
-"""Download endpoints: `/datastore/dump/{resource_id}` + `/datastore/dump/query`.
+"""Download endpoints: `<API_BASE_PREFIX>/dump/{resource_id}` + `<API_BASE_PREFIX>/dump/query`.
 
 csv / gzip / ndjson shards are composed into one GCS object, so those
 always redirect — the server never touches the bytes. Parquet can't be
@@ -71,7 +71,7 @@ def download_response(
 
 
 @router.get(
-    "/datastore/dump/query",
+    "/dump/query",
     summary="Download the result of a SQL SELECT (CSV / gzip CSV / NDJSON / Parquet)",
     responses={
         302: {"description": "Redirect to the signed download URL."},
@@ -106,7 +106,7 @@ async def dump_sql(
 
 
 @router.get(
-    "/datastore/dump/{resource_id}",
+    "/dump/{resource_id}",
     summary="Download an entire table (CSV / gzip CSV / NDJSON / Parquet)",
     responses={
         302: {"description": "Redirect to the signed Download URL."},
