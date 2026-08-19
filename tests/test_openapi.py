@@ -17,7 +17,7 @@ import pytest
 from datastore.api import docs as docs_module
 from datastore.api.docs import api_description
 from datastore.core.config import Config, get_config
-from datastore.core.constants import API_PREFIX, API_VERSION
+from datastore.core.constants import API_PREFIX, API_URL, API_VERSION
 from datastore.main import create_app
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -249,6 +249,46 @@ def test_operation_ids_are_the_handler_names(client: TestClient) -> None:
     assert not any("_get" in i or "_post" in i for i in ids), (
         f"FastAPI's auto-generated ids leaked through: {sorted(ids)}"
     )
+
+
+# 3e. schema examples are absolute and consistent ---------------------------
+
+def test_error_example_url_matches_the_route_prefix(client: TestClient) -> None:
+    """The example `help` is built from `API_PREFIX`, so it can't drift out of
+    sync with the paths the service actually serves."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+
+    assert example["help"] == (
+        f"{API_URL}{API_PREFIX}/docs#/Datastore/datastore_search"
+    )
+
+
+def test_error_example_anchor_names_a_real_operation(client: TestClient) -> None:
+    """The example deep-links at an operation that exists — an example that
+    points nowhere teaches the reader the wrong URL shape."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    _, _, anchor = example["help"].partition("#/")
+    tag, _, operation_id = anchor.partition("/")
+
+    ids = {
+        op["operationId"]
+        for item in schema["paths"].values()
+        for op in item.values()
+        if tag in op.get("tags", [])
+    }
+    assert operation_id in ids, f"{anchor!r} names no operation tagged {tag!r}"
+
+
+def test_live_help_is_derived_from_the_request(client: TestClient) -> None:
+    """Runtime `help` comes from the incoming request, not `API_URL` — so it
+    stays correct behind a proxy or on any host."""
+    body = client.get(f"{API_PREFIX}/datastore_search?resource_id=x").json()
+
+    assert body["help"].startswith("http://testserver/")
 
 
 # 4. Swagger UI page ------------------------------------------------------------

@@ -15,6 +15,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from datastore.core.constants import API_PREFIX, API_URL
 from datastore.schemas.validators import FieldSpec
 
 
@@ -32,7 +33,10 @@ class ErrorEnvelope(BaseModel):
         populate_by_name=True,
         json_schema_extra={
             "example": {
-                "help": "https://example.com/datastore/api/v2/docs#/Datastore/datastore_search",
+                "help": (
+                    f"{API_URL}{API_PREFIX}"
+                    "/docs#/Datastore/datastore_search"
+                ),
                 "success": False,
                 "error": {
                     "__type": "Validation Error",

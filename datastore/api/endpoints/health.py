@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from datastore.api.responses import _success_response
+from datastore.api.responses import _help, _success_response
 from datastore.core.config import get_config
 from datastore.infrastructure.engines.registry import get_datastore_engine
 from datastore.schemas.responses import StatusResponse
@@ -47,7 +47,7 @@ def ready(request: Request):
         return JSONResponse(
             status_code=503,
             content={
-                "help": str(request.url),
+                "help": _help(request),
                 "success": False,
                 "result": {"status": "not_ready"},
             },
