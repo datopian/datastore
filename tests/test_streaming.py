@@ -44,12 +44,12 @@ def test_records_object_array_serialises_decimal_and_bytes() -> None:
         {
             "product_code": "DCL",
             "clearing_price_gbp_per_mwh": 47.82,
-            "signature": "AP8=",                 # b64("\x00\xff")
+            "signature": "AP8=",  # b64("\x00\xff")
         },
         {
             "product_code": "DCH",
             "clearing_price_gbp_per_mwh": 1e-38,
-            "signature": "YWJj",                 # b64(b"abc")
+            "signature": "YWJj",  # b64(b"abc")
         },
     ]
     # Confirm the type, not just the value — `47.82 == "47.82"` would be

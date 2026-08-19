@@ -47,8 +47,7 @@ router = APIRouter(tags=["Datastore"], responses=ERROR_RESPONSES)
 # migrate to `result.schema` — the wording mirrors the same field's
 # deprecation on `DatastoreCreateRequest`.
 _LEGACY_FIELDS_WARNING = (
-    "'fields' is deprecated — use 'schema' (Frictionless Table Schema) "
-    "instead."
+    "'fields' is deprecated — use 'schema' (Frictionless Table Schema) instead."
 )
 
 
@@ -130,7 +129,6 @@ async def datastore_upsert(
     return _success_response(request, result)
 
 
-
 @router.get(
     "/datastore_search",
     response_model=DatastoreSearchResponse,
@@ -181,7 +179,7 @@ async def datastore_search_sql(
 ):
     """`GET /api/3/datastore_search_sql` — execute a raw SQL SELECT and stream.
     Accepts a single `sql` query parameter. To export the result as a
-    file instead, use `GET /datastore/dump/query`.
+    file instead, use `GET <API_BASE_PREFIX>/dump/query`.
     """
     for resource_id in params.resource_ids:
         await context.authorize(resource_id=resource_id, permission="read")
@@ -251,9 +249,7 @@ async def datastore_delete(
     Returns the original `filters` echoed back (CKAN convention) so the
     caller can confirm what the server actually applied.
     """
-    data_dict = await context.authorize(
-        resource_id=payload.resource_id, permission="delete"
-    )
+    data_dict = await context.authorize(resource_id=payload.resource_id, permission="delete")
     ensure_resource_writable(
         data_dict["resource"],
         force=payload.force,

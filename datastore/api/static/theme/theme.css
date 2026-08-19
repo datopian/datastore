@@ -1,0 +1,565 @@
+/* Styling for the generated API docs page.
+ *
+ * Ported from ckanext-openapidocs so the datastore docs and the CKAN portal
+ * docs read as one family. Everything is driven by the custom properties
+ * below, so a deployment rebrands through `DOCS_PRIMARY_COLOR` (the page
+ * writes it into `--docs-primary`) without shipping its own CSS. Swagger UI's
+ * own stylesheet loads first; these rules override it.
+ */
+:root {
+  /* Light theme only: tells the browser not to auto-darken form controls,
+     scrollbars and inputs for visitors whose OS is set to dark mode. */
+  color-scheme: light;
+
+  /* Brand colour, set from `DOCS_PRIMARY_COLOR`. It drives links, inline
+     code and the Authorize/Execute buttons. */
+  --docs-primary: #3b4a5a;
+  --docs-primary-dark: color-mix(in srgb, var(--docs-primary) 82%, black);
+  --docs-primary-tint: color-mix(in srgb, var(--docs-primary) 8%, white);
+  --docs-on-primary: #ffffff;
+
+  /* The header carries the brand colour. Set `DOCS_HEADER_COLOR` to decouple
+     it from the accents. */
+  --docs-header-bg: var(--docs-primary);
+  --docs-header-fg: var(--docs-on-primary);
+
+  /* HTTP method colours. GET takes the brand colour since most actions are
+     reads; the others are distinct from it so a verb is still readable at a
+     glance. Each is its own property, so a brand colour close to one of them
+     can be overridden without touching the rest. */
+  --docs-get: var(--docs-primary);
+  --docs-post: #0f766e;
+  --docs-delete: #b3261e;
+  --docs-put: #a16207;
+
+  --docs-text: #1a1a1a;
+  --docs-muted: #6b7280;
+  --docs-border: #e5e7eb;
+  --docs-surface: #ffffff;
+  --docs-canvas: #f7f8fa;
+
+  --docs-radius: 10px;
+  --docs-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  --docs-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+body {
+  margin: 0;
+  background: var(--docs-canvas);
+  font-family: var(--docs-font);
+}
+
+/* Swagger UI ships its own header; the page supplies a branded one instead. */
+.swagger-ui .topbar {
+  display: none;
+}
+
+/* ---------- Page header ---------- */
+
+.docs-header {
+  background: var(--docs-header-bg);
+  color: var(--docs-header-fg);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* Matches the width Swagger UI gives its own content, so the header title
+   lines up with the operations below it. */
+.docs-header-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.docs-logo {
+  height: 34px;
+  width: auto;
+  display: block;
+  flex: none;
+}
+
+.docs-header-text {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.docs-header-title {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.docs-header-version {
+  flex: none;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 18%);
+}
+
+.docs-header-link {
+  margin-left: auto;
+  flex: none;
+  color: var(--docs-header-fg);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+  padding: 7px 14px;
+  border: 1px solid rgb(255 255 255 / 40%);
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+
+.docs-header-link:hover,
+.docs-header-link:focus-visible {
+  background: rgb(255 255 255 / 16%);
+}
+
+@media (max-width: 620px) {
+  .docs-header-inner {
+    padding: 14px 16px;
+    gap: 10px;
+  }
+
+  .docs-header-title {
+    font-size: 1.05rem;
+  }
+
+  /* The spec link is a convenience, not a necessity; drop it when narrow. */
+  .docs-header-link {
+    display: none;
+  }
+}
+
+/* ---------- Layout ---------- */
+
+.swagger-ui {
+  font-family: var(--docs-font);
+  color: var(--docs-text);
+}
+
+.swagger-ui .wrapper {
+  max-width: 1180px;
+}
+
+.swagger-ui .info {
+  margin: 28px 0 18px;
+  padding: 26px 28px;
+  background: var(--docs-surface);
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius);
+}
+
+/* The page header already shows the title and version, so Swagger UI's own
+   heading would just repeat it.
+
+   The servers row goes too: with no `servers` declared in the schema, Swagger
+   synthesizes a single entry from the spec URL, so the dropdown offers one
+   fixed choice and only takes up space. The real markup is
+   `.schemes > .schemes-server-container` (`.servers` matches nothing — it is
+   the class Swagger uses in its own stylesheet, not in the rendered tree). */
+.swagger-ui .info .main,
+.swagger-ui .info hgroup.main,
+.swagger-ui .scheme-container .schemes > .schemes-server-container,
+.swagger-ui .scheme-container .schemes-server-container,
+.swagger-ui .scheme-container .servers-title,
+.swagger-ui .scheme-container .servers {
+  display: none;
+}
+
+/* The per-operation twin of the block above: expanding an endpoint otherwise
+   shows a "Servers" section explaining that operation-level servers override
+   the global ones. Nothing here declares either, so it is a paragraph about a
+   feature this API does not use. */
+.swagger-ui .operation-servers {
+  display: none;
+}
+
+/* Keeps the Authorize button without the empty bar it normally sits in. */
+.swagger-ui .scheme-container {
+  background: transparent;
+  box-shadow: none;
+  margin: 0;
+  padding: 0 0 6px;
+}
+
+.swagger-ui .info .markdown p,
+.swagger-ui .info li {
+  color: var(--docs-muted);
+  line-height: 1.65;
+}
+
+.swagger-ui .info h3 {
+  margin-top: 22px;
+  font-size: 1.05rem;
+  color: var(--docs-text);
+}
+
+.swagger-ui .info a {
+  color: var(--docs-primary);
+}
+
+/* ---------- Tag sections ---------- */
+
+.swagger-ui .opblock-tag {
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--docs-border);
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--docs-text);
+}
+
+.swagger-ui .opblock-tag:hover {
+  background: transparent;
+}
+
+.swagger-ui .opblock-tag small {
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: var(--docs-muted);
+  padding-left: 12px;
+}
+
+/* ---------- Operations ---------- */
+
+.swagger-ui .opblock {
+  margin: 0 0 10px;
+  border: 1px solid var(--docs-border);
+  border-radius: var(--docs-radius);
+  box-shadow: none;
+  background: var(--docs-surface);
+}
+
+.swagger-ui .opblock:hover {
+  border-color: color-mix(in srgb, var(--docs-primary) 40%, var(--docs-border));
+}
+
+.swagger-ui .opblock .opblock-summary {
+  border-bottom: none;
+  padding: 6px 10px;
+}
+
+.swagger-ui .opblock .opblock-summary-method {
+  min-width: 74px;
+  border-radius: 6px;
+  font-family: var(--docs-font);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-shadow: none;
+  box-shadow: none;
+}
+
+.swagger-ui .opblock .opblock-summary-path {
+  font-family: var(--docs-mono);
+  font-size: 0.875rem;
+  color: var(--docs-text);
+}
+
+.swagger-ui .opblock .opblock-summary-description {
+  font-size: 0.85rem;
+  color: var(--docs-muted);
+}
+
+/* Every operation card is the same neutral surface; only the method badge
+   carries colour, so a long list stays calm and the verb still stands out. */
+.swagger-ui .opblock.opblock-get,
+.swagger-ui .opblock.opblock-post,
+.swagger-ui .opblock.opblock-put,
+.swagger-ui .opblock.opblock-patch,
+.swagger-ui .opblock.opblock-delete {
+  background: var(--docs-surface);
+  border-color: var(--docs-border);
+}
+
+.swagger-ui .opblock .opblock-summary {
+  border-color: transparent;
+}
+
+.swagger-ui .opblock.opblock-get .opblock-summary-method {
+  background: var(--docs-get);
+}
+
+.swagger-ui .opblock.opblock-post .opblock-summary-method {
+  background: var(--docs-post);
+}
+
+.swagger-ui .opblock.opblock-put .opblock-summary-method,
+.swagger-ui .opblock.opblock-patch .opblock-summary-method {
+  background: var(--docs-put);
+}
+
+.swagger-ui .opblock.opblock-delete .opblock-summary-method {
+  background: var(--docs-delete);
+}
+
+/* ---------- Buttons and controls ---------- */
+
+.swagger-ui .btn {
+  border-radius: 8px;
+  box-shadow: none;
+  font-family: var(--docs-font);
+  font-weight: 550;
+}
+
+.swagger-ui button {
+  outline:#ffffff;
+}
+
+.swagger-ui .btn.execute {
+  background: var(--docs-primary);
+  border-color: var(--docs-primary);
+  color: var(--docs-on-primary);
+}
+
+.swagger-ui .btn.execute:hover {
+  background: var(--docs-primary-dark);
+  border-color: var(--docs-primary-dark);
+}
+
+.swagger-ui .btn.authorize {
+  color: var(--docs-primary);
+  border-color: var(--docs-primary);
+}
+
+.swagger-ui .btn.authorize svg {
+  fill: var(--docs-primary);
+}
+
+.swagger-ui .btn.authorize:hover {
+  background: var(--docs-primary-tint);
+}
+
+.swagger-ui .filter .operation-filter-input {
+  border: 1px solid var(--docs-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+
+.swagger-ui .filter .operation-filter-input:focus-visible {
+  outline: none;
+  border-color: var(--docs-primary);
+  box-shadow: 0 0 0 1px var(--docs-primary);
+}
+
+/* ---------- Authorize dialog ---------- */
+
+.swagger-ui .dialog-ux .modal-ux {
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 22%);
+  /* Wide enough to read a pasted JWT or API key in full. */
+  max-width: 900px;
+}
+
+.swagger-ui .dialog-ux .modal-ux-header {
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--docs-border);
+}
+
+.swagger-ui .dialog-ux .modal-ux-header h3 {
+  font-family: var(--docs-font);
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--docs-text);
+}
+
+.swagger-ui .dialog-ux .modal-ux-content {
+  padding: 20px 22px 22px;
+  max-height: 70vh;
+}
+
+/* Swagger UI heads each scheme with its raw key and type — "ApiToken
+   (apiKey)" — which is implementation detail, not something to read. The
+   description below it already says what to paste. */
+.swagger-ui .auth-container h4 {
+  display: none;
+}
+
+/* Swagger UI then renders the scheme's `name` and `in` as two bare
+   `<p>Name: <code>…</code></p>` rows (the `in` value comes out empty, leaving
+   a stray "In:" label), which the description already covers.
+
+   These are the only bare `<p>` elements in the form: the description is
+   rendered as markdown into a `.renderedMarkdown`/`.markdown` wrapper, and
+   the rules below restore that one explicitly. Matching on structure rather
+   than on the label text keeps this working in other locales. */
+.swagger-ui .auth-container form p {
+  display: none;
+}
+
+.swagger-ui .auth-container form .markdown p,
+.swagger-ui .auth-container form .renderedMarkdown p {
+  display: block;
+}
+
+.swagger-ui .auth-container {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.swagger-ui .auth-container .wrapper {
+  margin: 0;
+  padding: 0;
+}
+
+.swagger-ui .auth-container label {
+  font-family: var(--docs-font);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--docs-text);
+  margin-bottom: 6px;
+}
+
+.swagger-ui .auth-container .markdown p,
+.swagger-ui .auth-container .renderedMarkdown p {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--docs-muted);
+  margin: 0 0 16px;
+}
+
+/* The token field. `docs-token-input` is the wrapping <textarea> swapped in
+   for Swagger UI's single-line <input> (see `docs.html`) — an API key or JWT
+   is long enough that scrolling it sideways one line at a time is unusable.
+   Both are styled together so the swap is invisible. */
+.swagger-ui .auth-container input[type="text"],
+.swagger-ui .auth-container input[type="password"],
+.swagger-ui .auth-container textarea.docs-token-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 9px 12px;
+  font-family: var(--docs-mono);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  border: 1px solid var(--docs-border);
+  border-radius: 8px;
+  margin: 0;
+}
+
+.swagger-ui .auth-container textarea.docs-token-input {
+  /* Tall enough for a typical JWT's three wrapped lines, growing to six
+     before it scrolls. Wrapping mid-token needs `anywhere`: a JWT has no
+     spaces, so the default `normal` would not break it at all. */
+  min-height: 76px;
+  max-height: 160px;
+  overflow-wrap: anywhere;
+  resize: vertical;
+  display: block;
+}
+
+/* Focus is signalled by the border alone. A 2px outline on top of the 1px
+   border reads as a doubled ring on click. */
+.swagger-ui .auth-container input[type="text"]:focus,
+.swagger-ui .auth-container input[type="password"]:focus,
+.swagger-ui .auth-container textarea.docs-token-input:focus {
+  outline: none;
+  border-color: var(--docs-primary);
+  box-shadow: 0 0 0 1px var(--docs-primary);
+}
+
+.swagger-ui .auth-btn-wrapper {
+  padding: 18px 0 0;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.swagger-ui .auth-btn-wrapper .btn {
+  min-width: 96px;
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.swagger-ui .auth-btn-wrapper .btn.modal-btn.auth.authorize {
+  background: var(--docs-primary);
+  border-color: var(--docs-primary);
+  color: var(--docs-on-primary);
+}
+
+.swagger-ui .auth-btn-wrapper .btn.modal-btn.auth.authorize:hover {
+  background: var(--docs-primary-dark);
+  border-color: var(--docs-primary-dark);
+}
+
+.swagger-ui .auth-btn-wrapper .btn.modal-btn.auth.btn-done {
+  background: transparent;
+  border-color: var(--docs-border);
+  color: var(--docs-muted);
+}
+
+.swagger-ui .auth-btn-wrapper .btn.modal-btn.auth.btn-done:hover {
+  background: var(--docs-canvas);
+  color: var(--docs-text);
+}
+
+/* ---------- Tables, code and schemas ---------- */
+
+.swagger-ui .parameter__name {
+  font-family: var(--docs-font);
+  font-weight: 600;
+  color: var(--docs-text);
+}
+
+.swagger-ui .parameter__type,
+.swagger-ui .prop-type {
+  font-family: var(--docs-mono);
+  font-size: 0.78rem;
+  color: var(--docs-primary);
+}
+
+.swagger-ui .parameter__in {
+  font-family: var(--docs-mono);
+  font-size: 0.72rem;
+  color: var(--docs-muted);
+}
+
+.swagger-ui .markdown code,
+.swagger-ui .renderedMarkdown code {
+  font-family: var(--docs-mono);
+  font-size: 0.82em;
+  background: var(--docs-primary-tint);
+  color: var(--docs-primary-dark);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.swagger-ui .responses-inner,
+.swagger-ui .opblock-body {
+  background: var(--docs-surface);
+}
+
+.swagger-ui table thead tr th {
+  border-bottom: 1px solid var(--docs-border);
+  color: var(--docs-muted);
+  font-family: var(--docs-font);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.swagger-ui .model-title,
+.swagger-ui .model {
+  font-family: var(--docs-mono);
+}
+
+/* Long request/response samples scroll rather than stretching the page. */
+.swagger-ui .highlight-code > .microlight,
+.swagger-ui .model-example pre {
+  max-height: 480px;
+  overflow: auto;
+}
+

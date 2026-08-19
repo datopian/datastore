@@ -1,0 +1,3 @@
+swagger-ui-dist 5.17.14
+Source: https://unpkg.com/swagger-ui-dist@5.17.14/
+Files: swagger-ui-bundle.js, swagger-ui.css, LICENSE (Apache-2.0)

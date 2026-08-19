@@ -15,10 +15,12 @@ from unittest.mock import patch
 
 import pytest
 from datastore import analytics
+from datastore.analytics import action_name
 from datastore.api.context import RequestContext, get_auth_provider, get_ckan_client
 from datastore.auth.base import Decision
 from datastore.auth.ckan import Provider as CKANAuthProvider
 from datastore.core.config import get_config
+from datastore.core.constants import API_BASE_PREFIX, API_PREFIX
 from datastore.infrastructure.cache import InMemoryCache
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
 from datastore.main import create_app
@@ -44,7 +46,7 @@ FIELDS = {
     "group",
 }
 
-SEARCH_URL = "/api/3/action/datastore_search"
+SEARCH_URL = f"{API_PREFIX}/datastore_search"
 RESOURCE = "balancing_auction_results_2025"
 
 
@@ -100,7 +102,7 @@ def test_a_post_carries_its_resource_in_the_body(
 ) -> None:
     """nginx cannot see a POST body; this is why the service records itself."""
     client.post(
-        "/api/3/action/datastore_upsert",
+        f"{API_PREFIX}/datastore_upsert",
         json={"resource_id": RESOURCE, "force": True, "records": [{"a": 1}]},
     )
 
@@ -119,7 +121,7 @@ def test_a_dump_is_recorded_as_a_download(
         return [url]
 
     with patch.object(BigQueryBackend, "dump", fake_dump):
-        response = client.get(f"/datastore/dump/{RESOURCE}", follow_redirects=False)
+        response = client.get(f"{API_BASE_PREFIX}/dump/{RESOURCE}", follow_redirects=False)
 
     assert response.status_code == 302
     event = recorded[0]
@@ -131,7 +133,7 @@ def test_a_dump_is_recorded_as_a_download(
 def test_a_sql_dump_is_recorded_under_its_own_name(
     client: TestClient, recorded: list[dict]
 ) -> None:
-    client.get("/datastore/dump/query", params={"sql": "SELECT 1"})
+    client.get(f"{API_BASE_PREFIX}/dump/query", params={"sql": "SELECT 1"})
 
     assert recorded[0]["action_type"] == "datastore_dump_query"
 
@@ -170,7 +172,7 @@ def test_an_unmounted_action_is_recorded_as_its_status(
     client: TestClient, recorded: list[dict]
 ) -> None:
     """This service only mounts datastore actions; attempts still count."""
-    client.get("/api/3/action/package_show")
+    client.get(f"{API_PREFIX}/package_show")
 
     assert recorded[0]["action_type"] == "package_show"
     assert recorded[0]["status_code"] == 404
@@ -310,3 +312,32 @@ def test_the_emitted_line_is_bare_json(caplog: pytest.LogCaptureFixture) -> None
         "action_type": "datastore_search",
         "status_code": 200,
     }
+
+
+# --- the docs surface is not an action --------------------------------------
+
+
+@pytest.mark.parametrize(
+    "suffix", ["docs", "redoc", "openapi.json", "static/theme/theme.css"]
+)
+def test_the_docs_surface_is_not_recorded(suffix: str) -> None:
+    """Docs live *inside* the versioned prefix, so they match the action path
+    pattern. They are not API calls and must stay out of analytics."""
+    assert action_name(f"{API_PREFIX}/{suffix}") is None
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (f"{API_PREFIX}/datastore_search", "datastore_search"),
+        (f"{API_PREFIX}/datastore_create", "datastore_create"),
+        (f"{API_BASE_PREFIX}/dump/query", "datastore_dump_query"),
+        (f"{API_BASE_PREFIX}/dump/res-1", "datastore_dump"),
+        (f"{API_BASE_PREFIX}/health", None),
+        (f"{API_BASE_PREFIX}/ready", None),
+    ],
+)
+def test_action_name_matches_the_live_routes(path: str, expected: str | None) -> None:
+    """Pinned against the routing constants: if the namespace moves again,
+    this fails rather than analytics silently going dark."""
+    assert action_name(path) == expected

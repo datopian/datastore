@@ -6,7 +6,7 @@ storage backend (BigQuery Datastore or Ducklake as future support).
 
 ## 1. Goals
 
-- CKAN-compatible request/response shapes for `/api/3/action/datastore_*`.
+- CKAN-compatible request/response shapes for `/datastore/api/v2/datastore_*`.
 - **Pluggable storage backend** selected by `DATASTORE_ENGINE` (`bigquery` today; `ducklake` planned).
 - **Pluggable auth** selected by `AUTH_TYPE` (`ckan` / `jwt` / `anonymous`). Provider lives in `datastore/auth/<name>/`; only the CKAN provider touches the network, and its TTL cache is local to that provider.
 - **Standalone-capable** — runs without an upstream CKAN under `AUTH_TYPE=anonymous` or `AUTH_TYPE=jwt`. CKAN is only required when `AUTH_TYPE=ckan`.
@@ -127,10 +127,14 @@ datastore-api/
 │   │   ├── error_handlers.py         # APIError / HTTPException / RequestValidationError
 │   │   │                             # → CKAN error envelope mapping
 │   │   ├── middleware.py             # ASGI middleware (BodySizeLimitMiddleware today)
+│   │   ├── static/                   # Vendored Swagger UI + docs theme (no CDN)
+│   │   │   ├── swagger-ui/           #   swagger-ui-dist 5.17.14 (css + bundle)
+│   │   │   └── theme/theme.css       #   theme ported from ckanext-openapidocs
+│   │   ├── templates/docs.html       # Jinja template for the Swagger UI page
 │   │   └── endpoints/                # One module per resource group
 │   │       ├── __init__.py
 │   │       ├── health.py             # /, /health, /ready (CKAN-shaped envelopes)
-│   │       └── datastore.py          # /api/3/action/datastore_*
+│   │       └── datastore.py          # /datastore/api/v2/datastore_*
 │   │
 │   │ ── 2. AUTH PROVIDERS ───────────────────────  (one subpackage per AUTH_TYPE)
 │   ├── auth/
@@ -170,8 +174,7 @@ datastore-api/
 │   │   │                             #                   DatastoreSearchRequest
 │   │   ├── responses.py              #   responses.py  – ResponseModel base +
 │   │   │                             #                   per-endpoint envelopes
-│   │   │                             #                   (WelcomeResponse,
-│   │   │                             #                   StatusResponse,
+│   │   │                             #                   (StatusResponse,
 │   │   │                             #                   DatastoreCreateResponse)
 │   │   └── validators.py             #   validators.py – FieldSpec, StringOrList,
 │   │                                 #                   PostgresType, helper fns
@@ -259,8 +262,10 @@ adapter will live at `infrastructure/engines/ducklake/` when it lands.
 | `datastore/api/endpoints/` | Route declarations, request parsing, response building | SQL, engine calls, validation rules — delegate to services |
 | `datastore/api/context.py` | `RequestContext`, `ContextDep`, `get_context`, `get_auth_provider`, `get_ckan_client` (per-request DI bundle) | The logic those handles invoke — that lives in `services/` / `auth/` / `infrastructure/` |
 | `datastore/api/auth.py` | Provider-agnostic boundary policy (permission whitelist, anonymous-read rule, resource_id XOR package_id) | Concrete provider behaviour — CKAN/JWT/anonymous logic lives in `datastore/auth/<name>/` |
-| `datastore/api/responses.py` | CKAN envelope helpers, `ORJSONResponse` | Anything that needs DB access |
+| `datastore/api/responses.py` | Envelope helpers, `ORJSONResponse`. `_help` deep-links into Swagger via `api/docs.py`'s `help_url` | Anything that needs DB access |
 | `datastore/api/error_handlers.py` | Exception → CKAN error envelope mapping | Business rules — raise `APIError` from wherever the rule lives |
+| `datastore/api/static/` | Vendored front-end assets served at `/datastore/api/static` — Swagger UI dist + `theme/theme.css` | Anything generated at runtime; anything Python imports |
+| `datastore/api/templates/` | Jinja templates for HTML pages (`docs.html`) | Anything returning JSON — those go through `api/responses.py` |
 | `datastore/auth/<name>/` | Concrete `AuthProvider` implementation: `__init__.py` exports `Provider = <ConcreteClass>`; `provider.py` implements `authorize` + `key_id`. CKAN provider holds its own TTL cache. | Cross-provider policy (that's `api/auth.py`); FastAPI imports |
 | `datastore/auth/base.py` | `AuthProvider` Protocol, `Decision` dataclass, `default_key_id` helper | Provider implementations |
 | `datastore/auth/registry.py` | importlib factory keyed on `AUTH_TYPE` | Instance caching — the lifespan builds once and stashes on `app.state` |
@@ -385,8 +390,8 @@ flowchart LR
 
 **Pod-level shape**
 - One container per pod: the FastAPI app. Sidecars only for observability (e.g., OpenTelemetry collector).
-- `livenessProbe` → `GET /health` (always 200 while the process is up).
-- `readinessProbe` → `GET /ready` (200 only when both backends pass `healthcheck()`; pod pulled from Service when 503).
+- `livenessProbe` → `GET /datastore/api/health` (always 200 while the process is up).
+- `readinessProbe` → `GET /datastore/api/ready` (200 only when both backends pass `healthcheck()`; pod pulled from Service when 503).
 - `terminationGracePeriodSeconds: 30` so in-flight streaming responses drain before SIGKILL.
 - Memory bounded by `MAX_REQUEST_BODY_MB` × concurrency for writes; search responses are O(1) peak memory.
 
@@ -402,7 +407,7 @@ flowchart LR
 
 ## 5. API Surface
 
-All datastore endpoints sit under `/api/3/action/` to match the CKAN action API.
+All datastore endpoints sit under `/datastore/api/v2/` to match the CKAN action API.
 Health endpoints at the root.
 
 ### 5.1 Health
@@ -411,9 +416,8 @@ All three return the CKAN envelope shape `{help, success, result: {...}}`.
 
 | Method | Path | Status | Result |
 |---|---|---|---|
-| GET | `/` | implemented | `{"message": APP_MESSAGE}` |
-| GET | `/health` | implemented | `{"status": "ok"}` — liveness; always 200 if process is up |
-| GET | `/ready` | implemented | `{"status": "ready"}` — calls `engine.healthcheck()` for rw + ro; 503 with a `Service Unavailable` envelope if either fails |
+| GET | `/datastore/api/health` | implemented | `{"status": "ok"}` — liveness; always 200 if process is up |
+| GET | `/datastore/api/ready` | implemented | `{"status": "ready"}` — calls `engine.healthcheck()` for rw + ro; 503 with a `Service Unavailable` envelope if either fails |
 
 ### 5.2 Datastore endpoints
 
@@ -421,14 +425,14 @@ Each endpoint takes a single `ContextDep`. The handler calls `context.authorize(
 
 | Method | Path | Status | Body / Params | Response model |
 |---|---|---|---|---|
-| POST | `/api/3/action/datastore_create` | **implemented** | `DatastoreCreateRequest` | `DatastoreCreateResponse` |
-| POST | `/api/3/action/datastore_upsert` | **implemented** | `DatastoreUpsertRequest` | `DatastoreUpsertResponse` |
-| POST | `/api/3/action/datastore_delete` | **implemented** | `DatastoreDeleteRequest` | `DatastoreDeleteResponse` |
-| GET  | `/api/3/action/datastore_search` | **implemented** (streaming) | `DatastoreSearchRequest` | `DatastoreSearchResponse` |
-| GET  | `/api/3/action/datastore_search_sql` | **implemented** (streaming) | `DatastoreSearchSQLRequest` | `DatastoreSearchResponse` |
-| GET  | `/datastore/dump/query` | **implemented** | `sql=<SELECT…>`, `format=csv\|gzip\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
-| GET  | `/api/3/action/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
-| GET  | `/datastore/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
+| POST | `/datastore/api/v2/datastore_create` | **implemented** | `DatastoreCreateRequest` | `DatastoreCreateResponse` |
+| POST | `/datastore/api/v2/datastore_upsert` | **implemented** | `DatastoreUpsertRequest` | `DatastoreUpsertResponse` |
+| POST | `/datastore/api/v2/datastore_delete` | **implemented** | `DatastoreDeleteRequest` | `DatastoreDeleteResponse` |
+| GET  | `/datastore/api/v2/datastore_search` | **implemented** (streaming) | `DatastoreSearchRequest` | `DatastoreSearchResponse` |
+| GET  | `/datastore/api/v2/datastore_search_sql` | **implemented** (streaming) | `DatastoreSearchSQLRequest` | `DatastoreSearchResponse` |
+| GET  | `/datastore/api/dump/query` | **implemented** | `sql=<SELECT…>`, `format=csv\|gzip\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
+| GET  | `/datastore/api/v2/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
+| GET  | `/datastore/api/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 
 The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, parameterised search, native table-level metadata (the Frictionless schema + unique_key are JSON-encoded into the table's own `description` OPTION) for the schema round-trip, a row-count fast path via `INFORMATION_SCHEMA.TABLE_STORAGE`, and `EXPORT DATA`-backed dump with `table.modified`-keyed GCS caching. The DuckLake engine is the next concrete adapter — see §7.
 
@@ -439,7 +443,7 @@ The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, pa
 
 **Read-only guard (`AUTH_TYPE=ckan` only).** `datastore_create`, `datastore_upsert`, and `datastore_delete` refuse to write a resource whose CKAN record carries `url_type="datastore"` unless the request sets `force: true` — a `Validation Error` ("Cannot update a read-only resource. Use \"force\" to force update.") otherwise. This mirrors CKAN's protection against clobbering datastore-managed data by accident. The guard is gated on `AUTH_TYPE=ckan` and skipped entirely under any other provider (only the CKAN provider attaches a resource record).
 
-### 5.3 `GET /datastore/dump/{resource_id}`
+### 5.3 `GET /datastore/api/dump/{resource_id}`
 
 Full-table download, **one URL → one file** from the caller's point of
 view. Bytes never pass through API memory — the one exception is a
@@ -493,9 +497,9 @@ A single SA works if both perm sets land on the same identity — `BIGQUERY_CRED
 
 A 24h object-lifecycle rule on the bucket is **required** in practice: the engine GCs older revs already, but lifecycle is the only thing that cleans abandoned `dumps/<qhash>/` prefixes (SQL downloads whose query is never re-issued — see below) and anything stranded by a crashed dump.
 
-### SQL download (`GET /datastore/dump/query`)
+### SQL download (`GET /datastore/api/dump/query`)
 
-`GET /datastore/dump/query?sql=<SELECT…>&format=csv|gzip|ndjson|parquet` exports the result of an arbitrary vetted SELECT through the same pipeline as `/datastore/dump/{resource_id}` — engine method `dump_sql` in [bigquery/export.py](datastore/infrastructure/engines/bigquery/export.py), response shaping shared via `download_response` in [api/endpoints/dump.py](datastore/api/endpoints/dump.py) (302 for the composed file · gzip streamed · JSON URL list for multi-file parquet). Same SQL validation + per-table auth as `datastore_search_sql` (`DatastoreDumpSQLRequest` subclasses its request schema); the action API itself stays pure JSON envelope. The route is declared before `/datastore/dump/{resource_id}`, making `query` a reserved resource name on the dump family.
+`GET /datastore/api/dump/query?sql=<SELECT…>&format=csv|gzip|ndjson|parquet` exports the result of an arbitrary vetted SELECT through the same pipeline as `/datastore/api/dump/{resource_id}` — engine method `dump_sql` in [bigquery/export.py](datastore/infrastructure/engines/bigquery/export.py), response shaping shared via `download_response` in [api/endpoints/dump.py](datastore/api/endpoints/dump.py) (302 for the composed file · gzip streamed · JSON URL list for multi-file parquet). Same SQL validation + per-table auth as `datastore_search_sql` (`DatastoreDumpSQLRequest` subclasses its request schema); the action API itself stays pure JSON envelope. The route is declared before `/datastore/api/dump/{resource_id}`, making `query` a reserved resource name on the dump family.
 
 Deltas vs the whole-table dump:
 
@@ -516,7 +520,7 @@ The GCS client is built with the same credentials as the BigQuery client for the
 Every response is the CKAN envelope — `help`, `success`, and either `result` or `error`. The full per-endpoint reference (request bodies, query params, worked examples, and error shapes) lives in **[API.md](API.md)**.
 CKAN-style envelope: every response has `help`, `success`, and either `result` or `error`.
 
-### 6.1 `POST /api/3/datastore_create`
+### 6.1 `POST /datastore/api/v2/datastore_create`
 
 Running example: an electricity balancing-market auction-results table. Used
 consistently across the rest of §6 so the request → search → info round-trip
@@ -666,7 +670,7 @@ Optional response fields (omitted from the body when not requested):
 - `records` — echoes the input rows back when the request sets `include_records: true`.
 - `total` — total row count after the write, populated when `include_total: true`.
 
-### 6.2 `GET /api/3/datastore_search`
+### 6.2 `GET /datastore/api/v2/datastore_search`
 
 **Query params**
 | Name | Type | Default | Notes |
@@ -687,7 +691,7 @@ Optional response fields (omitted from the body when not requested):
 **Example request**
 
 ```
-GET /api/3/datastore_search
+GET /datastore/api/v2/datastore_search
     ?resource_id=balancing_auction_results_2025
     &filters={"product_code": "DCL", "accepted": true}
     &sort=delivery_start desc, clearing_price_gbp_per_mwh asc
@@ -716,8 +720,8 @@ GET /api/3/datastore_search
     ],
     "total": 2,
     "_links": {
-      "start": "https://example.com/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100",
-      "next":  "https://example.com/api/3/action/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=100"
+      "start": "https://example.com/datastore/api/v2/datastore_search?resource_id=balancing_auction_results_2025&limit=100",
+      "next":  "https://example.com/datastore/api/v2/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=100"
     }
   }
 }
@@ -733,7 +737,7 @@ empty `records` array on the next page — there's no `prev` field today.
 `result.records_format` echoes back the format that was applied (always `objects` for
 `datastore_search_sql`), so a client can tell which `records` shape it got.
 
-### 6.3 `POST /api/3/datastore_upsert`
+### 6.3 `POST /datastore/api/v2/datastore_upsert`
 
 **Request — late-arriving correction to an auction result**
 ```json
@@ -793,13 +797,13 @@ Optional fields appear in `result` only when requested:
 
 `null` is never serialised — fields that aren't populated are simply omitted (see `_orjson_default` in `api/responses.py`).
 
-### 6.4 `GET /api/3/datastore_search_sql`
+### 6.4 `GET /datastore/api/v2/datastore_search_sql`
 
-**Query params**: `sql` (required; must carry a `LIMIT` literal). To export the result as a file instead of the JSON envelope, use `GET /datastore/dump/query?sql=…&format=…` (LIMIT optional + uncapped there — see §5.3 "SQL download").
+**Query params**: `sql` (required; must carry a `LIMIT` literal). To export the result as a file instead of the JSON envelope, use `GET /datastore/api/dump/query?sql=…&format=…` (LIMIT optional + uncapped there — see §5.3 "SQL download").
 
 **Example request — daily clearing-price summary**
 ```
-GET /api/3/datastore_search_sql?sql=
+GET /datastore/api/v2/datastore_search_sql?sql=
   SELECT
     DATE(delivery_start)            AS delivery_date,
     product_code,
@@ -836,7 +840,7 @@ GET /api/3/datastore_search_sql?sql=
 }
 ```
 
-### 6.5 `POST /api/3/datastore_delete`
+### 6.5 `POST /datastore/api/v2/datastore_delete`
 
 **Request — purge rejected bids for a single auction window**
 ```json
@@ -877,7 +881,7 @@ can confirm the table's new shape without a follow-up `datastore_info`:
 }
 ```
 
-### 6.6 `GET /api/3/datastore_info`
+### 6.6 `GET /datastore/api/v2/datastore_info`
 
 Returns the same field shape that was supplied to `datastore_create`, including
 the `info` data dictionary verbatim — clients can use this as a column-level
@@ -966,9 +970,10 @@ The original phase plan that used to live here has mostly shipped. This section 
 - [x] **Error envelope** — handlers in [datastore/api/error_handlers.py](datastore/api/error_handlers.py); taxonomy in [datastore/core/exceptions.py](datastore/core/exceptions.py).
 - [x] **Pluggable auth providers** — `AUTH_TYPE` selects a folder under [datastore/auth/](datastore/auth/). Built-in: `ckan` (delegates to `datastore_authorize` with a provider-local TTL cache), `jwt` (PyJWT verify HS*/RS*/ES* + `aud`/`iss`/`exp`), `anonymous` (allow-all). Boundary policy in [datastore/api/auth.py](datastore/api/auth.py) is provider-agnostic. Adding a new provider = drop a folder; no registry / config edit.
 - [x] **Standalone capability** — `CKANClient` is only constructed when `AUTH_TYPE=ckan`; `RequestContext.ckan` is `CKANClient | None`. `Config` validator rejects `AUTH_TYPE=ckan` + empty `CKAN_URL` at startup. `datastore_create` `resource` dict path is gated on CKAN auth; everything else runs without an upstream CKAN.
-- [x] **`/ready` healthcheck** — lifespan builds rw + ro engine instances and stashes on `app.state`; `/ready` calls `engine.healthcheck()` on both and returns 503 + `Service Unavailable` envelope if either fails.
+- [x] **`/datastore/api/ready` healthcheck** — lifespan builds rw + ro engine instances and stashes on `app.state`; `/datastore/api/ready` calls `engine.healthcheck()` on both and returns 503 + `Service Unavailable` envelope if either fails.
 - [x] **Request context** — `RequestContext` + `ContextDep` in [datastore/api/context.py](datastore/api/context.py); CKAN client bound to the caller's `api_key` per request (or `None` under non-CKAN auth). `.authorize()` method delegates to `api/auth.py` policy + active provider.
 - [x] **Engine + auth registries** — `DatastoreBackend` ABC + result dataclasses in [engines/base.py](datastore/infrastructure/engines/base.py); `AuthProvider` Protocol + `Decision` in [auth/base.py](datastore/auth/base.py). Each subpackage exports `Backend` / `Provider`; `DATASTORE_ENGINE` / `AUTH_TYPE` are validated against directories on disk at startup; registries dispatch via `importlib`.
+- [x] **Themed Swagger UI** — `/datastore/api/v2/docs` is served by `_register_swagger_docs` in [datastore/main.py](datastore/main.py), not FastAPI's stock route. The page is a Jinja template at [datastore/api/templates/docs.html](datastore/api/templates/docs.html), so autoescaping is structural — though it covers the HTML contexts only, which is why the colours are validated at config load and the spec URL is emitted through `tojson`. Swagger UI is **vendored** under [datastore/api/static/](datastore/api/static/) (swagger-ui-dist 5.17.14) and mounted at `/datastore/api/static`, so the page renders with no CDN and no outbound network. The stylesheet is ported from `ckanext-openapidocs` so this service's docs and the CKAN portal's read as one family: Swagger's own topbar, servers dropdown and duplicate title block are hidden in favour of a branded header, and the Authorize dialog is restyled (900px wide, so a pasted JWT / API key is readable in full). Branding comes from `DOCS_PRIMARY_COLOR` / `DOCS_HEADER_COLOR` / `DOCS_SITE_TITLE` / `DOCS_LOGO_URL`, written into CSS custom properties — the colours are validated as CSS colours at config load, since they land inside a `<style>` block. Empty values keep the stylesheet's defaults.
 - [x] **Postman collection** — [postman/collection.json](postman/collection.json) auto-generated from `example_payload/` by `postman/generate_postman.py`; covers every endpoint with a worked example.
 - [x] **Tests** — ~290 tests across endpoint, service, auth provider, and engine layers. CKAN pytest plugin disabled via `addopts` in `pyproject.toml`.
 
@@ -989,8 +994,8 @@ Apply to every change, current and future:
 | Invariant | Check |
 |---|---|
 | App starts | `uvicorn datastore.main:app` exits 0 |
-| Health always works | `GET /health` → 200 |
-| OpenAPI loads | `GET /datastore/api/docs` renders without error |
+| Health always works | `GET /datastore/api/health` → 200 |
+| OpenAPI loads | `GET /datastore/api/v2/docs` renders without error |
 | Tests stay green | `pytest` passes |
 | Layer arrow holds | `rg "from (fastapi\|starlette)" datastore/services datastore/infrastructure datastore/core` returns nothing |
 

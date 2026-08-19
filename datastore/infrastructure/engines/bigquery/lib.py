@@ -1,5 +1,4 @@
-"""Side-effect-free helpers for the BigQuery backend.
-"""
+"""Side-effect-free helpers for the BigQuery backend."""
 
 from __future__ import annotations
 
@@ -29,14 +28,14 @@ SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset({"_id", "_updated_at"})
 # Frictionless type → BigQuery scalar parameter type for filter values.
 # JSON / array / geojson absent — equality on those is rejected.
 _FILTER_PARAM_TYPE: dict[str, str] = {
-    "integer":  "INT64",
-    "number":   "FLOAT64",
-    "boolean":  "BOOL",
-    "string":   "STRING",
-    "date":     "DATE",
+    "integer": "INT64",
+    "number": "FLOAT64",
+    "boolean": "BOOL",
+    "string": "STRING",
+    "date": "DATE",
     "datetime": "TIMESTAMP",
-    "time":     "TIME",
-    "any":      "STRING",
+    "time": "TIME",
+    "any": "STRING",
 }
 
 # Native-metadata: sentinel under which the engine namespaces its own
@@ -55,11 +54,7 @@ SCHEMA_VERSION = 1
 
 
 def _system_col_defs(include_updated_at: bool) -> tuple[str, ...]:
-    return (
-        ("`_id` INT64", "`_updated_at` TIMESTAMP")
-        if include_updated_at
-        else ("`_id` INT64",)
-    )
+    return ("`_id` INT64", "`_updated_at` TIMESTAMP") if include_updated_at else ("`_id` INT64",)
 
 
 def _system_col_insert_list(include_updated_at: bool) -> str:
@@ -80,13 +75,9 @@ def format_select_column(name: str, bq_type: str | None) -> str:
     """
     bq = (bq_type or "").upper()
     if bq == "TIMESTAMP":
-        return (
-            f"FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `{name}`, 'UTC') AS `{name}`"
-        )
+        return f"FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `{name}`, 'UTC') AS `{name}`"
     if bq == "DATETIME":
-        return (
-            f"FORMAT_DATETIME('%Y-%m-%dT%H:%M:%S', `{name}`) AS `{name}`"
-        )
+        return f"FORMAT_DATETIME('%Y-%m-%dT%H:%M:%S', `{name}`) AS `{name}`"
     return f"`{name}`"
 
 
@@ -101,7 +92,8 @@ def normalize_pk(schema: dict) -> list[str]:
 def _user_fields(schema: dict) -> list[dict]:
     """Declared fields minus engine-managed system columns."""
     return [
-        f for f in schema.get("fields", [])
+        f
+        for f in schema.get("fields", [])
         if f.get("name") and f["name"] not in SYSTEM_COLUMN_NAMES
     ]
 
@@ -131,19 +123,14 @@ def schema_diff(
 ) -> tuple[list[str], list[tuple[str, str | None, str | None]], list[str]]:
     """Return `(added, type_changes, removed)` between two schemas.
     Types are raw Frictionless values; dialect mapping is the caller's job."""
-    old_by_name = {
-        f["name"]: f for f in old_schema.get("fields", []) if f.get("name")
-    }
-    new_by_name = {
-        f["name"]: f for f in new_schema.get("fields", []) if f.get("name")
-    }
+    old_by_name = {f["name"]: f for f in old_schema.get("fields", []) if f.get("name")}
+    new_by_name = {f["name"]: f for f in new_schema.get("fields", []) if f.get("name")}
 
     added = [n for n in new_by_name if n not in old_by_name]
     type_changes = [
         (n, old_by_name[n].get("type"), new_by_name[n].get("type"))
         for n in new_by_name
-        if n in old_by_name
-        and old_by_name[n].get("type") != new_by_name[n].get("type")
+        if n in old_by_name and old_by_name[n].get("type") != new_by_name[n].get("type")
     ]
     removed = [n for n in old_by_name if n not in new_by_name]
     return added, type_changes, removed
@@ -177,20 +164,13 @@ def alter_clauses(
     new_schema: dict,
 ) -> list[str]:
     """Per-column clauses for a single `ALTER TABLE` statement."""
-    new_by_name = {
-        f["name"]: f for f in new_schema.get("fields", []) if f.get("name")
-    }
+    new_by_name = {f["name"]: f for f in new_schema.get("fields", []) if f.get("name")}
     clauses: list[str] = []
     for name in added:
         field = new_by_name[name]
-        clauses.append(
-            f"ADD COLUMN IF NOT EXISTS `{name}` "
-            f"{bigquery_type(field.get('type'))}"
-        )
+        clauses.append(f"ADD COLUMN IF NOT EXISTS `{name}` {bigquery_type(field.get('type'))}")
     for name, _, new_t in type_changes:
-        clauses.append(
-            f"ALTER COLUMN `{name}` SET DATA TYPE {bigquery_type(new_t)}"
-        )
+        clauses.append(f"ALTER COLUMN `{name}` SET DATA TYPE {bigquery_type(new_t)}")
     return clauses
 
 
@@ -206,9 +186,7 @@ def drop_columns_sql(table_ref: str, columns: list[str]) -> str:
 # ── 5. DML builders (INSERT / MERGE / UPDATE / DELETE) ─────────────────────
 
 
-def insert_sql(
-    table_ref: str, schema: dict, *, include_updated_at: bool = True
-) -> str:
+def insert_sql(table_ref: str, schema: dict, *, include_updated_at: bool = True) -> str:
     """Render `INSERT INTO … SELECT FROM UNNEST(JSON_QUERY_ARRAY(@rows))`.
 
     `_id` is inlined as `(SELECT IFNULL(MAX(_id), 0) FROM tbl) +
@@ -222,15 +200,8 @@ def insert_sql(
     data_cols = ", ".join(f"`{f['name']}`" for f in fields)
     data_extractors = ", ".join(_json_extract(f) for f in fields)
     sys_cols = _system_col_insert_list(include_updated_at)
-    id_expr = (
-        f"(SELECT IFNULL(MAX(`_id`), 0) FROM {table_ref}) "
-        f"+ ROW_NUMBER() OVER ()"
-    )
-    sys_vals = (
-        f"{id_expr}, CURRENT_TIMESTAMP()"
-        if include_updated_at
-        else id_expr
-    )
+    id_expr = f"(SELECT IFNULL(MAX(`_id`), 0) FROM {table_ref}) + ROW_NUMBER() OVER ()"
+    sys_vals = f"{id_expr}, CURRENT_TIMESTAMP()" if include_updated_at else id_expr
     return (
         f"INSERT INTO {table_ref} ({sys_cols}, {data_cols}) "
         f"SELECT {sys_vals}, {data_extractors} "
@@ -250,19 +221,13 @@ def insert_conflict_count_sql(table_ref: str, schema: dict) -> str:
     """
     pk = normalize_pk(schema)
     if not pk:
-        raise ValueError(
-            "schema has no 'primaryKey'; insert conflict check requires one"
-        )
+        raise ValueError("schema has no 'primaryKey'; insert conflict check requires one")
     by_name = {f["name"]: f for f in _user_fields(schema)}
     missing = [c for c in pk if c not in by_name]
     if missing:
-        raise ValueError(
-            f"primaryKey references undeclared column(s): {missing}"
-        )
+        raise ValueError(f"primaryKey references undeclared column(s): {missing}")
 
-    extractors = ", ".join(
-        f"{_json_extract(by_name[c])} AS `{c}`" for c in pk
-    )
+    extractors = ", ".join(f"{_json_extract(by_name[c])} AS `{c}`" for c in pk)
     pk_cols = ", ".join(f"`{c}`" for c in pk)
     on_clause = " AND ".join(f"d.`{c}` = T.`{c}`" for c in pk)
     return (
@@ -282,9 +247,7 @@ def insert_conflict_count_sql(table_ref: str, schema: dict) -> str:
 PK_CONFLICT_SENTINEL = "DATASTORE_PK_CONFLICT"
 
 
-def insert_guarded_sql(
-    table_ref: str, schema: dict, *, include_updated_at: bool = True
-) -> str:
+def insert_guarded_sql(table_ref: str, schema: dict, *, include_updated_at: bool = True) -> str:
     """Render one BigQuery script that rejects PK conflicts then INSERTs.
 
     Wraps the conflict probe and the INSERT in a single `BEGIN … END`
@@ -306,13 +269,9 @@ def insert_guarded_sql(
     """
     pk = normalize_pk(schema)
     if not pk:
-        raise ValueError(
-            "schema has no 'primaryKey'; guarded insert requires one"
-        )
+        raise ValueError("schema has no 'primaryKey'; guarded insert requires one")
     count_query = insert_conflict_count_sql(table_ref, schema)
-    insert = insert_sql(
-        table_ref, schema, include_updated_at=include_updated_at
-    )
+    insert = insert_sql(table_ref, schema, include_updated_at=include_updated_at)
     return (
         "BEGIN "
         "DECLARE _conflicts INT64 DEFAULT 0; "
@@ -327,9 +286,7 @@ def insert_guarded_sql(
     )
 
 
-def merge_sql(
-    table_ref: str, schema: dict, *, include_updated_at: bool = True
-) -> str:
+def merge_sql(table_ref: str, schema: dict, *, include_updated_at: bool = True) -> str:
     """Render `MERGE` keyed by `schema.primaryKey`.
 
     Matched rows update only when a non-PK column differs (so
@@ -339,17 +296,12 @@ def merge_sql(
     fields = _user_fields(schema)
     pk = normalize_pk(schema)
     if not pk:
-        raise ValueError(
-            "schema has no 'primaryKey'; upsert requires one to "
-            "match existing rows"
-        )
+        raise ValueError("schema has no 'primaryKey'; upsert requires one to match existing rows")
 
     pk_set = set(pk)
     non_pk = [f for f in fields if f["name"] not in pk_set]
 
-    using_cols = ", ".join(
-        f"{_json_extract(f)} AS `{f['name']}`" for f in fields
-    )
+    using_cols = ", ".join(f"{_json_extract(f)} AS `{f['name']}`" for f in fields)
     on_clause = " AND ".join(f"T.`{n}` = S.`{n}`" for n in pk)
     insert_cols = ", ".join(f"`{f['name']}`" for f in fields)
     insert_vals = ", ".join(f"S.`{f['name']}`" for f in fields)
@@ -362,25 +314,16 @@ def merge_sql(
     ]
     if non_pk:
         diff_predicate = " OR ".join(_diff_expr(f) for f in non_pk)
-        matched_assignments = [
-            f"T.`{f['name']}` = S.`{f['name']}`" for f in non_pk
-        ]
+        matched_assignments = [f"T.`{f['name']}` = S.`{f['name']}`" for f in non_pk]
         if include_updated_at:
-            matched_assignments.append(
-                "T.`_updated_at` = CURRENT_TIMESTAMP()"
-            )
+            matched_assignments.append("T.`_updated_at` = CURRENT_TIMESTAMP()")
         parts.append(
-            f"WHEN MATCHED AND ({diff_predicate}) "
-            f"THEN UPDATE SET {', '.join(matched_assignments)}"
+            f"WHEN MATCHED AND ({diff_predicate}) THEN UPDATE SET {', '.join(matched_assignments)}"
         )
 
     sys_cols = _system_col_insert_list(include_updated_at)
     id_value = f"(SELECT IFNULL(MAX(`_id`), 0) FROM {table_ref}) + S._rn"
-    sys_vals = (
-        f"{id_value}, CURRENT_TIMESTAMP()"
-        if include_updated_at
-        else id_value
-    )
+    sys_vals = f"{id_value}, CURRENT_TIMESTAMP()" if include_updated_at else id_value
     parts.append(
         f"WHEN NOT MATCHED THEN INSERT "
         f"({sys_cols}, {insert_cols}) "
@@ -389,9 +332,7 @@ def merge_sql(
     return " ".join(parts)
 
 
-def update_sql(
-    table_ref: str, schema: dict, *, include_updated_at: bool = True
-) -> str:
+def update_sql(table_ref: str, schema: dict, *, include_updated_at: bool = True) -> str:
     """Render `UPDATE T SET … FROM (UNNEST(@rows)) S WHERE <pk match>`.
 
     Caller must compare affected rows to input size and raise
@@ -401,10 +342,7 @@ def update_sql(
     fields = _user_fields(schema)
     pk = normalize_pk(schema)
     if not pk:
-        raise ValueError(
-            "schema has no 'primaryKey'; update requires one to "
-            "match existing rows"
-        )
+        raise ValueError("schema has no 'primaryKey'; update requires one to match existing rows")
 
     pk_set = set(pk)
     non_pk = [f for f in fields if f["name"] not in pk_set]
@@ -414,12 +352,8 @@ def update_sql(
             "`_updated_at` system column is disabled; nothing to SET"
         )
 
-    using_cols = ", ".join(
-        f"{_json_extract(f)} AS `{f['name']}`" for f in fields
-    )
-    set_parts = [
-        f"T.`{f['name']}` = S.`{f['name']}`" for f in non_pk
-    ]
+    using_cols = ", ".join(f"{_json_extract(f)} AS `{f['name']}`" for f in fields)
+    set_parts = [f"T.`{f['name']}` = S.`{f['name']}`" for f in non_pk]
     if include_updated_at:
         set_parts.append("T.`_updated_at` = CURRENT_TIMESTAMP()")
     set_clause = ", ".join(set_parts)
@@ -449,8 +383,7 @@ def delete_sql(
 
     if filters is None or not isinstance(filters, dict):
         raise ValueError(
-            "delete filters must be a dict; use the DROP path when no "
-            "filter is intended"
+            "delete filters must be a dict; use the DROP path when no filter is intended"
         )
 
     type_map: dict[str, str] = {}
@@ -466,9 +399,7 @@ def delete_sql(
     clauses: list[str] = []
     for col, value in filters.items():
         if col not in type_map:
-            raise ValueError(
-                f"filters references unknown column {col!r}"
-            )
+            raise ValueError(f"filters references unknown column {col!r}")
         ftype = type_map[col]
         if ftype in JSON_FRICTIONLESS_TYPES:
             raise ValueError(
@@ -478,16 +409,12 @@ def delete_sql(
         bq_type = _FILTER_PARAM_TYPE.get(ftype, "STRING")
         name = f"f{len(params)}"
         if isinstance(value, list):
-            params.append(
-                bigquery.ArrayQueryParameter(name, bq_type, value)
-            )
+            params.append(bigquery.ArrayQueryParameter(name, bq_type, value))
             clauses.append(f"`{col}` IN UNNEST(@{name})")
         elif value is None:
             clauses.append(f"`{col}` IS NULL")
         else:
-            params.append(
-                bigquery.ScalarQueryParameter(name, bq_type, value)
-            )
+            params.append(bigquery.ScalarQueryParameter(name, bq_type, value))
             clauses.append(f"`{col}` = @{name}")
 
     where = " AND ".join(clauses) if clauses else "TRUE"
@@ -499,10 +426,7 @@ def _diff_expr(field: dict) -> str:
     JSON columns are canonicalised via `TO_JSON_STRING` first."""
     name = field["name"]
     if field.get("type") in JSON_FRICTIONLESS_TYPES:
-        return (
-            f"TO_JSON_STRING(T.`{name}`) IS DISTINCT FROM "
-            f"TO_JSON_STRING(S.`{name}`)"
-        )
+        return f"TO_JSON_STRING(T.`{name}`) IS DISTINCT FROM TO_JSON_STRING(S.`{name}`)"
     return f"T.`{name}` IS DISTINCT FROM S.`{name}`"
 
 
@@ -523,7 +447,9 @@ def _json_extract(field: dict) -> str:
 
 
 def unfiltered_table_name(
-    sql: str, *, dialect: str = "bigquery",
+    sql: str,
+    *,
+    dialect: str = "bigquery",
 ) -> str | None:
     """Return the source table name when `sql` is a plain
     `SELECT cols FROM <table> [LIMIT/OFFSET]` — i.e. result row count
@@ -559,14 +485,8 @@ def unfiltered_table_name(
     if next(tree.find_all(*aggregates), None) is not None:
         return None
 
-    cte_aliases = {
-        c.alias_or_name for c in tree.find_all(exp.CTE)
-        if c.alias_or_name
-    }
-    tables = [
-        t for t in tree.find_all(exp.Table)
-        if t.name and t.name not in cte_aliases
-    ]
+    cte_aliases = {c.alias_or_name for c in tree.find_all(exp.CTE) if c.alias_or_name}
+    tables = [t for t in tree.find_all(exp.Table) if t.name and t.name not in cte_aliases]
     if len(tables) != 1:
         return None
     return tables[0].name
@@ -595,10 +515,7 @@ def qualify_table_refs(sql: str, project: str, dataset: str) -> str:
     from sqlglot import expressions as exp
 
     tree = sqlglot.parse_one(sql, dialect="postgres")
-    cte_aliases = {
-        cte.alias_or_name for cte in tree.find_all(exp.CTE)
-        if cte.alias_or_name
-    }
+    cte_aliases = {cte.alias_or_name for cte in tree.find_all(exp.CTE) if cte.alias_or_name}
     for table in tree.find_all(exp.Table):
         name = table.name
         if not name or name in cte_aliases:
@@ -610,9 +527,7 @@ def qualify_table_refs(sql: str, project: str, dataset: str) -> str:
     return tree.sql(dialect="bigquery")
 
 
-def default_order_by(
-    sql: str, *, column: str = "_id", dialect: str = "bigquery"
-) -> str:
+def default_order_by(sql: str, *, column: str = "_id", dialect: str = "bigquery") -> str:
     """Add `ORDER BY <column>` to a plain single-table SELECT for stable
     LIMIT/OFFSET paging. No-op (returns `sql` unchanged) for anything where
     `<column>` is out of scope: existing ORDER BY, GROUP BY, DISTINCT,
@@ -631,14 +546,9 @@ def default_order_by(
     # Match by child node type, not arg-key name — sqlglot renames keys
     # across releases (30.x: `from` → `from_`, `with` → `with_`).
     def child(kind: type) -> Any:
-        return next(
-            (v for v in tree.args.values() if isinstance(v, kind)), None
-        )
+        return next((v for v in tree.args.values() if isinstance(v, kind)), None)
 
-    if any(
-        child(k) is not None
-        for k in (exp.Order, exp.Group, exp.Distinct, exp.With)
-    ):
+    if any(child(k) is not None for k in (exp.Order, exp.Group, exp.Distinct, exp.With)):
         return sql
     if tree.args.get("joins"):
         return sql
@@ -698,10 +608,7 @@ def _infer_schema_from_bq(table: "bigquery.Table") -> dict[str, Any]:
 def table_options_clause(schema: dict[str, Any]) -> str:
     """Return ` OPTIONS(description = '…', labels = […])` for a table DDL."""
     desc = _encode_table_description(schema)
-    return (
-        f" OPTIONS(description = {_sql_literal(desc)}, "
-        f"labels = [(\"datastore_managed\", \"true\")])"
-    )
+    return f' OPTIONS(description = {_sql_literal(desc)}, labels = [("datastore_managed", "true")])'
 
 
 def set_table_options_sql(table_ref: str, schema: dict[str, Any]) -> str:
@@ -714,7 +621,7 @@ def set_table_options_sql(table_ref: str, schema: dict[str, Any]) -> str:
     return (
         f"ALTER TABLE {table_ref} "
         f"SET OPTIONS(description = {_sql_literal(desc)}, "
-        f"labels = [(\"datastore_managed\", \"true\")])"
+        f'labels = [("datastore_managed", "true")])'
     )
 
 
@@ -745,10 +652,7 @@ def _strip_system_fields(schema: dict[str, Any]) -> dict[str, Any]:
     """Shallow copy of `schema` with `_id`/`_updated_at` filtered out of `fields`."""
     return {
         **schema,
-        "fields": [
-            f for f in schema.get("fields", [])
-            if f.get("name") not in SYSTEM_COLUMN_NAMES
-        ],
+        "fields": [f for f in schema.get("fields", []) if f.get("name") not in SYSTEM_COLUMN_NAMES],
     }
 
 

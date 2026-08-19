@@ -22,15 +22,12 @@ ConfigDep = Annotated[Config, Depends(get_config)]
 # instead of leaking as a parameter on each. `auto_error=False` keeps the
 # header optional — `anonymous` auth needs no token. The description is a
 # generic fallback: `create_app()` rewrites the scheme for the AUTH_TYPE
-# that is actually running (see `_tailor_auth_scheme` in `datastore/main.py`).
+# that is actually running (see `tailor_auth_scheme` in `datastore/main.py`).
 _auth_header = APIKeyHeader(
     name="Authorization",
     scheme_name="Authorization",
     auto_error=False,
-    description=(
-        "API token for the active `AUTH_TYPE`. Accepts a raw token or "
-        "`Bearer <token>`."
-    ),
+    description=("API token for the active `AUTH_TYPE`. Accepts a raw token or `Bearer <token>`."),
 )
 
 
@@ -47,9 +44,7 @@ def get_auth_provider(request: Request) -> AuthProvider:
     """Auth provider installed by the app lifespan."""
     provider = getattr(request.app.state, "auth_provider", None)
     if provider is None:
-        raise RuntimeError(
-            "auth provider is not initialised; check the lifespan wiring"
-        )
+        raise RuntimeError("auth provider is not initialised; check the lifespan wiring")
     return provider  # type: ignore[no-any-return]
 
 

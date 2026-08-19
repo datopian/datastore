@@ -126,7 +126,7 @@ async def create_datastore(
         # its data. Caller-supplied url_type is overridden on purpose.
         resource = await context.ckan.resource_create(
             resource={
-                **resource, 
+                **resource,
                 "url_type": "datastore",
                 "datastore_active": True,
             }
@@ -181,7 +181,6 @@ async def upsert_datastore(
         include_total=include_total,
     )
 
-
     await _sync_resource_to_ckan(context, resource_id)
 
     return DatastoreUpsertResponse.Result(
@@ -204,7 +203,10 @@ async def delete_datastore(
 
     engine = get_datastore_engine(context, mode="rw")
     result = await asyncio.to_thread(
-        engine.delete, resource_id=resource_id, filters=filters, fields=fields,
+        engine.delete,
+        resource_id=resource_id,
+        filters=filters,
+        fields=fields,
     )
 
     # Sync CKAN per the delete variant (mirrors the engine's branching):

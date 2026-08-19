@@ -1,4 +1,4 @@
-"""End-to-end tests for `GET /api/3/action/datastore_info`.
+"""End-to-end tests for `GET /datastore/api/v2/datastore_info`.
 
 Single `resource_id` query parameter; the response envelope's `result`
 holds `meta` (free-form dict) + `fields` (column schema list).
@@ -19,11 +19,12 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
 
-INFO_URL = "/api/3/action/datastore_info"
+INFO_URL = "/datastore/api/v2/datastore_info"
 _RESOURCE_ID = "balancing_auction_results_2025"
 
 
 # 1. Happy path -------------------------------------------------------------
+
 
 def test_basic_info_succeeds(client: TestClient) -> None:
     response = client.get(INFO_URL, params={"resource_id": _RESOURCE_ID})
@@ -55,6 +56,7 @@ def test_response_shape(client: TestClient) -> None:
 
 # 2. Validation + aliases ---------------------------------------------------
 
+
 def test_id_alias_works(client: TestClient) -> None:
     """`id` is a CKAN-style alias for `resource_id`; either is accepted."""
     response = client.get(INFO_URL, params={"id": _RESOURCE_ID})
@@ -68,10 +70,13 @@ def test_id_alias_works(client: TestClient) -> None:
 def test_same_value_for_resource_id_and_id_accepted(client: TestClient) -> None:
     """Same value on both `resource_id` and `id` is the no-conflict case
     (legacy clients echoing both keys); accepted as `resource_id`."""
-    response = client.get(INFO_URL, params={
-        "resource_id": _RESOURCE_ID,
-        "id": _RESOURCE_ID,
-    })
+    response = client.get(
+        INFO_URL,
+        params={
+            "resource_id": _RESOURCE_ID,
+            "id": _RESOURCE_ID,
+        },
+    )
     assert response.status_code == 200
     assert response.json()["result"]["meta"]["resource_id"] == _RESOURCE_ID
 
@@ -80,10 +85,13 @@ def test_conflicting_resource_id_and_id_rejected(client: TestClient) -> None:
     """Different values for `resource_id` and `id` → 400. Silently
     preferring one would let CKAN-style legacy params mask a real client
     bug, so the request must be unambiguous."""
-    response = client.get(INFO_URL, params={
-        "resource_id": _RESOURCE_ID,
-        "id": "different-value",
-    })
+    response = client.get(
+        INFO_URL,
+        params={
+            "resource_id": _RESOURCE_ID,
+            "id": "different-value",
+        },
+    )
     assert response.status_code == 400
     body = response.json()
     assert body["error"]["__type"] == "Validation Error"
@@ -100,10 +108,13 @@ def test_missing_both_returns_validation_error(client: TestClient) -> None:
 
 def test_extra_query_param_rejected(client: TestClient) -> None:
     """`extra='forbid'` — only `resource_id` / `id` are allowed."""
-    response = client.get(INFO_URL, params={
-        "resource_id": _RESOURCE_ID,
-        "verbose": "true",
-    })
+    response = client.get(
+        INFO_URL,
+        params={
+            "resource_id": _RESOURCE_ID,
+            "verbose": "true",
+        },
+    )
 
     assert response.status_code == 400
     body = response.json()
@@ -111,6 +122,7 @@ def test_extra_query_param_rejected(client: TestClient) -> None:
 
 
 # 3. Auth -------------------------------------------------------------------
+
 
 def test_unknown_resource_returns_404(client: TestClient) -> None:
     response = client.get(INFO_URL, params={"resource_id": "does-not-exist"})
@@ -121,9 +133,7 @@ def test_unknown_resource_returns_404(client: TestClient) -> None:
     assert "does-not-exist" in body["error"]["message"]
 
 
-def test_denied_key_returns_403(
-    client: TestClient, fake_ckan: FakeCKAN
-) -> None:
+def test_denied_key_returns_403(client: TestClient, fake_ckan: FakeCKAN) -> None:
     fake_ckan.deny("test-token")
 
     response = client.get(INFO_URL, params={"resource_id": _RESOURCE_ID})

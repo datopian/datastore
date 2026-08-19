@@ -57,15 +57,18 @@ def _data_dict(**overrides: Any) -> dict[str, Any]:
 
 
 def _call(
-    *, data_dict_overrides: dict[str, Any] | None = None,
-    request_url: str = "http://test/api/3/action/datastore_search?resource_id=res-1",
+    *,
+    data_dict_overrides: dict[str, Any] | None = None,
+    request_url: str = "http://test/datastore/api/v2/datastore_search?resource_id=res-1",
 ) -> dict[str, Any]:
     """Run `search_datastore`, drain its iterator, and parse the JSON body."""
-    body_iter: Iterator[bytes] = asyncio.run(search_datastore(
-        _ctx(),
-        _data_dict(**(data_dict_overrides or {})),
-        request_url=request_url,
-    ))
+    body_iter: Iterator[bytes] = asyncio.run(
+        search_datastore(
+            _ctx(),
+            _data_dict(**(data_dict_overrides or {})),
+            request_url=request_url,
+        )
+    )
     body = b"".join(body_iter)
     return json.loads(body)
 
@@ -82,7 +85,7 @@ def test_returns_valid_json_envelope() -> None:
 
 def test_help_field_equals_request_url() -> None:
     """The envelope's `help` field is the request URL passed in."""
-    url = "http://test/api/3/action/datastore_search?resource_id=res-1&limit=10"
+    url = "http://test/datastore/api/v2/datastore_search?resource_id=res-1&limit=10"
     body = _call(request_url=url)
     assert body["help"] == url
 
@@ -111,6 +114,7 @@ def test_include_total_false_omits_total() -> None:
 
 # --- search_datastore: format dispatch -------------------------------------
 
+
 def test_objects_format_records_is_array() -> None:
     body = _call(data_dict_overrides={"records_format": "objects"})
     assert isinstance(body["result"]["records"], list)
@@ -135,25 +139,31 @@ def test_tsv_format_records_is_string() -> None:
 def test_csv_records_string_is_empty_when_engine_yields_no_rows() -> None:
     """No header row in CSV records — column names live on `result.fields`.
     Placeholder engine yields nothing, so the records string is empty."""
-    body = _call(data_dict_overrides={
-        "records_format": "csv",
-        "fields": "auction_id,product_code",
-    })
+    body = _call(
+        data_dict_overrides={
+            "records_format": "csv",
+            "fields": "auction_id,product_code",
+        }
+    )
     assert body["result"]["records"] == ""
     # But the column metadata is echoed on `result.fields`.
     assert [f["id"] for f in body["result"]["fields"]] == [
-        "auction_id", "product_code",
+        "auction_id",
+        "product_code",
     ]
 
 
 def test_tsv_records_string_is_empty_when_engine_yields_no_rows() -> None:
-    body = _call(data_dict_overrides={
-        "records_format": "tsv",
-        "fields": "auction_id,product_code",
-    })
+    body = _call(
+        data_dict_overrides={
+            "records_format": "tsv",
+            "fields": "auction_id,product_code",
+        }
+    )
     assert body["result"]["records"] == ""
     assert [f["id"] for f in body["result"]["fields"]] == [
-        "auction_id", "product_code",
+        "auction_id",
+        "product_code",
     ]
 
 
@@ -181,19 +191,23 @@ def test_links_bare_path_url() -> None:
     """Bare path input → bare path output (no scheme/host to preserve).
     With a known `total > offset + limit`, `next` is emitted."""
     links = _build_pagination_links(
-        "/api/3/action/datastore_search",
-        limit=100, offset=0, total=500,
+        "/datastore/api/v2/datastore_search",
+        limit=100,
+        offset=0,
+        total=500,
     )
-    assert links["start"] == "/api/3/action/datastore_search"
-    assert links["next"] == "/api/3/action/datastore_search?offset=100"
+    assert links["start"] == "/datastore/api/v2/datastore_search"
+    assert links["next"] == "/datastore/api/v2/datastore_search?offset=100"
 
 
 def test_links_strip_offset_from_start() -> None:
     """`start` always drops `offset` (it defaults to 0); `prev` lands
     at `max(0, offset - limit)`; `next` advances by `limit`."""
     links = _build_pagination_links(
-        "/api/3/action/datastore_search?resource_id=res-1&offset=50",
-        limit=10, offset=50, total=200,
+        "/datastore/api/v2/datastore_search?resource_id=res-1&offset=50",
+        limit=10,
+        offset=50,
+        total=200,
     )
     assert "offset" not in links["start"]
     assert "resource_id=res-1" in links["start"]
@@ -205,13 +219,18 @@ def test_links_preserve_other_query_params() -> None:
     """filters, sort, fields ride along on every emitted URL. Page
     counters travel as ints and don't carry params."""
     url = (
-        "/api/3/action/datastore_search"
+        "/datastore/api/v2/datastore_search"
         "?resource_id=res-1&filters=%7B%22a%22%3A1%7D"
         "&sort=created+desc&fields=a,b"
     )
     links = _build_pagination_links(url, limit=20, offset=20, total=100)
     assert set(links) == {
-        "start", "prev", "next", "page_size", "page", "total_pages",
+        "start",
+        "prev",
+        "next",
+        "page_size",
+        "page",
+        "total_pages",
     }
     for v in links.values():
         if not isinstance(v, str):
@@ -228,18 +247,23 @@ def test_links_preserve_other_query_params() -> None:
 def test_links_preserve_scheme_and_host_from_full_url() -> None:
     """Full URL input → full URL output (scheme + host carried through)."""
     links = _build_pagination_links(
-        "http://example.com/api/3/action/datastore_search?limit=100",
-        limit=100, offset=0, total=500,
+        "http://example.com/datastore/api/v2/datastore_search?limit=100",
+        limit=100,
+        offset=0,
+        total=500,
     )
-    assert links["start"].startswith("http://example.com/api/3/action/datastore_search")
-    assert links["next"].startswith("http://example.com/api/3/action/datastore_search")
+    assert links["start"].startswith("http://example.com/datastore/api/v2/datastore_search")
+    assert links["next"].startswith("http://example.com/datastore/api/v2/datastore_search")
     assert "offset=100" in links["next"]
 
 
 def test_links_omit_next_when_total_reached() -> None:
     """On the last page (`offset + limit >= total`), `next` is dropped."""
     links = _build_pagination_links(
-        "/path", limit=10, offset=90, total=100,
+        "/path",
+        limit=10,
+        offset=90,
+        total=100,
     )
     assert "next" not in links
     assert "prev" in links  # offset > 0
@@ -251,7 +275,10 @@ def test_links_omit_next_when_total_unknown() -> None:
     an empty `records` array. `page` + `page_size` stay since position
     is meaningful for single-page pickers."""
     links = _build_pagination_links(
-        "/path", limit=10, offset=0, total=None,
+        "/path",
+        limit=10,
+        offset=0,
+        total=None,
     )
     assert set(links) == {"start", "page_size", "page"}
     assert links["page_size"] == 10
@@ -263,7 +290,10 @@ def test_links_omit_next_when_total_unknown() -> None:
 def test_links_omit_prev_at_first_page() -> None:
     """`offset == 0` → no previous page exists, so `prev` is dropped."""
     links = _build_pagination_links(
-        "/path", limit=10, offset=0, total=100,
+        "/path",
+        limit=10,
+        offset=0,
+        total=100,
     )
     assert "prev" not in links
     assert "next" in links
@@ -273,7 +303,10 @@ def test_links_null_page_counters_on_empty_resource() -> None:
     """Empty resource → `page` / `total_pages` are explicit `null`
     (not omitted). `page_size` and `start` are present as usual."""
     links = _build_pagination_links(
-        "/path", limit=10, offset=0, total=0,
+        "/path",
+        limit=10,
+        offset=0,
+        total=0,
     )
     assert set(links) == {"start", "page_size", "page", "total_pages"}
     assert links["page_size"] == 10
@@ -286,7 +319,10 @@ def test_links_null_page_counters_when_offset_past_total() -> None:
     lie about position, so they're emitted as explicit `null`. `prev`
     remains so the UI can walk back to a real page."""
     links = _build_pagination_links(
-        "/path", limit=100, offset=400, total=302,
+        "/path",
+        limit=100,
+        offset=400,
+        total=302,
     )
     assert links["page"] is None
     assert links["total_pages"] is None
@@ -297,7 +333,10 @@ def test_links_null_page_counters_when_offset_past_total() -> None:
 def test_links_keep_page_counters_on_real_page() -> None:
     """Within total → page + total_pages reflect a real position."""
     links = _build_pagination_links(
-        "/path", limit=100, offset=200, total=302,
+        "/path",
+        limit=100,
+        offset=200,
+        total=302,
     )
     assert links["page"] == 3
     assert links["total_pages"] == 4
@@ -307,7 +346,10 @@ def test_links_prev_clamps_to_zero_on_partial_first_page() -> None:
     """Paging back from `offset < limit` must land at offset=0, not a
     negative offset."""
     links = _build_pagination_links(
-        "/path", limit=50, offset=20, total=100,
+        "/path",
+        limit=50,
+        offset=20,
+        total=100,
     )
     assert "offset=0" in links["prev"]
 
@@ -319,12 +361,17 @@ def test_dump_sql_service_rejects_disallowed_functions() -> None:
     """The same allow-list gate as `search_sql_datastore` runs before
     any engine work in download mode."""
     with pytest.raises(ValidationError, match="pg_read_file"):
-        asyncio.run(dump_sql_datastore(_ctx(), {
-            "sql": "SELECT pg_read_file('/x') LIMIT 1",
-            "fmt": "csv",
-            "resource_ids": [],
-            "function_names": ["pg_read_file"],
-        }))
+        asyncio.run(
+            dump_sql_datastore(
+                _ctx(),
+                {
+                    "sql": "SELECT pg_read_file('/x') LIMIT 1",
+                    "fmt": "csv",
+                    "resource_ids": [],
+                    "function_names": ["pg_read_file"],
+                },
+            )
+        )
 
 
 def test_dump_sql_service_forwards_args_and_returns_urls() -> None:
@@ -349,12 +396,17 @@ def test_dump_sql_service_forwards_args_and_returns_urls() -> None:
         return ["https://signed/1"]
 
     with patch.object(BigQueryBackend, "dump_sql", fake):
-        urls = asyncio.run(dump_sql_datastore(_ctx(), {
-            "sql": "SELECT * FROM r1 LIMIT 50000",
-            "fmt": "ndjson",
-            "resource_ids": ["r1"],
-            "function_names": ["count"],
-        }))
+        urls = asyncio.run(
+            dump_sql_datastore(
+                _ctx(),
+                {
+                    "sql": "SELECT * FROM r1 LIMIT 50000",
+                    "fmt": "ndjson",
+                    "resource_ids": ["r1"],
+                    "function_names": ["count"],
+                },
+            )
+        )
 
     assert urls == ["https://signed/1"]
     assert captured == {

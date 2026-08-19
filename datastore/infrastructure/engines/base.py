@@ -39,10 +39,7 @@ class WriteResult:
 
 @dataclass
 class InfoResult:
-    """Table metadata returned by `datastore_info`.
-
-
-    """
+    """Table metadata returned by `datastore_info`."""
 
     schema: dict[str, Any]
     meta: dict[str, Any]
@@ -130,8 +127,7 @@ class DatastoreBackend(ABC):
 
     @abstractmethod
     async def dump(self, resource_id: str, fmt: str) -> list[str]:
-        """Download a table as CSV/NDJSON/Parquet.
-        """
+        """Download a table as CSV/NDJSON/Parquet."""
 
     @abstractmethod
     async def dump_sql(

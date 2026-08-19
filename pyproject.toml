@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "datastore"
-version = "0.1.0"
+version = "0.2.0"
 description = "CKAN-compatible datastore API with pluggable storage backends"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -21,6 +21,10 @@ dependencies = [
     "httptools>=0.6",
     "sqlglot>=25.0",
     "pyjwt>=2.8,<3",
+    # Renders the Swagger UI docs page (api/templates/docs.html). Arrives
+    # transitively via fastapi[standard] too, but declared here because
+    # this package imports it directly.
+    "jinja2>=3.1",
     "google-cloud-storage>=2.14",
 ]
 

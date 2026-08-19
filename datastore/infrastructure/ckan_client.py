@@ -35,9 +35,7 @@ class CKANClient:
     per-request copy that shares the pool and carries the caller's token.
     """
 
-    def __init__(
-        self, base_url: str, http: httpx.AsyncClient, api_key: str | None = None
-    ) -> None:
+    def __init__(self, base_url: str, http: httpx.AsyncClient, api_key: str | None = None) -> None:
         self._base_url = base_url.rstrip("/")
         self._http = http
         self._api_key = api_key
@@ -61,9 +59,7 @@ class CKANClient:
                 "datastore_authorize requires exactly one of resource_id or package_id"
             )
         body: dict[str, Any] = (
-            {"resource_id": resource_id}
-            if resource_id is not None
-            else {"package_id": package_id}
+            {"resource_id": resource_id} if resource_id is not None else {"package_id": package_id}
         )
         if permission is not None:
             body["permission"] = permission
@@ -72,21 +68,15 @@ class CKANClient:
     async def resource_create(self, *, resource: dict[str, Any]) -> dict[str, Any]:
         """`/api/3/action/resource_create`. `resource` must include `package_id`."""
         if not resource.get("package_id"):
-            raise ValidationError(
-                "resource_create requires 'package_id' in the resource dict"
-            )
+            raise ValidationError("resource_create requires 'package_id' in the resource dict")
         return await self._post_action("resource_create", dict(resource))
 
-    async def resource_patch(
-        self, *, resource_id: str, patch: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def resource_patch(self, *, resource_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         """`/api/3/action/resource_patch`. Merges `patch` onto the resource."""
         return await self._post_action("resource_patch", {"id": resource_id, **patch})
 
     # --- transport ---------------------------------------------------------
-    async def _post_action(
-        self, action: str, body: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _post_action(self, action: str, body: dict[str, Any]) -> dict[str, Any]:
         if not self._base_url:
             raise ServerError("CKAN_URL is not configured")
 

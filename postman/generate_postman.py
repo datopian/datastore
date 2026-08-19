@@ -66,7 +66,6 @@ ENDPOINTS: list[tuple[str, str, str]] = [
 ]
 
 HEALTH_REQUESTS: list[tuple[str, str, str]] = [
-    ("Welcome", "", "Banner / root endpoint. Echoes `APP_MESSAGE`."),
     ("Health", "datastore/api/health",
      "Liveness probe — always 200 while the process is up."),
     ("Ready", "datastore/api/ready",
@@ -103,7 +102,7 @@ def _post_request(action: str, body: dict[str, Any], description: str) -> dict[s
             "raw": json.dumps(body, indent=2),
             "options": {"raw": {"language": "json"}},
         },
-        "url": _request_url(f"api/3/action/{action}"),
+        "url": _request_url(f"datastore/api/v2/{action}"),
         "description": description,
     }
 
@@ -124,7 +123,7 @@ def _get_request(action: str, body: dict[str, Any], description: str) -> dict[st
     return {
         "method": "GET",
         "header": [],
-        "url": _request_url(f"api/3/action/{action}", query=query),
+        "url": _request_url(f"datastore/api/v2/{action}", query=query),
         "description": description,
     }
 
@@ -349,9 +348,8 @@ def _build_health_folder() -> dict[str, Any]:
     return {
         "name": "health",
         "description": (
-            "Liveness / readiness probes live under `/datastore/api` "
-            "(`/datastore/api/health`, `/datastore/api/ready`); the welcome "
-            "banner is at the root `/`. Hit any of these to check the server."
+            "Liveness / readiness probes: `/datastore/api/health` and "
+            "`/datastore/api/ready`. Hit either to check the server."
         ),
         "item": items,
     }

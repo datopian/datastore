@@ -114,7 +114,8 @@ class BigQueryBackend(DatastoreBackend):
         self.client = build_client(self.config, self.mode)
         log.info(
             "BigQuery client initialised: project=%s mode=%s",
-            self.config.BIGQUERY_PROJECT, self.mode,
+            self.config.BIGQUERY_PROJECT,
+            self.mode,
         )
 
     def _read_schema(self, resource_id: str) -> dict | None:
@@ -126,10 +127,7 @@ class BigQueryBackend(DatastoreBackend):
         """
         from google.api_core.exceptions import NotFound
 
-        ref = (
-            f"{self.config.BIGQUERY_PROJECT}"
-            f".{self.config.BIGQUERY_DATASET}.{resource_id}"
-        )
+        ref = f"{self.config.BIGQUERY_PROJECT}.{self.config.BIGQUERY_DATASET}.{resource_id}"
         try:
             table = self.client.get_table(ref)
         except NotFound:
@@ -157,10 +155,7 @@ class BigQueryBackend(DatastoreBackend):
         Backticks make resource_ids with hyphens (CKAN UUIDs) parse
         without further escaping.
         """
-        return (
-            f"`{self.config.BIGQUERY_PROJECT}"
-            f".{self.config.BIGQUERY_DATASET}.{resource_id}`"
-        )
+        return f"`{self.config.BIGQUERY_PROJECT}.{self.config.BIGQUERY_DATASET}.{resource_id}`"
 
     def _read_job_config(self, params: list | None = None) -> Any:
         """QueryJobConfig for SELECT paths — honours `BIGQUERY_USE_QUERY_CACHE`.
@@ -170,10 +165,13 @@ class BigQueryBackend(DatastoreBackend):
         SELECT anyway.
         """
         from google.cloud import bigquery
+
         return bigquery.QueryJobConfig(
             query_parameters=params or [],
             use_query_cache=getattr(
-                self.config, "BIGQUERY_USE_QUERY_CACHE", True,
+                self.config,
+                "BIGQUERY_USE_QUERY_CACHE",
+                True,
             ),
         )
 
@@ -196,19 +194,15 @@ class BigQueryBackend(DatastoreBackend):
             job.result()
             return job
         except Exception as e:
-            raise ServerError(
-                f"BigQuery {op} failed for resource {resource_id!r}: {e}"
-            ) from e
+            raise ServerError(f"BigQuery {op} failed for resource {resource_id!r}: {e}") from e
 
     # ----- create helpers (DDL + records + branch orchestration) --------
     def _create_table_sql(self, resource_id: str, schema: dict) -> str | None:
-        """Render the `CREATE TABLE … OPTIONS(...)` DDL.
-        """
+        """Render the `CREATE TABLE … OPTIONS(...)` DDL."""
         cols = column_defs(schema, include_updated_at=self._include_updated_at)
         if not cols:
             log.warning(
-                "BigQueryBackend.create: schema for %r has no fields; "
-                "skipping CREATE TABLE.",
+                "BigQueryBackend.create: schema for %r has no fields; skipping CREATE TABLE.",
                 resource_id,
             )
             return None
@@ -222,15 +216,16 @@ class BigQueryBackend(DatastoreBackend):
         table-level metadata block.
         """
         sql = set_table_options_sql(
-            self._data_table_ref(resource_id), schema,
+            self._data_table_ref(resource_id),
+            schema,
         )
         self._run_query(
-            sql, op="ALTER TABLE SET OPTIONS", resource_id=resource_id,
+            sql,
+            op="ALTER TABLE SET OPTIONS",
+            resource_id=resource_id,
         )
 
-    def _alter_data_table(
-        self, resource_id: str, old_schema: dict, new_schema: dict
-    ) -> None:
+    def _alter_data_table(self, resource_id: str, old_schema: dict, new_schema: dict) -> None:
         """Apply the schema diff as DDL.
 
         Added columns → `ADD COLUMN IF NOT EXISTS`. Widened types →
@@ -248,19 +243,19 @@ class BigQueryBackend(DatastoreBackend):
             log.info(
                 "BigQueryBackend.alter: columns %s dropped from schema "
                 "for %r — keeping BigQuery columns to preserve rows.",
-                removed, resource_id,
+                removed,
+                resource_id,
             )
 
         clauses = alter_clauses(added, type_changes, new_schema)
         if clauses:
-            sql = (
-                f"ALTER TABLE {self._data_table_ref(resource_id)} "
-                f"{', '.join(clauses)}"
-            )
+            sql = f"ALTER TABLE {self._data_table_ref(resource_id)} {', '.join(clauses)}"
             self._run_query(sql, op="ALTER TABLE", resource_id=resource_id)
             log.info(
                 "BigQuery table altered: %s (added=%s, type_changes=%s)",
-                resource_id, added, type_changes,
+                resource_id,
+                added,
+                type_changes,
             )
 
         # Refresh the table-level metadata even when no column actions
@@ -277,7 +272,9 @@ class BigQueryBackend(DatastoreBackend):
         return bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter(
-                    "rows", "STRING", orjson.dumps(records).decode("utf-8"),
+                    "rows",
+                    "STRING",
+                    orjson.dumps(records).decode("utf-8"),
                 ),
             ]
         )
@@ -304,7 +301,9 @@ class BigQueryBackend(DatastoreBackend):
         """
         try:
             job = self._run_query(
-                sql, op=op, resource_id=resource_id,
+                sql,
+                op=op,
+                resource_id=resource_id,
                 job_config=self._rows_job_config(records),
             )
         except ServerError as e:
@@ -312,9 +311,7 @@ class BigQueryBackend(DatastoreBackend):
         log.info("BigQuery %s: %s (%d row(s))", op, resource_id, len(records))
         return job
 
-    def _insert_records(
-        self, resource_id: str, schema: dict, records: list
-    ) -> None:
+    def _insert_records(self, resource_id: str, schema: dict, records: list) -> None:
         """DML `INSERT` for `records` (empty → no-op).
 
         When the resource declares a `primaryKey`, the INSERT is wrapped
@@ -337,23 +334,27 @@ class BigQueryBackend(DatastoreBackend):
             builder = insert_sql
         sql = self._build_dml(builder, resource_id, schema)
         self._write_rows(
-            resource_id, sql, op="INSERT", action="insert", records=records,
+            resource_id,
+            sql,
+            op="INSERT",
+            action="insert",
+            records=records,
         )
 
-    def _merge_records(
-        self, resource_id: str, schema: dict, records: list
-    ) -> None:
+    def _merge_records(self, resource_id: str, schema: dict, records: list) -> None:
         """`MERGE` keyed on `schema.primaryKey` (empty → no-op)."""
         if not records:
             return
         sql = self._build_dml(merge_sql, resource_id, schema)
         self._write_rows(
-            resource_id, sql, op="MERGE", action="upsert", records=records,
+            resource_id,
+            sql,
+            op="MERGE",
+            action="upsert",
+            records=records,
         )
 
-    def _update_records(
-        self, resource_id: str, schema: dict, records: list
-    ) -> None:
+    def _update_records(self, resource_id: str, schema: dict, records: list) -> None:
         """DML `UPDATE` keyed on `schema.primaryKey` (empty → no-op).
 
         DML UPDATE silently no-ops on PK misses, so any unmatched row
@@ -363,7 +364,11 @@ class BigQueryBackend(DatastoreBackend):
             return
         sql = self._build_dml(update_sql, resource_id, schema)
         job = self._write_rows(
-            resource_id, sql, op="UPDATE", action="update", records=records,
+            resource_id,
+            sql,
+            op="UPDATE",
+            action="update",
+            records=records,
         )
         affected = job.num_dml_affected_rows or 0
         if affected < len(records):
@@ -374,9 +379,7 @@ class BigQueryBackend(DatastoreBackend):
                 "use method='upsert' to insert missing rows"
             )
 
-    def _apply_new_resource(
-        self, resource_id: str, schema: dict, records: list
-    ) -> None:
+    def _apply_new_resource(self, resource_id: str, schema: dict, records: list) -> None:
         """First-time create: CREATE TABLE (+ INSERT) as one BQ script.
 
         Empty `records` collapses to a standalone CREATE.
@@ -387,7 +390,9 @@ class BigQueryBackend(DatastoreBackend):
 
         if not records:
             self._run_query(
-                create_sql, op="CREATE TABLE", resource_id=resource_id,
+                create_sql,
+                op="CREATE TABLE",
+                resource_id=resource_id,
             )
             log.info("BigQuery table created: %s", resource_id)
             return
@@ -400,13 +405,13 @@ class BigQueryBackend(DatastoreBackend):
         # impossible, but intra-batch duplicate keys still RAISE before
         # any row lands.
         builder = insert_guarded_sql if normalize_pk(schema) else insert_sql
-        script = (
-            f"{create_sql};\n"
-            f"{self._build_dml(builder, resource_id, schema)}"
-        )
+        script = f"{create_sql};\n{self._build_dml(builder, resource_id, schema)}"
         self._write_rows(
-            resource_id, script,
-            op="CREATE TABLE + INSERT", action="insert", records=records,
+            resource_id,
+            script,
+            op="CREATE TABLE + INSERT",
+            action="insert",
+            records=records,
         )
 
     def _apply_existing_resource(
@@ -446,9 +451,7 @@ class BigQueryBackend(DatastoreBackend):
             if existing is None:
                 self._apply_new_resource(resource_id, schema, rows)
             else:
-                self._apply_existing_resource(
-                    resource_id, existing, schema, rows
-                )
+                self._apply_existing_resource(resource_id, existing, schema, rows)
 
         return {
             "schema": schema,
@@ -486,9 +489,7 @@ class BigQueryBackend(DatastoreBackend):
 
         schema = self._read_schema(resource_id)
         if schema is None:
-            raise NotFoundError(
-                f"resource {resource_id!r} not found."
-            )
+            raise NotFoundError(f"resource {resource_id!r} not found.")
 
         rows = records or []
         if method == "insert":
@@ -499,8 +500,7 @@ class BigQueryBackend(DatastoreBackend):
             self._update_records(resource_id, schema, rows)
         else:
             raise ValidationError(
-                f"unknown upsert method {method!r}; expected one of "
-                "'upsert', 'insert', 'update'"
+                f"unknown upsert method {method!r}; expected one of 'upsert', 'insert', 'update'"
             )
 
         return {
@@ -545,9 +545,7 @@ class BigQueryBackend(DatastoreBackend):
             # field shape so the unit suite can exercise the streaming
             # writer + envelope plumbing without a real backend.
             stub_schema = {
-                "fields": [
-                    {"name": c, "type": "any"} for c in (fields or [])
-                ],
+                "fields": [{"name": c, "type": "any"} for c in (fields or [])],
             }
             return SearchResult(
                 schema=stub_schema,
@@ -558,9 +556,7 @@ class BigQueryBackend(DatastoreBackend):
 
         schema = self._read_schema(resource_id)
         if schema is None:
-            raise NotFoundError(
-                f"resource {resource_id!r} not found."
-            )
+            raise NotFoundError(f"resource {resource_id!r} not found.")
 
         try:
             sql, params, projected = build_search(
@@ -589,7 +585,9 @@ class BigQueryBackend(DatastoreBackend):
         count_cfg = None
         count_sql = ""
         if include_total and needs_count_query(
-            filters=filters, q=q, distinct=distinct,
+            filters=filters,
+            q=q,
+            distinct=distinct,
         ):
             count_sql, count_params = build_count(
                 table_ref=self._data_table_ref(resource_id),
@@ -613,9 +611,7 @@ class BigQueryBackend(DatastoreBackend):
             search_job = self.client.query(sql, job_config=job_config)
             row_iter = search_job.result()
         except Exception as e:
-            raise ServerError(
-                f"BigQuery search failed for resource {resource_id!r}: {e}"
-            ) from e
+            raise ServerError(f"BigQuery search failed for resource {resource_id!r}: {e}") from e
 
         total: int | None = None
         if include_total:
@@ -627,8 +623,7 @@ class BigQueryBackend(DatastoreBackend):
                     rows = list(count_job.result())
                 except Exception as e:
                     raise ServerError(
-                        f"BigQuery search COUNT failed for resource "
-                        f"{resource_id!r}: {e}"
+                        f"BigQuery search COUNT failed for resource {resource_id!r}: {e}"
                     ) from e
                 total = int(rows[0]["n"]) if rows else 0
 
@@ -664,8 +659,7 @@ class BigQueryBackend(DatastoreBackend):
 
         if self.mode != "ro":
             raise ServerError(
-                "datastore_search_sql must run on a read-only engine; "
-                "got mode=" + repr(self.mode)
+                "datastore_search_sql must run on a read-only engine; got mode=" + repr(self.mode)
             )
 
         # User refers to tables by their CKAN resource_id; BigQuery
@@ -680,9 +674,7 @@ class BigQueryBackend(DatastoreBackend):
                 dataset=self.config.BIGQUERY_DATASET,
             )
         except Exception as e:
-            raise ServerError(
-                f"failed to qualify table references in SQL: {e}"
-            ) from e
+            raise ServerError(f"failed to qualify table references in SQL: {e}") from e
 
         count_sql, count_params = self._search_sql_count_query(qualified_sql)
 
@@ -702,7 +694,8 @@ class BigQueryBackend(DatastoreBackend):
 
         try:
             data_job = self.client.query(
-                data_sql, job_config=self._read_job_config(),
+                data_sql,
+                job_config=self._read_job_config(),
             )
             row_iter = data_job.result()
         except Exception as e:
@@ -732,9 +725,7 @@ class BigQueryBackend(DatastoreBackend):
             records_truncated=False,
         )
 
-    def _search_sql_count_query(
-        self, qualified_sql: str
-    ) -> tuple[str | None, list]:
+    def _search_sql_count_query(self, qualified_sql: str) -> tuple[str | None, list]:
         """Pick the cheapest `total` query for a vetted SELECT.
 
         Plain `SELECT cols FROM t [LIMIT/OFFSET]` counts the source
@@ -759,8 +750,7 @@ class BigQueryBackend(DatastoreBackend):
             return f"SELECT COUNT(*) AS n FROM ({inner})", []
         except Exception as e:
             log.warning(
-                "search_sql: could not build COUNT query (%s); "
-                "total will be omitted",
+                "search_sql: could not build COUNT query (%s); total will be omitted",
                 e,
             )
             return None, []
@@ -779,9 +769,7 @@ class BigQueryBackend(DatastoreBackend):
 
         schema = self._read_schema(resource_id)
         if schema is None:
-            raise NotFoundError(
-                f"resource {resource_id!r} is not declared; nothing to delete"
-            )
+            raise NotFoundError(f"resource {resource_id!r} is not declared; nothing to delete")
 
         if fields is not None:
             new_schema = self._drop_columns(resource_id, schema, fields)
@@ -809,9 +797,12 @@ class BigQueryBackend(DatastoreBackend):
     ) -> None:
         """Parameterised ``DELETE FROM … WHERE …`` from the filter map."""
         from google.cloud import bigquery
+
         try:
             sql, params = delete_sql(
-                self._data_table_ref(resource_id), schema, filters,
+                self._data_table_ref(resource_id),
+                schema,
+                filters,
             )
         except ValueError as e:
             raise ValidationError(str(e)) from e
@@ -819,14 +810,17 @@ class BigQueryBackend(DatastoreBackend):
         job_config = bigquery.QueryJobConfig(query_parameters=params)
         try:
             self._run_query(
-                sql, op="DELETE", resource_id=resource_id,
+                sql,
+                op="DELETE",
+                resource_id=resource_id,
                 job_config=job_config,
             )
         except ServerError as e:
             raise _translate_bigquery_error(e, resource_id, "delete") from e
         log.info(
             "BigQuery rows deleted: %s (filters=%s)",
-            resource_id, sorted(filters.keys()) or "<all>",
+            resource_id,
+            sorted(filters.keys()) or "<all>",
         )
 
     def _drop_columns(
@@ -840,11 +834,7 @@ class BigQueryBackend(DatastoreBackend):
         Rejects system columns, unknown columns, and PK columns up front.
         Returns the resulting Frictionless schema (minus the dropped columns).
         """
-        existing = {
-            f["name"]
-            for f in schema.get("fields", [])
-            if f.get("name")
-        }
+        existing = {f["name"] for f in schema.get("fields", []) if f.get("name")}
 
         # System-column check first: `_id` / `_updated_at` aren't in
         # the stored schema, so the unknown-column check would shadow
@@ -852,14 +842,11 @@ class BigQueryBackend(DatastoreBackend):
         reserved = [c for c in fields if c in SYSTEM_COLUMN_NAMES]
         if reserved:
             raise ValidationError(
-                f"cannot drop engine-reserved system column(s): "
-                f"{sorted(reserved)}"
+                f"cannot drop engine-reserved system column(s): {sorted(reserved)}"
             )
         unknown = [c for c in fields if c not in existing]
         if unknown:
-            raise ValidationError(
-                f"cannot drop unknown column(s): {sorted(unknown)}"
-            )
+            raise ValidationError(f"cannot drop unknown column(s): {sorted(unknown)}")
         pk = set(normalize_pk(schema))
         pk_violations = [c for c in fields if c in pk]
         if pk_violations:
@@ -875,14 +862,13 @@ class BigQueryBackend(DatastoreBackend):
         drop_set = set(fields)
         new_schema: dict[str, Any] = {
             **schema,
-            "fields": [
-                f for f in schema.get("fields", [])
-                if f.get("name") not in drop_set
-            ],
+            "fields": [f for f in schema.get("fields", []) if f.get("name") not in drop_set],
         }
         self._refresh_table_options(resource_id, new_schema)
         log.info(
-            "BigQuery columns dropped: %s (%s)", resource_id, sorted(fields),
+            "BigQuery columns dropped: %s (%s)",
+            resource_id,
+            sorted(fields),
         )
         return new_schema
 
@@ -901,9 +887,7 @@ class BigQueryBackend(DatastoreBackend):
 
         schema = self._read_schema(resource_id)
         if schema is None:
-            raise NotFoundError(
-                f"resource {resource_id!r} not found."
-            )
+            raise NotFoundError(f"resource {resource_id!r} not found.")
 
         total = self._count_rows(resource_id)
 
@@ -923,20 +907,20 @@ class BigQueryBackend(DatastoreBackend):
         state — returning 0 keeps `datastore_info` informative
         instead of 500-ing the whole call.
         """
-        sql = (
-            f"SELECT COUNT(*) AS n FROM "
-            f"{self._data_table_ref(resource_id)}"
-        )
+        sql = f"SELECT COUNT(*) AS n FROM {self._data_table_ref(resource_id)}"
         try:
             job = self._run_query(
-                sql, op="COUNT", resource_id=resource_id,
+                sql,
+                op="COUNT",
+                resource_id=resource_id,
                 job_config=self._read_job_config(),
             )
             rows = list(job.result())
         except ServerError as e:
             log.warning(
                 "COUNT(*) failed for resource %r; reporting total=0: %s",
-                resource_id, e,
+                resource_id,
+                e,
             )
             return 0
         if not rows:
@@ -1016,10 +1000,7 @@ class BigQueryBackend(DatastoreBackend):
         if self.client is None:
             return False
         now = time.monotonic()
-        if (
-            self._health is not None
-            and now - self._health[0] < _HEALTHCHECK_TTL_SECONDS
-        ):
+        if self._health is not None and now - self._health[0] < _HEALTHCHECK_TTL_SECONDS:
             return self._health[1]
 
         from google.cloud import bigquery
@@ -1027,23 +1008,18 @@ class BigQueryBackend(DatastoreBackend):
         try:
             self.client.query(
                 "SELECT 1",
-                job_config=bigquery.QueryJobConfig(
-                    dry_run=True, use_query_cache=False
-                ),
+                job_config=bigquery.QueryJobConfig(dry_run=True, use_query_cache=False),
                 timeout=_HEALTHCHECK_TIMEOUT_SECONDS,
             )
             ok = True
         except Exception as e:
             ok = False
-            log.warning(
-                "BigQuery healthcheck failed (mode=%s): %s", self.mode, e
-            )
+            log.warning("BigQuery healthcheck failed (mode=%s): %s", self.mode, e)
         self._health = (now, ok)
         return ok
 
-def _translate_bigquery_error(
-    exc: ServerError, resource_id: str, action: str
-) -> Exception:
+
+def _translate_bigquery_error(exc: ServerError, resource_id: str, action: str) -> Exception:
     """Translate raw BQ write errors into actionable `ValidationError`s.
 
     Rewrites BQ messages whose literal text is unhelpful — e.g.
@@ -1144,17 +1120,17 @@ def _translate_bigquery_error(
 
 # BigQuery column-type name → Frictionless / user-friendly name.
 _FRIENDLY_BQ_TYPE: dict[str, str] = {
-    "int64":      "integer",
-    "double":     "number",
-    "float64":    "number",
-    "numeric":    "number",
+    "int64": "integer",
+    "double": "number",
+    "float64": "number",
+    "numeric": "number",
     "bignumeric": "number",
-    "bool":       "boolean",
-    "string":     "string",
-    "date":       "date",
-    "datetime":   "datetime",
-    "timestamp":  "timestamp",
-    "time":       "time",
-    "json":       "object",
-    "bytes":      "string",
+    "bool": "boolean",
+    "string": "string",
+    "date": "date",
+    "datetime": "datetime",
+    "timestamp": "timestamp",
+    "time": "time",
+    "json": "object",
+    "bytes": "string",
 }

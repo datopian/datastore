@@ -10,17 +10,20 @@ The `Authorization` scheme is declared once at import time (see
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
-from datastore.core.config import get_config
+from datastore.api import docs as docs_module
+from datastore.api.docs import api_description
+from datastore.core.config import Config, get_config
+from datastore.core.constants import API_PREFIX, API_VERSION, DEFAULT_API_URL
 from datastore.main import create_app
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 
-def _build_schema(
-    monkeypatch: pytest.MonkeyPatch, auth_type: str
-) -> dict[str, Any]:
+def _build_schema(monkeypatch: pytest.MonkeyPatch, auth_type: str) -> dict[str, Any]:
     monkeypatch.setenv("AUTH_TYPE", auth_type)
     get_config.cache_clear()
     return create_app().openapi()
@@ -42,14 +45,17 @@ def _operations(schema: dict[str, Any]) -> list[dict[str, Any]]:
 
 # 1. ckan ---------------------------------------------------------------------
 
+
 def test_ckan_scheme_describes_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Under CKAN auth the scheme describes an API token, and says nothing
+    about JWTs — the two providers' wording must not leak into each other."""
     schema = _build_schema(monkeypatch, "ckan")
 
     scheme = _scheme(schema)
     assert scheme is not None
-    assert "CKAN API key" in scheme["description"]
+    assert "API token" in scheme["description"]
     assert "JWT" not in scheme["description"]
 
 
@@ -60,13 +66,15 @@ def test_ckan_operations_reference_the_scheme(
     schema = _build_schema(monkeypatch, "ckan")
 
     secured = [
-        op for op in _operations(schema)
+        op
+        for op in _operations(schema)
         if any("Authorization" in req for req in op.get("security", []))
     ]
     assert secured, "no operation references the Authorization scheme"
 
 
 # 2. jwt ----------------------------------------------------------------------
+
 
 def test_jwt_scheme_describes_bearer_token(
     monkeypatch: pytest.MonkeyPatch,
@@ -81,6 +89,7 @@ def test_jwt_scheme_describes_bearer_token(
 
 
 # 3. anonymous ----------------------------------------------------------------
+
 
 def test_anonymous_has_no_security_scheme(
     monkeypatch: pytest.MonkeyPatch,
@@ -101,19 +110,369 @@ def test_anonymous_operations_carry_no_security(
         assert "security" not in operation
 
 
+# 3b. description tracks AUTH_TYPE ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("auth_type", "expected", "forbidden"),
+    [
+        ("ckan", "CKAN API token", "JWT"),
+        ("jwt", "signed JWT", "CKAN API token"),
+        ("anonymous", "no credentials are required", "CKAN API token"),
+        # matched case-insensitively below, so rewording the sentence's
+        # opening doesn't break the assertion
+    ],
+)
+def test_description_describes_the_active_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    auth_type: str,
+    expected: str,
+    forbidden: str,
+) -> None:
+    """The description is the first thing a reader sees, so telling them to
+    paste a CKAN token when the service runs on JWT would mislead."""
+    schema = _build_schema(monkeypatch, auth_type)
+
+    description = schema["info"]["description"]
+    assert expected.lower() in description.lower()
+    assert forbidden.lower() not in description.lower()
+
+
+def test_description_falls_back_for_unknown_provider() -> None:
+    """A third-party provider under `datastore/auth/<name>/` must not be
+    handed another provider's instructions."""
+    description = api_description("some-third-party-provider")
+
+    assert "Send your credentials" in description
+    assert "CKAN API token" not in description
+    assert "signed JWT" not in description
+
+
+def test_description_placeholder_is_always_substituted() -> None:
+    """The auth slot is spliced with a plain replace (the text contains
+    literal braces, so `str.format` would raise) — make sure no raw
+    placeholder can reach the page."""
+    for auth_type in ("ckan", "jwt", "anonymous", "unknown"):
+        assert "%(auth)s" not in api_description(auth_type)
+
+
+def test_description_survives_literal_braces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path like `/dump/{resource_id}` in the description must survive.
+
+    `str.format`/%-formatting would read those braces as a field and raise at
+    startup, so the auth slot is spliced with a plain replace. Asserted against
+    a description that actually contains braces, so the guarantee holds even if
+    the shipped prose currently has none.
+    """
+    monkeypatch.setattr(
+        docs_module,
+        "API_DESCRIPTION",
+        "See `/dump/{resource_id}`.\n\n%(auth)s",
+    )
+
+    rendered = api_description("ckan")
+
+    assert "{resource_id}" in rendered
+    assert "CKAN API token" in rendered
+
+
+# 3c. contract version, not build version -----------------------------------
+
+
+def test_info_version_is_the_api_contract_version(client: TestClient) -> None:
+    """`info.version` describes the API contract, not the installed build.
+
+    The two are independent: the package can ship any number of releases
+    without the contract changing. A build number here would tell a client
+    nothing about which request/response shapes it is looking at.
+    """
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    assert schema["info"]["version"] == API_VERSION
+
+
+def test_info_version_matches_the_url_prefix(client: TestClient) -> None:
+    """The documented contract version and the one in the URL are the same
+    value, so a schema can never advertise a version its routes don't serve."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    documented = schema["info"]["version"]
+    assert any(path.startswith(f"/datastore/api/{documented}/") for path in schema["paths"]), (
+        f"no route served under the documented version {documented!r}"
+    )
+
+
+# 3d. `help` deep-links into the docs ---------------------------------------
+
+
+def test_help_deep_links_to_the_operation(client: TestClient) -> None:
+    """`help` points at the endpoint's own entry in Swagger, not back at the
+    URL the caller just requested."""
+    body = client.get(f"{API_PREFIX}/datastore_search?resource_id=x").json()
+
+    assert body["help"].endswith(f"{API_PREFIX}/docs#/Datastore/datastore_search")
+
+
+def test_help_is_present_on_errors(client: TestClient) -> None:
+    """The error envelope carries the same link — that is when a caller is
+    most likely to want the docs."""
+    response = client.get(f"{API_PREFIX}/datastore_search")
+
+    assert response.status_code == 400
+    assert response.json()["help"].endswith("#/Datastore/datastore_search")
+
+
+def test_help_anchors_resolve_in_the_schema(client: TestClient) -> None:
+    """Every `#/<tag>/<operationId>` anchor must name a real operation.
+
+    A link that 'works' but lands nowhere is worse than no link, so this
+    checks the pairs against the published schema rather than trusting the
+    string format.
+    """
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    for path, item in schema["paths"].items():
+        for method, operation in item.items():
+            for tag in operation.get("tags", []):
+                assert operation["operationId"], f"{method} {path} has no operationId"
+                assert tag in {t["name"] for t in schema["tags"]}, (
+                    f"{method} {path} tagged {tag!r}, which is not a declared tag"
+                )
+
+
+def test_operation_ids_are_the_handler_names(client: TestClient) -> None:
+    """Clean operationIds keep the deep-link anchors readable and give
+    generated clients sane method names."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    ids = {op["operationId"] for it in schema["paths"].values() for op in it.values()}
+
+    assert "datastore_search" in ids
+    assert not any("_get" in i or "_post" in i for i in ids), (
+        f"FastAPI's auto-generated ids leaked through: {sorted(ids)}"
+    )
+
+
+# 3e. schema examples are absolute and consistent ---------------------------
+
+
+def test_error_example_url_matches_the_route_prefix(client: TestClient) -> None:
+    """The example `help` is built from `API_PREFIX`, so it can't drift out of
+    sync with the paths the service actually serves."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+
+    assert example["help"] == (f"{DEFAULT_API_URL}{API_PREFIX}/docs#/Datastore/datastore_search")
+
+
+def test_api_url_sets_the_example_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`API_URL` from the environment becomes the example's host, so a
+    deployed service's docs don't advertise `example.com`."""
+    monkeypatch.setenv("API_URL", "https://data.example.org")
+    get_config.cache_clear()
+
+    try:
+        with TestClient(create_app()) as configured:
+            schema = configured.get(f"{API_PREFIX}/openapi.json").json()
+    finally:
+        get_config.cache_clear()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    assert example["help"] == (
+        f"https://data.example.org{API_PREFIX}/docs#/Datastore/datastore_search"
+    )
+
+
+def test_api_url_trailing_slash_does_not_double_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trailing slash in config must not yield `host//path`."""
+    monkeypatch.setenv("API_URL", "https://data.example.org/")
+    get_config.cache_clear()
+
+    try:
+        with TestClient(create_app()) as configured:
+            schema = configured.get(f"{API_PREFIX}/openapi.json").json()
+    finally:
+        get_config.cache_clear()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    assert "//datastore" not in example["help"]
+
+
+def test_example_help_is_absolute(client: TestClient) -> None:
+    """The published example must be a full URL, not the relative path
+    `schemas/` declares — a reader copying it should see a real response's
+    shape."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    assert example["help"].startswith("https://")
+
+
+def test_error_example_anchor_names_a_real_operation(client: TestClient) -> None:
+    """The example deep-links at an operation that exists — an example that
+    points nowhere teaches the reader the wrong URL shape."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    _, _, anchor = example["help"].partition("#/")
+    tag, _, operation_id = anchor.partition("/")
+
+    ids = {
+        op["operationId"]
+        for item in schema["paths"].values()
+        for op in item.values()
+        if tag in op.get("tags", [])
+    }
+    assert operation_id in ids, f"{anchor!r} names no operation tagged {tag!r}"
+
+
+def test_live_help_is_derived_from_the_request(client: TestClient) -> None:
+    """Runtime `help` comes from the incoming request, not `API_URL` — so it
+    stays correct behind a proxy or on any host."""
+    body = client.get(f"{API_PREFIX}/datastore_search?resource_id=x").json()
+
+    assert body["help"].startswith("http://testserver/")
+
+
 # 4. Swagger UI page ------------------------------------------------------------
 
+
 def test_docs_page_renders_swagger_ui(client: TestClient) -> None:
-    response = client.get("/datastore/api/docs")
+    response = client.get("/datastore/api/v2/docs")
 
     assert response.status_code == 200
     assert "SwaggerUIBundle" in response.text
-    assert "/datastore/api/openapi.json" in response.text
+    assert "/datastore/api/v2/openapi.json" in response.text
 
 
-def test_docs_page_widens_authorize_input(client: TestClient) -> None:
-    """The Authorize modal's token input is ~230px stock — too short to
-    see a pasted JWT/API key. The docs page injects CSS to widen it."""
-    response = client.get("/datastore/api/docs")
+def test_docs_page_serves_vendored_assets(client: TestClient) -> None:
+    """Swagger UI is vendored, not pulled from a CDN, so `/docs` renders
+    in air-gapped deployments."""
+    response = client.get("/datastore/api/v2/docs")
 
-    assert ".auth-container input" in response.text
+    assert "cdn.jsdelivr.net" not in response.text
+    assert "/datastore/api/v2/static/swagger-ui/swagger-ui-bundle.js" in response.text
+    assert "/datastore/api/v2/static/theme/theme.css" in response.text
+
+    for asset in (
+        "/datastore/api/v2/static/swagger-ui/swagger-ui.css",
+        "/datastore/api/v2/static/swagger-ui/swagger-ui-bundle.js",
+        "/datastore/api/v2/static/theme/theme.css",
+    ):
+        assert client.get(asset).status_code == 200, asset
+
+
+def test_docs_page_widens_authorize_input() -> None:
+    """The Authorize modal's token input is ~230px stock — too short to see
+    a pasted JWT/API key. The theme widens the modal and the input."""
+    css = (
+        Path(__file__).resolve().parent.parent / "datastore/api/static/theme/theme.css"
+    ).read_text()
+
+    assert "max-width: 900px" in css
+    assert ".swagger-ui .auth-container input" in css
+
+
+def test_docs_page_applies_theme_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`DOCS_*` env vars reach the page's CSS custom properties and header,
+    so a deployment rebrands without shipping CSS."""
+    monkeypatch.setenv("DOCS_PRIMARY_COLOR", "#7A3864")
+    monkeypatch.setenv("DOCS_HEADER_COLOR", "#123456")
+    monkeypatch.setenv("DOCS_SITE_TITLE", "Datastore API")
+    monkeypatch.setenv("DOCS_LOGO_URL", "/static/logo.png")
+    get_config.cache_clear()
+
+    try:
+        with TestClient(create_app()) as themed_client:
+            body = themed_client.get("/datastore/api/v2/docs").text
+    finally:
+        get_config.cache_clear()
+
+    assert "--docs-primary: #7A3864;" in body
+    assert "--docs-header-bg: #123456;" in body
+    assert "Datastore API" in body
+    assert '<img class="docs-logo" src="/static/logo.png"' in body
+
+
+def test_docs_page_brands_header_from_primary_color(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`DOCS_PRIMARY_COLOR` alone must brand the whole page.
+
+    With `DOCS_HEADER_COLOR` unset no `--docs-header-bg` is emitted, so the
+    stylesheet's `--docs-header-bg: var(--docs-primary)` fallback applies and
+    the header takes the brand colour. A non-empty default here would pin the
+    bar to a fixed grey and make branding look broken.
+    """
+    monkeypatch.setenv("DOCS_PRIMARY_COLOR", "#7A3864")
+    get_config.cache_clear()
+
+    try:
+        assert Config().DOCS_HEADER_COLOR == ""
+        with TestClient(create_app()) as themed_client:
+            body = themed_client.get("/datastore/api/v2/docs").text
+    finally:
+        get_config.cache_clear()
+
+    assert "--docs-primary: #7A3864;" in body
+    assert "--docs-header-bg" not in body
+
+
+def test_docs_page_rejects_non_css_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The colour lands inside a `<style>` block, so it is validated at
+    config load rather than injected as given."""
+    monkeypatch.setenv("DOCS_PRIMARY_COLOR", "red; } body { display: none")
+    get_config.cache_clear()
+
+    try:
+        with pytest.raises(ValidationError, match="is not a CSS colour"):
+            Config()
+    finally:
+        get_config.cache_clear()
+
+
+def test_docs_page_escapes_header_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The template is rendered with autoescaping on, so header text can't
+    break out of its element. `DOCS_SITE_TITLE` / `DOCS_LOGO_URL` are free
+    text (unlike the colours, which `Config` validates)."""
+    monkeypatch.setenv("DOCS_SITE_TITLE", "<script>alert(1)</script>")
+    monkeypatch.setenv("DOCS_LOGO_URL", '"><script>alert(2)</script>')
+    get_config.cache_clear()
+
+    try:
+        with TestClient(create_app()) as themed_client:
+            body = themed_client.get("/datastore/api/v2/docs").text
+    finally:
+        get_config.cache_clear()
+
+    assert "<script>alert(1)</script>" not in body
+    assert "<script>alert(2)</script>" not in body
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+
+
+def test_docs_page_falls_back_to_openapi_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no `DOCS_SITE_TITLE`, the header is never left unlabelled.
+
+    Pinned explicitly rather than relying on the ambient environment: `Config`
+    reads `.env`, so a developer who sets a title locally would otherwise see
+    this fail.
+    """
+    monkeypatch.setenv("DOCS_SITE_TITLE", "")
+    get_config.cache_clear()
+
+    try:
+        with TestClient(create_app()) as bare_client:
+            body = bare_client.get("/datastore/api/v2/docs").text
+    finally:
+        get_config.cache_clear()
+
+    assert '<h1 class="docs-header-title">Datastore API</h1>' in body

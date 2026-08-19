@@ -37,9 +37,7 @@ class _FakeCKAN:
         self.created.append(dict(resource))
         return {**resource, "id": resource.get("id") or "new-res-id"}
 
-    async def resource_patch(
-        self, *, resource_id: str, patch: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def resource_patch(self, *, resource_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         self.patched.append((resource_id, dict(patch)))
         return {"id": resource_id, **patch}
 

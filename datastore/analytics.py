@@ -13,7 +13,7 @@ Two pieces:
 ``AnalyticsMiddleware``
     Pure ASGI, so handled error responses are recorded with their status and
     an unhandled crash is recorded as a 500 before it propagates. Tracks
-    ``/api/3/action/*`` and ``/datastore/dump/*``; probes, docs and the
+    the versioned action namespace and ``<base>/dump/*``; probes, docs and the
     welcome page are excluded by definition.
 
 ``authorization_dict``
@@ -37,21 +37,30 @@ from urllib.parse import parse_qs
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from datastore.core.constants import API_BASE_PREFIX, API_PREFIX
+
 log = logging.getLogger(__name__)
 
-ACTION_PREFIX = "/api/3/action/"
-DUMP_PREFIX = "/datastore/dump/"
+ACTION_PREFIX = f"{API_PREFIX}/"
+DUMP_PREFIX = f"{API_BASE_PREFIX}/dump/"
+DUMP_QUERY_PATH = f"{API_BASE_PREFIX}/dump/query"
+
+# Served under the versioned prefix but not part of the API surface, so
+# they must not be recorded as action calls.
+DOCS_PATHS = frozenset({"docs", "redoc", "openapi.json", "static"})
 
 
 def action_name(path: str) -> str | None:
     """What to call the event for this path, or None if it is not tracked."""
-    if path.startswith(ACTION_PREFIX):
-        name = path[len(ACTION_PREFIX):].strip("/").split("/", 1)[0]
-        return name or None
-    if path == "/datastore/dump/query":
+    if path == DUMP_QUERY_PATH:
         return "datastore_dump_query"
     if path.startswith(DUMP_PREFIX):
         return "datastore_dump"
+    if path.startswith(ACTION_PREFIX):
+        name = path[len(ACTION_PREFIX):].strip("/").split("/", 1)[0]
+        if not name or name in DOCS_PATHS:
+            return None
+        return name
     return None
 
 

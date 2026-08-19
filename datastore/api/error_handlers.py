@@ -44,8 +44,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _api_error(request: Request, exc: APIError) -> ORJSONResponse:
         log.debug(
             "APIError: %s -> %d (%s) at %s %s",
-            type(exc).__name__, exc.status_code, exc.type_label,
-            request.method, request.url.path,
+            type(exc).__name__,
+            exc.status_code,
+            exc.type_label,
+            request.method,
+            request.url.path,
         )
         return _error_response(
             request,
@@ -63,7 +66,10 @@ def register_exception_handlers(app: FastAPI) -> None:
         message = f"{_format_loc(tuple(first.get('loc', ())))}: {first.get('msg')}"
         log.debug(
             "RequestValidationError at %s %s: %d field(s) failed; first=%s",
-            request.method, request.url.path, len(fields), message,
+            request.method,
+            request.url.path,
+            len(fields),
+            message,
         )
         return _error_response(
             request,
@@ -79,7 +85,11 @@ def register_exception_handlers(app: FastAPI) -> None:
         message = exc.detail if isinstance(exc.detail, str) else "request failed"
         log.debug(
             "HTTPException %d (%s) at %s %s: %s",
-            exc.status_code, label, request.method, request.url.path, message,
+            exc.status_code,
+            label,
+            request.method,
+            request.url.path,
+            message,
         )
         return _error_response(
             request,
@@ -91,7 +101,9 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> ORJSONResponse:
         log.exception(
-            "unhandled exception at %s %s", request.method, request.url.path,
+            "unhandled exception at %s %s",
+            request.method,
+            request.url.path,
             exc_info=exc,
         )
         return _error_response(

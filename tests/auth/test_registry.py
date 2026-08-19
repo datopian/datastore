@@ -29,7 +29,10 @@ def test_ckan_type_returns_ckan_provider_and_forwards_kwargs() -> None:
     cfg = Config(AUTH_TYPE="ckan", CKAN_URL="http://ckan.test")
     ckan = MagicMock()
     provider = get_auth_provider(
-        cfg, ckan=ckan, cache=InMemoryCache(), cache_ttl=60,
+        cfg,
+        ckan=ckan,
+        cache=InMemoryCache(),
+        cache_ttl=60,
     )
     assert isinstance(provider, CKANProvider)
     assert provider.name == "ckan"
@@ -65,8 +68,6 @@ def test_jwt_provider_raises_when_hs_secret_missing() -> None:
 
 
 def test_jwt_provider_raises_when_rs_public_key_missing() -> None:
-    cfg = Config(
-        AUTH_TYPE="jwt", JWT_ALGORITHM="RS256", JWT_PUBLIC_KEY="", CKAN_URL=""
-    )
+    cfg = Config(AUTH_TYPE="jwt", JWT_ALGORITHM="RS256", JWT_PUBLIC_KEY="", CKAN_URL="")
     with pytest.raises(ValueError, match="JWT_PUBLIC_KEY"):
         get_auth_provider(cfg)

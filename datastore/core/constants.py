@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from typing import Literal
 
-# Download formats served by the export pipeline (`/datastore/dump/…` and
+# Default for the `API_URL` setting — the public base URL used to render
+# absolute URLs in the OpenAPI examples. Deployments override it via env;
+# live responses derive their URLs from the incoming request, so neither the
+# default nor the setting affects runtime behaviour.
+DEFAULT_API_URL = "https://example.com"
+
+API_BASE_PREFIX = "/datastore/api"
+API_VERSION = "v2"
+API_PREFIX = f"{API_BASE_PREFIX}/{API_VERSION}"
+# Download formats served by the export pipeline (`<API_BASE_PREFIX>/dump/…` and
 # `datastore_search_sql?download=…`). Lives here — not in `api/` — because
 # both the request schemas (pydantic layer) and the endpoints (starlette
 # layer) need it, and `schemas/` must not import from `api/`.
@@ -134,19 +143,31 @@ FRICTIONLESS_TO_POSTGRES: dict[str, str] = {
 # (`duration`, `year`, `yearmonth`, …) are rejected at the request
 # boundary so storage layout stays predictable and engine type maps
 # don't need to grow ad-hoc.
-ALLOWED_FRICTIONLESS_TYPES: frozenset[str] = frozenset({
-    "integer", "number", "boolean", "string",
-    "date", "time", "datetime",
-    "object", "array",
-    "geojson", "geopoint",
-    "any",
-})
+ALLOWED_FRICTIONLESS_TYPES: frozenset[str] = frozenset(
+    {
+        "integer",
+        "number",
+        "boolean",
+        "string",
+        "date",
+        "time",
+        "datetime",
+        "object",
+        "array",
+        "geojson",
+        "geopoint",
+        "any",
+    }
+)
 
 
 # Field names reserved for engine-managed system columns. User schemas
 # that try to declare these must be rejected at the request boundary —
 # silently dropping them would leave the response advertising a column
 # the engine refuses to populate.
-RESERVED_SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset({
-    "_id", "_updated_at",
-})
+RESERVED_SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset(
+    {
+        "_id",
+        "_updated_at",
+    }
+)

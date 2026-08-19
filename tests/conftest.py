@@ -7,8 +7,10 @@ import os
 # fixtures can't intercept BigQuery vars in time. Clearing them here
 # keeps the suite hermetic against whatever happens to be in .env.
 for _name in (
-    "BIGQUERY_PROJECT", "BIGQUERY_DATASET",
-    "BIGQUERY_CREDENTIALS", "BIGQUERY_CREDENTIALS_RO",
+    "BIGQUERY_PROJECT",
+    "BIGQUERY_DATASET",
+    "BIGQUERY_CREDENTIALS",
+    "BIGQUERY_CREDENTIALS_RO",
     "BIGQUERY_EXPORT_BUCKET",
 ):
     os.environ[_name] = ""
@@ -63,14 +65,27 @@ def _isolate_bigquery_env(monkeypatch: pytest.MonkeyPatch) -> None:
     from datastore.infrastructure.engines.registry import reset_engine_cache
 
     for name in (
-        "BIGQUERY_PROJECT", "BIGQUERY_DATASET",
-        "BIGQUERY_CREDENTIALS", "BIGQUERY_CREDENTIALS_RO",
+        "BIGQUERY_PROJECT",
+        "BIGQUERY_DATASET",
+        "BIGQUERY_CREDENTIALS",
+        "BIGQUERY_CREDENTIALS_RO",
         "BIGQUERY_EXPORT_BUCKET",
     ):
         monkeypatch.setenv(name, "")
     # Pydantic-Settings can't parse "" as int — give the dump-URL TTL a
     # valid placeholder so a stray .env doesn't break startup in tests.
     monkeypatch.setenv("BIGQUERY_EXPORT_URL_EXPIRY_HOURS", "1")
+    for name in (
+        "DOCS_PRIMARY_COLOR",
+        "DOCS_HEADER_COLOR",
+        "DOCS_SITE_TITLE",
+        "DOCS_LOGO_URL",
+    ):
+        monkeypatch.setenv(name, "")
+    # `API_URL` sets the host in the published examples, so a developer .env
+    # pointing at a real deployment would break the tests that assert the
+    # placeholder default. Tests wanting a value set it themselves.
+    monkeypatch.setenv("API_URL", "https://example.com")
     # `Config` and engine instances are lru-cached / module-level
     # singletons; invalidate so the cleared env actually takes effect.
     get_config.cache_clear()
@@ -147,9 +162,7 @@ class FakeCKAN:
         self.resources[str(created["id"])] = created
         return created
 
-    async def resource_patch(
-        self, *, resource_id: str, patch: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def resource_patch(self, *, resource_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         self._guard()
         existing = self.resources.get(resource_id)
         if existing is None:
@@ -195,7 +208,9 @@ def client(fake_ckan: FakeCKAN, cache: InMemoryCache) -> Iterator[TestClient]:
     # Auth provider talks to the same FakeCKAN — tests don't go through
     # the real HTTP CKAN client. Mirrors what the lifespan would build.
     app.dependency_overrides[get_auth_provider] = lambda: CKANAuthProvider(
-        ckan=fake_ckan, cache=cache, cache_ttl=60,
+        ckan=fake_ckan,
+        cache=cache,
+        cache_ttl=60,
     )
     with TestClient(app) as c:
         c.headers["Authorization"] = "test-token"

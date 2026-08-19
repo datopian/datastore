@@ -1,6 +1,4 @@
-"""BigQuery `Client` construction.
-
-"""
+"""BigQuery `Client` construction."""
 
 from __future__ import annotations
 
@@ -20,9 +18,7 @@ def build_client(config: Config, mode: Mode) -> bigquery.Client:
 
     project = config.BIGQUERY_PROJECT.strip()
     if not project:
-        raise RuntimeError(
-            "BIGQUERY_PROJECT is required when DATASTORE_ENGINE=bigquery"
-        )
+        raise RuntimeError("BIGQUERY_PROJECT is required when DATASTORE_ENGINE=bigquery")
 
     creds = load_credentials(config, mode)
     if creds is None:
@@ -40,9 +36,7 @@ def load_credentials(config: Config, mode: Mode = "ro"):
     give read paths write privileges and defeat the credential split.
     """
     creds_raw = (
-        config.BIGQUERY_CREDENTIALS_RO
-        if mode == "ro"
-        else config.BIGQUERY_CREDENTIALS
+        config.BIGQUERY_CREDENTIALS_RO if mode == "ro" else config.BIGQUERY_CREDENTIALS
     ).strip()
     if not creds_raw:
         return None
@@ -53,7 +47,5 @@ def _credentials_from_raw(raw: str):
     from google.oauth2 import service_account
 
     if raw.startswith("{"):
-        return service_account.Credentials.from_service_account_info(
-            json.loads(raw)
-        )
+        return service_account.Credentials.from_service_account_info(json.loads(raw))
     return service_account.Credentials.from_service_account_file(raw)

@@ -19,21 +19,21 @@ from __future__ import annotations
 # arithmetically useful; `yearmonth` / `duration` stay STRING because
 # BigQuery has no native equivalent that round-trips losslessly.
 FRICTIONLESS_TO_BIGQUERY: dict[str, str] = {
-    "integer":   "INT64",
-    "number":    "FLOAT64",
-    "string":    "STRING",
-    "boolean":   "BOOL",
-    "date":      "DATE",
-    "time":      "TIME",
-    "datetime":  "TIMESTAMP",
-    "duration":  "STRING",
-    "object":    "JSON",
-    "array":     "JSON",
-    "geojson":   "JSON",
-    "geopoint":  "STRING",
-    "year":      "INT64",
+    "integer": "INT64",
+    "number": "FLOAT64",
+    "string": "STRING",
+    "boolean": "BOOL",
+    "date": "DATE",
+    "time": "TIME",
+    "datetime": "TIMESTAMP",
+    "duration": "STRING",
+    "object": "JSON",
+    "array": "JSON",
+    "geojson": "JSON",
+    "geopoint": "STRING",
+    "year": "INT64",
     "yearmonth": "STRING",
-    "any":       "STRING",
+    "any": "STRING",
 }
 
 _DEFAULT_BIGQUERY_TYPE = "STRING"
@@ -49,9 +49,7 @@ def bigquery_type(frictionless_type: str | None) -> str:
     """
     if not frictionless_type:
         return _DEFAULT_BIGQUERY_TYPE
-    return FRICTIONLESS_TO_BIGQUERY.get(
-        frictionless_type, _DEFAULT_BIGQUERY_TYPE
-    )
+    return FRICTIONLESS_TO_BIGQUERY.get(frictionless_type, _DEFAULT_BIGQUERY_TYPE)
 
 
 # BigQuery's `ALTER TABLE ... ALTER COLUMN ... SET DATA TYPE` only
@@ -64,9 +62,9 @@ def bigquery_type(frictionless_type: str | None) -> str:
 # types; DATE may widen to DATETIME/TIMESTAMP. No string/JSON/bool
 # transitions are supported.
 BIGQUERY_ALLOWED_TYPE_CHANGES: dict[str, set[str]] = {
-    "INT64":   {"NUMERIC", "BIGNUMERIC", "FLOAT64"},
+    "INT64": {"NUMERIC", "BIGNUMERIC", "FLOAT64"},
     "NUMERIC": {"BIGNUMERIC", "FLOAT64"},
-    "DATE":    {"DATETIME", "TIMESTAMP"},
+    "DATE": {"DATETIME", "TIMESTAMP"},
 }
 
 
@@ -86,21 +84,21 @@ def can_widen(old_bq_type: str, new_bq_type: str) -> bool:
 # it to clients as Frictionless types. Many-to-one collapses some BQ
 # precision distinctions (NUMERIC / BIGNUMERIC / FLOAT64 → number).
 BIGQUERY_TO_FRICTIONLESS: dict[str, str] = {
-    "INT64":      "integer",
-    "INTEGER":    "integer",
-    "FLOAT64":    "number",
-    "FLOAT":      "number",
-    "NUMERIC":    "number",
+    "INT64": "integer",
+    "INTEGER": "integer",
+    "FLOAT64": "number",
+    "FLOAT": "number",
+    "NUMERIC": "number",
     "BIGNUMERIC": "number",
-    "BOOL":       "boolean",
-    "BOOLEAN":    "boolean",
-    "STRING":     "string",
-    "BYTES":      "string",
-    "DATE":       "date",
-    "TIME":       "time",
-    "DATETIME":   "datetime",
-    "TIMESTAMP":  "datetime",
-    "JSON":       "object",
+    "BOOL": "boolean",
+    "BOOLEAN": "boolean",
+    "STRING": "string",
+    "BYTES": "string",
+    "DATE": "date",
+    "TIME": "time",
+    "DATETIME": "datetime",
+    "TIMESTAMP": "datetime",
+    "JSON": "object",
 }
 
 

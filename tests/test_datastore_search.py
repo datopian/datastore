@@ -1,4 +1,4 @@
-"""End-to-end tests for `GET /api/3/action/datastore_search`.
+"""End-to-end tests for `GET /datastore/api/v2/datastore_search`.
 
 `datastore_search` is GET with query parameters. Complex types are
 encoded:
@@ -37,7 +37,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
 
-SEARCH_URL = "/api/3/action/datastore_search"
+SEARCH_URL = "/datastore/api/v2/datastore_search"
 
 _RESOURCE_ID = "balancing_auction_results_2025"
 
@@ -246,7 +246,8 @@ def test_denied_key_returns_403(client: TestClient, fake_ckan: FakeCKAN) -> None
 
 
 def test_anonymous_read_calls_ckan_and_succeeds(
-    client: TestClient, fake_ckan: FakeCKAN,
+    client: TestClient,
+    fake_ckan: FakeCKAN,
 ) -> None:
     """No Authorization header on a read → we still call CKAN's
     `datastore_authorize`. CKAN itself decides based on resource
@@ -392,9 +393,7 @@ def _install_mock_search(
     return consumed
 
 
-def test_objects_format_streams_rows(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_objects_format_streams_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     consumed = _install_mock_search(monkeypatch)
 
     response = client.get(SEARCH_URL, params=_params())
@@ -427,9 +426,7 @@ def test_lists_format_streams_positional_arrays(
     ]
 
 
-def test_csv_format_streams_data_rows(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_csv_format_streams_data_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """`records_format=csv` — JSON envelope, `records` is one CSV string of
     data rows only. Column names live on `result.fields` (no header in the
     records string)."""
@@ -440,14 +437,10 @@ def test_csv_format_streams_data_rows(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
-    assert body["result"]["records"] == (
-        "144,DCL,47.82\n" "145,DCH,51.1\n" "146,FFR,32.4\n"
-    )
+    assert body["result"]["records"] == ("144,DCL,47.82\n145,DCH,51.1\n146,FFR,32.4\n")
 
 
-def test_tsv_format_streams_data_rows(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_tsv_format_streams_data_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """`records_format=tsv` — JSON envelope, `records` is one TSV string of
     data rows only."""
     _install_mock_search(monkeypatch)
@@ -457,9 +450,7 @@ def test_tsv_format_streams_data_rows(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
-    assert body["result"]["records"] == (
-        "144\tDCL\t47.82\n" "145\tDCH\t51.1\n" "146\tFFR\t32.4\n"
-    )
+    assert body["result"]["records"] == ("144\tDCL\t47.82\n145\tDCH\t51.1\n146\tFFR\t32.4\n")
 
 
 def test_csv_quotes_values_with_special_chars(
@@ -489,9 +480,7 @@ def test_csv_quotes_values_with_special_chars(
     assert response.status_code == 200
     body = response.json()
     assert body["result"]["records"] == (
-        "plain,ordinary value\n"
-        '"with,comma","with""quote"\n'
-        '"with\nnewline",tab\there\n'
+        'plain,ordinary value\n"with,comma","with""quote"\n"with\nnewline",tab\there\n'
     )
 
 
@@ -505,7 +494,7 @@ def test_search_objects_response_includes_links(client: TestClient) -> None:
     assert response.status_code == 200
     links = response.json()["result"]["_links"]
     assert set(links) == {"start", "page_size", "page", "total_pages"}
-    assert links["start"].startswith("http://testserver/api/3/action/datastore_search")
+    assert links["start"].startswith("http://testserver/datastore/api/v2/datastore_search")
     assert "offset" not in links["start"]
     assert f"resource_id={_RESOURCE_ID}" in links["start"]
     assert links["page_size"] == 100  # default limit

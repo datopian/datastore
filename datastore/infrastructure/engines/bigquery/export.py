@@ -1,4 +1,4 @@
-"""BigQuery download pipeline — `/datastore/dump/{rid}` + `/datastore/dump/query`.
+"""BigQuery download pipeline — `<API_BASE_PREFIX>/dump/{rid}` + `<API_BASE_PREFIX>/dump/query`.
 
 Read top-down: entry points, then the workflow they share, then the
 helpers each step uses.
@@ -109,16 +109,9 @@ async def dump(backend: Any, resource_id: str, fmt: str) -> list[str]:
     # No `modified` → no stable version to key on, so the cache can't be
     # read and every request exports.
     cacheable = table.modified is not None
-    rev = (
-        f"{int(table.modified.timestamp() * 1_000_000):x}"
-        if cacheable
-        else uuid4().hex[:12]
-    )
+    rev = f"{int(table.modified.timestamp() * 1_000_000):x}" if cacheable else uuid4().hex[:12]
     prefix = f"{_EXPORT_ROOT}/{resource_id}/{fmt}/{rev}/"
-    source = (
-        f"`{backend.config.BIGQUERY_PROJECT}"
-        f".{backend.config.BIGQUERY_DATASET}.{resource_id}`"
-    )
+    source = f"`{backend.config.BIGQUERY_PROJECT}.{backend.config.BIGQUERY_DATASET}.{resource_id}`"
 
     async def build_export_sql(uri: str) -> tuple[str, bytes | None]:
         # Schema is already known from get_table — no dry run needed.
@@ -129,11 +122,7 @@ async def dump(backend: Any, resource_id: str, fmt: str) -> list[str]:
             source=source,
             suffix=" ORDER BY `_id`",
         )
-        header = (
-            _csv_header_bytes(table.schema, fmt)
-            if fmt in ("csv", "gzip")
-            else None
-        )
+        header = _csv_header_bytes(table.schema, fmt) if fmt in ("csv", "gzip") else None
         return sql, header
 
     return await _prepare_download(
@@ -193,12 +182,8 @@ async def dump_sql(
         t.modified is not None for t in tables.values()
     )
     if cacheable:
-        pairs = sorted(
-            (rid, int(t.modified.timestamp() * 1_000_000)) for rid, t in tables.items()
-        )
-        rev = hashlib.sha256(
-            "|".join(f"{rid}:{us}" for rid, us in pairs).encode()
-        ).hexdigest()[:16]
+        pairs = sorted((rid, int(t.modified.timestamp() * 1_000_000)) for rid, t in tables.items())
+        rev = hashlib.sha256("|".join(f"{rid}:{us}" for rid, us in pairs).encode()).hexdigest()[:16]
     else:
         rev = uuid4().hex[:12]
 
@@ -224,11 +209,7 @@ async def dump_sql(
             source=f"({qualified_sql})",
             suffix=_outer_order_by(qualified_sql, dry_job.schema),
         )
-        header = (
-            _csv_header_bytes(dry_job.schema, fmt)
-            if fmt in ("csv", "gzip")
-            else None
-        )
+        header = _csv_header_bytes(dry_job.schema, fmt) if fmt in ("csv", "gzip") else None
         return export_sql, header
 
     return await _prepare_download(
@@ -292,19 +273,13 @@ async def _prepare_download(
         log.info("BigQuery export cache MISS: %s attempt=%s", what, attempt)
         blobs = await _list_files_sorted(rw_gcs, attempt)
         if not blobs:
-            raise ServerError(
-                f"BigQuery EXPORT DATA wrote no shards for {what}; " "check job logs."
-            )
+            raise ServerError(f"BigQuery EXPORT DATA wrote no shards for {what}; check job logs.")
 
-        blobs = await _compose_single_file(
-            backend, rw_gcs, attempt, fmt, blobs, header_bytes
-        )
+        blobs = await _compose_single_file(backend, rw_gcs, attempt, fmt, blobs, header_bytes)
 
         # Publishes the attempt. Written after the compose, so it can
         # never be a compose source.
-        await asyncio.to_thread(
-            rw_gcs.blob(f"{attempt}{_SUCCESS}").upload_from_string, b""
-        )
+        await asyncio.to_thread(rw_gcs.blob(f"{attempt}{_SUCCESS}").upload_from_string, b"")
 
         def gc() -> None:
             removed = _delete_old_cache(
@@ -691,16 +666,11 @@ async def _get_table(backend: Any, resource_id: str) -> Any:
     from google.cloud import bigquery
 
     table_ref = bigquery.TableReference.from_string(
-        f"{backend.config.BIGQUERY_PROJECT}"
-        f".{backend.config.BIGQUERY_DATASET}.{resource_id}"
+        f"{backend.config.BIGQUERY_PROJECT}.{backend.config.BIGQUERY_DATASET}.{resource_id}"
     )
     try:
         return await asyncio.to_thread(backend.client.get_table, table_ref)
     except NotFound as e:
-        raise NotFoundError(
-            f"resource {resource_id!r} is not declared; nothing to dump"
-        ) from e
+        raise NotFoundError(f"resource {resource_id!r} is not declared; nothing to dump") from e
     except Exception as e:
-        raise ServerError(
-            f"BigQuery get_table failed for resource {resource_id!r}: {e}"
-        ) from e
+        raise ServerError(f"BigQuery get_table failed for resource {resource_id!r}: {e}") from e

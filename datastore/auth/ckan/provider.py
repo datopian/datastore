@@ -55,7 +55,9 @@ class CKANAuthProvider:
                 decision = _decision_from_bytes(cached)
                 log.debug(
                     "ckan auth cache HIT  scope=%s target=%s perm=%s",
-                    scope, target, permission,
+                    scope,
+                    target,
+                    permission,
                 )
                 return decision
             except (AuthorizationError, ValueError, TypeError) as e:
@@ -65,12 +67,16 @@ class CKANAuthProvider:
                 log.warning(
                     "ckan auth cache entry malformed for scope=%s target=%s: "
                     "%s — falling back to CKAN",
-                    scope, target, e,
+                    scope,
+                    target,
+                    e,
                 )
 
         log.debug(
             "ckan auth cache MISS scope=%s target=%s perm=%s -> CKAN",
-            scope, target, permission,
+            scope,
+            target,
+            permission,
         )
         ckan = self._ckan.bind(credential)
         result = await ckan.datastore_authorize(
@@ -85,7 +91,10 @@ class CKANAuthProvider:
             package=result.get("package"),
         )
         await _safe_set(
-            self._cache, cache_key, _decision_to_bytes(decision), self._cache_ttl,
+            self._cache,
+            cache_key,
+            _decision_to_bytes(decision),
+            self._cache_ttl,
         )
         return decision
 
@@ -125,8 +134,7 @@ async def _safe_set(cache: CachePort, key: str, value: bytes, ttl: int) -> None:
 
 def _decision_to_bytes(d: Decision) -> bytes:
     return orjson.dumps(
-        {"subject": d.subject, "claims": d.claims,
-         "resource": d.resource, "package": d.package},
+        {"subject": d.subject, "claims": d.claims, "resource": d.resource, "package": d.package},
     )
 
 

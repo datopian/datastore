@@ -15,6 +15,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from datastore.core.constants import API_PREFIX
 from datastore.schemas.validators import FieldSpec
 
 
@@ -26,13 +27,16 @@ class ResponseModel(BaseModel):
 
 
 class ErrorEnvelope(BaseModel):
-    """CKAN-shaped error body returned for every 4xx / 5xx response."""
+    """Error body returned for every 4xx / 5xx response."""
 
     model_config = ConfigDict(
         populate_by_name=True,
         json_schema_extra={
             "example": {
-                "help": "https://example.com/api/3/action/datastore_search",
+                # Relative: the public host comes from `API_URL`, which only
+                # `api/docs.py` can read (`schemas/` must not import config).
+                # That module rewrites this into an absolute URL at app build.
+                "help": f"{API_PREFIX}/docs#/Datastore/datastore_search",
                 "success": False,
                 "error": {
                     "__type": "Validation Error",
@@ -59,15 +63,6 @@ class ErrorEnvelope(BaseModel):
 
 
 # --- health -----------------------------------------------------------------
-
-
-class WelcomeResponse(ResponseModel):
-    """Response for `GET /`."""
-
-    class Result(BaseModel):
-        message: str
-
-    result: Result
 
 
 class StatusResponse(ResponseModel):
@@ -142,8 +137,7 @@ class DatastoreDeleteResponse(ResponseModel):
 
 
 class DatastoreSearchResponse(ResponseModel):
-    """Response for `GET /api/3/datastore_search` 
-    """
+    """Response for `GET /api/3/datastore_search`"""
 
     class Result(BaseModel):
         # `_links` starts with an underscore, which pydantic treats as a

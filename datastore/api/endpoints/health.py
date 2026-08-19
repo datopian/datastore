@@ -6,30 +6,15 @@ from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from datastore.api.responses import _success_response
+from datastore.api.responses import _help, _success_response
 from datastore.core.config import get_config
 from datastore.infrastructure.engines.registry import get_datastore_engine
-from datastore.schemas.responses import StatusResponse, WelcomeResponse
-
-welcome_router = APIRouter(tags=["Health"])
-
+from datastore.schemas.responses import StatusResponse
 
 probe_router = APIRouter(tags=["Health"])
 
 
-@welcome_router.get(
-    "/", response_model=WelcomeResponse, summary="Service welcome message"
-)
-def welcome(request: Request):
-    return _success_response(
-        request,
-        WelcomeResponse.Result(message=get_config().APP_MESSAGE),
-    )
-
-
-@probe_router.get(
-    "/health", response_model=StatusResponse, summary="Liveness probe"
-)
+@probe_router.get("/health", response_model=StatusResponse, summary="Liveness probe")
 def health(request: Request):
     """Liveness — always 200 while the process is up."""
     return _success_response(request, StatusResponse.Result(status="ok"))
@@ -60,7 +45,7 @@ def ready(request: Request):
         return JSONResponse(
             status_code=503,
             content={
-                "help": str(request.url),
+                "help": _help(request),
                 "success": False,
                 "result": {"status": "not_ready"},
             },

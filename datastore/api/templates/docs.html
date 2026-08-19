@@ -1,0 +1,117 @@
+{#- The themed Swagger UI page.
+
+  Ported from ckanext-openapidocs so this service's docs and the CKAN portal's
+  read as one family: same vendored Swagger UI, same stylesheet, same branded
+  header in place of Swagger's own topbar.
+
+  Autoescaping covers the HTML contexts. It does NOT make the `<style>` and
+  `<script>` blocks safe — escaping is HTML-context-aware only — so the colours
+  are validated as CSS colours by `Config` and the URLs are emitted through
+  `tojson`, which is JS-safe.
+-#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }}</title>
+  <link rel="stylesheet" href="{{ static_url }}/swagger-ui/swagger-ui.css">
+  <link rel="stylesheet" href="{{ static_url }}/theme/theme.css">
+  {%- if primary_color or header_color %}
+  {# The stylesheet derives its accents from these properties. Both values are
+     validated as CSS colours before reaching here. #}
+  <style>
+    :root {
+      {%- if primary_color %} --docs-primary: {{ primary_color }};{% endif %}
+      {%- if header_color %} --docs-header-bg: {{ header_color }};{% endif %}
+    }
+  </style>
+  {%- endif %}
+</head>
+<body>
+  <header class="docs-header">
+    <div class="docs-header-inner">
+      {%- if logo_url %}
+      <img class="docs-logo" src="{{ logo_url }}" alt="">
+      {%- endif %}
+      <div class="docs-header-text">
+        <h1 class="docs-header-title">{{ site_title }}</h1>
+        {%- if api_version %}
+        <span class="docs-header-version">{{ api_version }}</span>
+        {%- endif %}
+      </div>
+      <a class="docs-header-link" href="{{ spec_url }}">OpenAPI spec</a>
+    </div>
+  </header>
+
+  <div id="swagger-ui"></div>
+
+  <script src="{{ static_url }}/swagger-ui/swagger-ui-bundle.js"></script>
+  <script>
+    window.ui = SwaggerUIBundle({
+      url: {{ spec_url | tojson }},
+      dom_id: "#swagger-ui",
+      deepLinking: true,
+      docExpansion: "none",
+      defaultModelsExpandDepth: -1,
+      defaultModelRendering: "example",
+      persistAuthorization: true,
+      tryItOutEnabled: true,
+      syntaxHighlight: { theme: "nord" }
+    });
+
+    // Swagger UI renders the token field as a single-line <input>. An API key
+    // or JWT is long enough that reading it means scrolling sideways one line
+    // at a time, so each one is replaced with a wrapping <textarea>.
+    //
+    // Swagger UI is React, so assigning `.value` on the replacement is not
+    // enough: React tracks the previous value on the DOM node and would treat
+    // the assignment as a no-op. Writing through the native setter and then
+    // dispatching `input` is what makes React observe the change, so
+    // Authorize still receives what was typed or pasted.
+    (function swapTokenInputs() {
+      var nativeValue = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, "value"
+      ).set;
+
+      function swap(input) {
+        var area = document.createElement("textarea");
+        area.className = "docs-token-input";
+        area.rows = 3;
+        area.spellcheck = false;
+        area.autocapitalize = "off";
+        area.autocomplete = "off";
+        area.value = input.value;
+        if (input.placeholder) area.placeholder = input.placeholder;
+        if (input.id) area.id = input.id;
+        // Swagger UI's own label targets the input by id; keep it associated.
+        input.removeAttribute("id");
+
+        // Mirror edits back onto the hidden input so React's handler runs.
+        area.addEventListener("input", function () {
+          nativeValue.call(input, area.value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        // Enter would otherwise insert a newline into a token that has none.
+        area.addEventListener("keydown", function (event) {
+          if (event.key === "Enter") event.preventDefault();
+        });
+
+        input.style.display = "none";
+        input.parentNode.insertBefore(area, input.nextSibling);
+        input.dataset.docsSwapped = "1";
+      }
+
+      // The dialog is mounted on demand and re-mounted each time it opens, so
+      // this watches for it rather than running once.
+      new MutationObserver(function () {
+        var inputs = document.querySelectorAll(
+          ".auth-container input[type=text]:not([data-docs-swapped]), " +
+          ".auth-container input[type=password]:not([data-docs-swapped])"
+        );
+        for (var i = 0; i < inputs.length; i++) swap(inputs[i]);
+      }).observe(document.body, { childList: true, subtree: true });
+    })();
+  </script>
+</body>
+</html>

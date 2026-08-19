@@ -37,12 +37,14 @@ def _provider(**overrides: Any) -> JWTAuthProvider:
 
 
 def _authorize(provider: JWTAuthProvider, token: str | None):
-    return asyncio.run(provider.authorize(
-        credential=token,
-        resource_id="r",
-        package_id=None,
-        permission="read",
-    ))
+    return asyncio.run(
+        provider.authorize(
+            credential=token,
+            resource_id="r",
+            package_id=None,
+            permission="read",
+        )
+    )
 
 
 def test_valid_token_returns_decision_with_subject_and_claims() -> None:
@@ -79,9 +81,7 @@ def test_audience_mismatch_raises_authorization_error() -> None:
 
 def test_audience_match_passes() -> None:
     provider = _provider(JWT_AUDIENCE="expected-aud")
-    token = jwt.encode(
-        {"sub": "u", "aud": "expected-aud"}, SECRET, algorithm="HS256"
-    )
+    token = jwt.encode({"sub": "u", "aud": "expected-aud"}, SECRET, algorithm="HS256")
     decision = _authorize(provider, token)
     assert decision.subject == "u"
 
