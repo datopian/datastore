@@ -11,6 +11,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from datastore.api.docs import (
     OPENAPI_TAGS,
+    absolutize_example_urls,
     api_description,
     operation_id,
     register_swagger_docs,
@@ -111,6 +112,7 @@ def create_app() -> FastAPI:
     register_swagger_docs(app, docs_url=f"{API_PREFIX}/docs", config=config)
     strip_default_422(app)
     tailor_auth_scheme(app, config.AUTH_TYPE)
+    absolutize_example_urls(app, config.API_URL)
     return app
 
 

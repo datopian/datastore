@@ -72,6 +72,10 @@ def _isolate_bigquery_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "DOCS_SITE_TITLE", "DOCS_LOGO_URL",
     ):
         monkeypatch.setenv(name, "")
+    # `API_URL` sets the host in the published examples, so a developer .env
+    # pointing at a real deployment would break the tests that assert the
+    # placeholder default. Tests wanting a value set it themselves.
+    monkeypatch.setenv("API_URL", "https://example.com")
     # `Config` and engine instances are lru-cached / module-level
     # singletons; invalidate so the cleared env actually takes effect.
     get_config.cache_clear()

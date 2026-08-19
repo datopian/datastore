@@ -15,7 +15,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from datastore.core.constants import API_PREFIX, API_URL
+from datastore.core.constants import API_PREFIX
 from datastore.schemas.validators import FieldSpec
 
 
@@ -33,10 +33,10 @@ class ErrorEnvelope(BaseModel):
         populate_by_name=True,
         json_schema_extra={
             "example": {
-                "help": (
-                    f"{API_URL}{API_PREFIX}"
-                    "/docs#/Datastore/datastore_search"
-                ),
+                # Relative: the public host comes from `API_URL`, which only
+                # `api/docs.py` can read (`schemas/` must not import config).
+                # That module rewrites this into an absolute URL at app build.
+                "help": f"{API_PREFIX}/docs#/Datastore/datastore_search",
                 "success": False,
                 "error": {
                     "__type": "Validation Error",

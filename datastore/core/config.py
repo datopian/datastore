@@ -8,6 +8,8 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from datastore.core.constants import DEFAULT_API_URL
+
 _ENGINES_DIR = (
     Path(__file__).resolve().parent.parent / "infrastructure" / "engines"
 )
@@ -62,6 +64,23 @@ class Config(BaseSettings):
     )
 
     # CORS
+    # Public base URL of this service. Used only to render absolute URLs in
+    # the OpenAPI examples — live responses derive their URLs from the
+    # incoming request, so this never affects runtime behaviour.
+    API_URL: str = Field(
+        default=DEFAULT_API_URL,
+        description=(
+            "Public base URL of this service (e.g. `https://data.example.org`), "
+            "used to render absolute URLs in the OpenAPI examples. Trailing "
+            "slashes are trimmed."
+        ),
+    )
+
+    @field_validator("API_URL")
+    @classmethod
+    def _strip_trailing_slash(cls, v: str) -> str:
+        return v.strip().rstrip("/")
+
     CORS_ORIGINS: str = Field(
         default="*",
         description=(

@@ -33,6 +33,7 @@ Copy [.env.example](.env.example) and fill it in. The essentials:
 | `BIGQUERY_PROJECT` / `BIGQUERY_DATASET` | — | Required when `DATASTORE_ENGINE=bigquery` |
 | `BIGQUERY_EXPORT_BUCKET` | — | GCS bucket for downloads (`/datastore/api/dump/{resource_id}`, `/datastore/api/dump/query`) |
 | `REDIS_URL` | — | Cache backend; empty → in-process cache |
+| `API_URL` | `https://example.com` | Public base URL; sets the host in the OpenAPI examples |
 | `DOCS_PRIMARY_COLOR` / `DOCS_HEADER_COLOR` | — | Swagger UI branding (see [Documentation](#documentation)) |
 | `DOCS_SITE_TITLE` / `DOCS_LOGO_URL` | — | Docs page header title and logo |
 

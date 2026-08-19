@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-# Public base URL, used to render absolute URLs in the OpenAPI examples.
-# Live responses derive their URLs from the incoming request, so this only
-# affects documentation. A constant rather than config because `schemas/`
-# builds example URLs from it and may not import config.
-API_URL = "https://example.com"
+# Default for the `API_URL` setting — the public base URL used to render
+# absolute URLs in the OpenAPI examples. Deployments override it via env;
+# live responses derive their URLs from the incoming request, so neither the
+# default nor the setting affects runtime behaviour.
+DEFAULT_API_URL = "https://example.com"
 
 API_BASE_PREFIX = "/datastore/api"
 API_VERSION = "v2"

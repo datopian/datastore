@@ -85,6 +85,36 @@ def help_url(request: Request, route_name: str | None) -> str:
     return f"{base}#/{tag}/{route_name}" if tag else base
 
 
+def absolutize_example_urls(app: FastAPI, api_url: str) -> None:
+    """Prefix the `ErrorEnvelope` example's `help` with the public host.
+
+    `schemas/` declares that example with a relative path, since it may not
+    read config. This fills in the host from `API_URL` so the published
+    example shows a complete URL — a reader copying it should see the shape a
+    real response has.
+
+    Documentation only: live `help` values are built from the incoming
+    request, so they follow whatever host actually served it.
+    """
+    default_openapi = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        schema = default_openapi()
+        example = (
+            schema.get("components", {})
+            .get("schemas", {})
+            .get("ErrorEnvelope", {})
+            .get("example")
+        )
+        if isinstance(example, dict):
+            help_path = example.get("help", "")
+            if help_path.startswith("/"):
+                example["help"] = f"{api_url}{help_path}"
+        return schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
+
+
 def register_swagger_docs(app: FastAPI, docs_url: str, config: Config) -> None:
     """Mount the vendored assets and serve the themed Swagger UI page.
 

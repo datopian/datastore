@@ -17,7 +17,7 @@ import pytest
 from datastore.api import docs as docs_module
 from datastore.api.docs import api_description
 from datastore.core.config import Config, get_config
-from datastore.core.constants import API_PREFIX, API_URL, API_VERSION
+from datastore.core.constants import API_PREFIX, API_VERSION, DEFAULT_API_URL
 from datastore.main import create_app
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -261,8 +261,55 @@ def test_error_example_url_matches_the_route_prefix(client: TestClient) -> None:
     example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
 
     assert example["help"] == (
-        f"{API_URL}{API_PREFIX}/docs#/Datastore/datastore_search"
+        f"{DEFAULT_API_URL}{API_PREFIX}/docs#/Datastore/datastore_search"
     )
+
+
+def test_api_url_sets_the_example_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`API_URL` from the environment becomes the example's host, so a
+    deployed service's docs don't advertise `example.com`."""
+    monkeypatch.setenv("API_URL", "https://data.example.org")
+    get_config.cache_clear()
+
+    try:
+        with TestClient(create_app()) as configured:
+            schema = configured.get(f"{API_PREFIX}/openapi.json").json()
+    finally:
+        get_config.cache_clear()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    assert example["help"] == (
+        f"https://data.example.org{API_PREFIX}/docs#/Datastore/datastore_search"
+    )
+
+
+def test_api_url_trailing_slash_does_not_double_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trailing slash in config must not yield `host//path`."""
+    monkeypatch.setenv("API_URL", "https://data.example.org/")
+    get_config.cache_clear()
+
+    try:
+        with TestClient(create_app()) as configured:
+            schema = configured.get(f"{API_PREFIX}/openapi.json").json()
+    finally:
+        get_config.cache_clear()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    assert "//datastore" not in example["help"]
+
+
+def test_example_help_is_absolute(client: TestClient) -> None:
+    """The published example must be a full URL, not the relative path
+    `schemas/` declares — a reader copying it should see a real response's
+    shape."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    assert example["help"].startswith("https://")
 
 
 def test_error_example_anchor_names_a_real_operation(client: TestClient) -> None:
