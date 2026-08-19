@@ -84,11 +84,9 @@ class CKANAuthProvider:
             package_id=package_id,
             permission=permission,
         )
-        # `subject` rides through the cache (orjson-serialised). Never
-        # store the raw credential there — use the same hash we already
-        # derive for the cache key.
+
         decision = Decision(
-            subject=self.key_id(credential) if credential else None,
+            subject=result.get("user"),
             resource=result.get("resource"),
             package=result.get("package"),
         )

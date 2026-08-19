@@ -48,7 +48,7 @@ class FakeProvider:
 # --- happy path -------------------------------------------------------------
 
 
-def test_provider_decision_is_returned_as_endpoint_data_dict_shape() -> None:
+def test_provider_verdict_is_returned_as_endpoint_data_dict() -> None:
     provider = FakeProvider()
     result = asyncio.run(
         authorize(
@@ -60,7 +60,11 @@ def test_provider_decision_is_returned_as_endpoint_data_dict_shape() -> None:
         )
     )
 
-    assert result == {"resource": {"id": "res-1"}, "package": {"id": "pkg-1"}}
+    assert result == {
+        "user": None,
+        "resource": {"id": "res-1"},
+        "package": {"id": "pkg-1"},
+    }
     assert provider.calls == [
         {
             "credential": "tok",
@@ -71,8 +75,8 @@ def test_provider_decision_is_returned_as_endpoint_data_dict_shape() -> None:
     ]
 
 
-def test_decision_without_metadata_yields_empty_dicts() -> None:
-    # Anonymous / JWT providers return Decision() with no resource/package;
+def test_verdict_without_metadata_yields_empty_dicts() -> None:
+    # Anonymous / JWT providers answer with no user/resource/package;
     # endpoint code reads from the dict so we must substitute empty dicts.
     result = asyncio.run(
         authorize(
@@ -83,7 +87,7 @@ def test_decision_without_metadata_yields_empty_dicts() -> None:
             permission="read",
         )
     )
-    assert result == {"resource": {}, "package": {}}
+    assert result == {"user": None, "resource": {}, "package": {}}
 
 
 # --- anonymous-read policy --------------------------------------------------
