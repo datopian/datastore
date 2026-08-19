@@ -32,7 +32,7 @@ class ErrorEnvelope(BaseModel):
         populate_by_name=True,
         json_schema_extra={
             "example": {
-                "help": "https://example.com/datastore/api/v2/datastore_search",
+                "help": "https://example.com/datastore/api/v2/docs#/Datastore/datastore_search",
                 "success": False,
                 "error": {
                     "__type": "Validation Error",

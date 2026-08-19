@@ -12,6 +12,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from datastore.api.docs import (
     OPENAPI_TAGS,
     api_description,
+    operation_id,
     register_swagger_docs,
     strip_default_422,
     tailor_auth_scheme,
@@ -86,6 +87,7 @@ def create_app() -> FastAPI:
         openapi_url=f"{API_PREFIX}/openapi.json",
         lifespan=lifespan,
         default_response_class=ORJSONResponse,
+        generate_unique_id_function=operation_id,
     )
 
     app.add_middleware(GZipMiddleware, minimum_size=1024)

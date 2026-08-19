@@ -72,7 +72,7 @@ def download_response(
 
 @router.get(
     "/dump/query",
-    summary="Download the result of a SQL SELECT (CSV / gzip CSV / NDJSON / Parquet)",
+    summary="Download the result of a SQL SELECT",
     responses={
         302: {"description": "Redirect to the signed download URL."},
         200: {
@@ -107,7 +107,7 @@ async def dump_sql(
 
 @router.get(
     "/dump/{resource_id}",
-    summary="Download an entire table (CSV / gzip CSV / NDJSON / Parquet)",
+    summary="Download an entire table",
     responses={
         302: {"description": "Redirect to the signed Download URL."},
         200: {

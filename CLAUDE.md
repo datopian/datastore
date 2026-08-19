@@ -262,7 +262,7 @@ adapter will live at `infrastructure/engines/ducklake/` when it lands.
 | `datastore/api/endpoints/` | Route declarations, request parsing, response building | SQL, engine calls, validation rules — delegate to services |
 | `datastore/api/context.py` | `RequestContext`, `ContextDep`, `get_context`, `get_auth_provider`, `get_ckan_client` (per-request DI bundle) | The logic those handles invoke — that lives in `services/` / `auth/` / `infrastructure/` |
 | `datastore/api/auth.py` | Provider-agnostic boundary policy (permission whitelist, anonymous-read rule, resource_id XOR package_id) | Concrete provider behaviour — CKAN/JWT/anonymous logic lives in `datastore/auth/<name>/` |
-| `datastore/api/responses.py` | CKAN envelope helpers, `ORJSONResponse` | Anything that needs DB access |
+| `datastore/api/responses.py` | Envelope helpers, `ORJSONResponse`. `_help` deep-links into Swagger via `api/docs.py`'s `help_url` | Anything that needs DB access |
 | `datastore/api/error_handlers.py` | Exception → CKAN error envelope mapping | Business rules — raise `APIError` from wherever the rule lives |
 | `datastore/api/static/` | Vendored front-end assets served at `/datastore/api/static` — Swagger UI dist + `theme/theme.css` | Anything generated at runtime; anything Python imports |
 | `datastore/api/templates/` | Jinja templates for HTML pages (`docs.html`) | Anything returning JSON — those go through `api/responses.py` |

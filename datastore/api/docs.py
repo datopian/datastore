@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -42,6 +43,48 @@ _STATIC_MOUNT = f"{API_PREFIX}/static"
 _TEMPLATES = Jinja2Templates(directory=Path(__file__).resolve().parent / "templates")
 
 
+# Route name -> its OpenAPI tag, for building Swagger deep links. Populated
+# from the app's own routes at startup rather than hardcoded, so it can't
+# drift as endpoints are added or retagged.
+_ROUTE_TAGS: dict[str, str] = {}
+
+
+def _index_route_tags(app: FastAPI) -> None:
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.tags:
+            _ROUTE_TAGS[route.name] = str(route.tags[0])
+
+
+def operation_id(route: APIRoute) -> str:
+    """Use the endpoint function's own name as the OpenAPI `operationId`.
+
+    FastAPI otherwise derives it from name + path + method
+    (`datastore_search_datastore_api_v2_datastore_search_get`), which makes
+    both the Swagger deep-link anchor and generated client method names
+    unreadable. The handler names are already the action names, so they are
+    the natural ids — and deriving them means a new route can't forget one.
+    """
+    return route.name
+
+
+def help_url(request: Request, route_name: str | None) -> str:
+    """Swagger deep link for the operation that served this request.
+
+    The CKAN-style envelope carries a `help` field on every response. Echoing
+    the request URL back tells the caller nothing they didn't just type, so it
+    points at that endpoint's entry in the docs instead. Swagger UI anchors
+    operations as `#/<tag>/<operationId>`.
+
+    Falls back to the request URL when the route can't be identified — an
+    unrouted 404 has no operation to link to.
+    """
+    if not route_name:
+        return str(request.url)
+    base = f"{request.base_url}".rstrip("/") + f"{API_PREFIX}/docs"
+    tag = _ROUTE_TAGS.get(route_name)
+    return f"{base}#/{tag}/{route_name}" if tag else base
+
+
 def register_swagger_docs(app: FastAPI, docs_url: str, config: Config) -> None:
     """Mount the vendored assets and serve the themed Swagger UI page.
 
@@ -52,6 +95,7 @@ def register_swagger_docs(app: FastAPI, docs_url: str, config: Config) -> None:
     otherwise leave its hardcoded `0.1.0` default in the schema.
     """
     app.version = API_VERSION
+    _index_route_tags(app)
 
     app.mount(
         _STATIC_MOUNT,

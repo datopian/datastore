@@ -201,6 +201,56 @@ def test_info_version_matches_the_url_prefix(client: TestClient) -> None:
     ), f"no route served under the documented version {documented!r}"
 
 
+# 3d. `help` deep-links into the docs ---------------------------------------
+
+def test_help_deep_links_to_the_operation(client: TestClient) -> None:
+    """`help` points at the endpoint's own entry in Swagger, not back at the
+    URL the caller just requested."""
+    body = client.get(f"{API_PREFIX}/datastore_search?resource_id=x").json()
+
+    assert body["help"].endswith(f"{API_PREFIX}/docs#/Datastore/datastore_search")
+
+
+def test_help_is_present_on_errors(client: TestClient) -> None:
+    """The error envelope carries the same link — that is when a caller is
+    most likely to want the docs."""
+    response = client.get(f"{API_PREFIX}/datastore_search")
+
+    assert response.status_code == 400
+    assert response.json()["help"].endswith("#/Datastore/datastore_search")
+
+
+def test_help_anchors_resolve_in_the_schema(client: TestClient) -> None:
+    """Every `#/<tag>/<operationId>` anchor must name a real operation.
+
+    A link that 'works' but lands nowhere is worse than no link, so this
+    checks the pairs against the published schema rather than trusting the
+    string format.
+    """
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    for path, item in schema["paths"].items():
+        for method, operation in item.items():
+            for tag in operation.get("tags", []):
+                assert operation["operationId"], f"{method} {path} has no operationId"
+                assert tag in {t["name"] for t in schema["tags"]}, (
+                    f"{method} {path} tagged {tag!r}, which is not a declared tag"
+                )
+
+
+def test_operation_ids_are_the_handler_names(client: TestClient) -> None:
+    """Clean operationIds keep the deep-link anchors readable and give
+    generated clients sane method names."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    ids = {op["operationId"] for it in schema["paths"].values() for op in it.values()}
+
+    assert "datastore_search" in ids
+    assert not any("_get" in i or "_post" in i for i in ids), (
+        f"FastAPI's auto-generated ids leaked through: {sorted(ids)}"
+    )
+
+
 # 4. Swagger UI page ------------------------------------------------------------
 
 def test_docs_page_renders_swagger_ui(client: TestClient) -> None:

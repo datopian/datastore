@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from datastore.api.docs import help_url
 from datastore.schemas.responses import ErrorEnvelope
 
 # Shared OpenAPI doc for the CKAN error envelope, attached at router level
@@ -49,7 +50,13 @@ class ORJSONResponse(JSONResponse):
 
 
 def _help(request: Request) -> str:
-    return str(request.url)
+    """Swagger deep link for the endpoint that served this request.
+
+    Resolved from the matched route, so an unrouted request (a 404) falls
+    back to the request URL rather than linking to nothing.
+    """
+    route = request.scope.get("route")
+    return help_url(request, getattr(route, "name", None))
 
 
 def _deprecation_warnings(

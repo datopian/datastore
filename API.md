@@ -17,14 +17,18 @@ this runs alongside CKAN or independently.
 Every response is a CKAN envelope. On success:
 
 ```json
-{ "help": "<request URL>", "success": true, "result": { ... } }
+{ "help": "<docs link for this endpoint>", "success": true, "result": { ... } }
 ```
+
+`help` is a deep link into this service's Swagger UI, anchored on the operation
+that served the request — so any response, including an error, points at the
+documentation for the endpoint you called.
 
 On failure:
 
 ```json
 {
-  "help": "<request URL>",
+  "help": "<docs link for this endpoint>",
   "success": false,
   "error": {
     "__type": "Validation Error",
