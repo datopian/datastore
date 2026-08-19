@@ -38,8 +38,10 @@ async def authorize(
 ) -> dict[str, Any]:
     """Run policy checks, delegate to the provider, return endpoint data_dict.
 
-    Endpoints merge the returned dict into their `data_dict`:
-      `{"resource": <dict or {}>, "package": <dict or {}>}`
+    `{"user": <name or None>, "resource": <dict or {}>, "package": <dict or {}>}`
+    — `user` is the acting username the provider reported; `RequestContext`
+    notes it for analytics and strips it before endpoints merge the rest
+    into their `data_dict`.
     """
     if bool(resource_id) == bool(package_id):
         raise ValidationError("exactly one of resource_id or package_id required")
@@ -54,13 +56,17 @@ async def authorize(
             "Access denied: Action requires an authenticated user"
         )
 
-    decision = await provider.authorize(
+    result = await provider.authorize(
         credential=api_key,
         resource_id=resource_id,
         package_id=package_id,
         permission=permission,
     )
-    return {"resource": decision.resource or {}, "package": decision.package or {}}
+    return {
+        "user": result.subject,
+        "resource": result.resource or {},
+        "package": result.package or {},
+    }
 
 
 def ensure_resource_writable(

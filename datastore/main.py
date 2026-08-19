@@ -18,6 +18,7 @@ from datastore.api.docs import (
     strip_default_422,
     tailor_auth_scheme,
 )
+from datastore.analytics import AnalyticsMiddleware
 from datastore.api.error_handlers import register_exception_handlers
 from datastore.api.middleware import BodySizeLimitMiddleware
 from datastore.api.responses import ORJSONResponse
@@ -32,8 +33,12 @@ from datastore.infrastructure.engines.registry import (
     warmup_engines,
 )
 
-log = logging.getLogger("uvicorn.error")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -67,11 +72,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         warmup_engines(config)
         stack.callback(reset_engine_cache)
 
-        log.info(
-            "datastore ready: Engine=%r Auth=%r Cache=%s",
+        logger.info(
+            "datastore ready: Engine=%r Auth=%r Cache=%s Analytics=%s",
             config.DATASTORE_ENGINE,
             config.AUTH_TYPE,
             "redis" if config.REDIS_URL else "memory",
+            "on" if config.ANALYTICS_ENABLED else "off",
         )
 
         yield
@@ -96,6 +102,10 @@ def create_app() -> FastAPI:
         BodySizeLimitMiddleware,
         max_bytes=config.MAX_REQUEST_BODY_MB * 1024 * 1024,
     )
+    # Outside the body-size guard, so a rejected oversize upload is an
+    # event too; inside CORS, which only decorates headers.
+    if config.ANALYTICS_ENABLED:
+        app.add_middleware(AnalyticsMiddleware, service="Datastore")
     # Added last = outermost, so 4xx/5xx envelopes carry CORS headers too.
     # `CORS_ORIGINS=*` allows every origin, a comma-separated list allows
     # only those domains, empty skips the middleware entirely.

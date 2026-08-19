@@ -63,6 +63,15 @@ class Config(BaseSettings):
         description="Maximum request body size in MB",
     )
 
+    # Analytics
+    ANALYTICS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Emit one JSON analytics event per datastore action / dump "
+            "request. `false` leaves the analytics middleware unmounted."
+        ),
+    )
+
     # CORS
     # Public base URL of this service. Used only to render absolute URLs in
     # the OpenAPI examples — live responses derive their URLs from the
