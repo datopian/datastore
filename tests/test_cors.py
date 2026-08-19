@@ -18,9 +18,7 @@ from fastapi.testclient import TestClient
 
 
 @contextmanager
-def _client_with_origins(
-    monkeypatch: pytest.MonkeyPatch, origins: str
-) -> Iterator[TestClient]:
+def _client_with_origins(monkeypatch: pytest.MonkeyPatch, origins: str) -> Iterator[TestClient]:
     monkeypatch.setenv("CORS_ORIGINS", origins)
     get_config.cache_clear()
     try:
@@ -40,12 +38,8 @@ def test_wildcard_allows_any_origin(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_specific_domain_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     origins = "https://data.example.org, https://app.example.org"
     with _client_with_origins(monkeypatch, origins) as client:
-        allowed = client.get(
-            "/datastore/api/health", headers={"Origin": "https://app.example.org"}
-        )
-        denied = client.get(
-            "/datastore/api/health", headers={"Origin": "https://evil.example.org"}
-        )
+        allowed = client.get("/datastore/api/health", headers={"Origin": "https://app.example.org"})
+        denied = client.get("/datastore/api/health", headers={"Origin": "https://evil.example.org"})
     assert allowed.headers["access-control-allow-origin"] == "https://app.example.org"
     assert "access-control-allow-origin" not in denied.headers
 

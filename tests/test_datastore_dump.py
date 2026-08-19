@@ -32,16 +32,19 @@ DUMP_URL = "/datastore/api/dump/balancing_auction_results_2025"
 
 def _patch_dump(urls_or_exc: list[str] | Exception):
     """Patch `BigQueryBackend.dump` to return URLs or raise."""
+
     async def fake(self: BigQueryBackend, resource_id: str, fmt: str) -> list[str]:
         if isinstance(urls_or_exc, Exception):
             raise urls_or_exc
         return urls_or_exc
+
     return patch.object(BigQueryBackend, "dump", fake)
 
 
 def stub_signed_urls(client: TestClient, parts: dict[str, bytes]) -> None:
     """Serve `parts` (url → body) from `app.state.http`, the client the
     zip writer fetches the signed URLs with."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=parts[str(request.url)])
 
@@ -64,11 +67,14 @@ def test_single_shard_returns_302(client: TestClient) -> None:
 
 @pytest.mark.parametrize("fmt", ["csv", "gzip", "ndjson", "parquet"])
 def test_each_format_supports_single_shard_redirect(
-    fmt: str, client: TestClient,
+    fmt: str,
+    client: TestClient,
 ) -> None:
     with _patch_dump([f"https://example/x.{fmt}"]):
         response = client.get(
-            DUMP_URL, params={"format": fmt}, follow_redirects=False,
+            DUMP_URL,
+            params={"format": fmt},
+            follow_redirects=False,
         )
     assert response.status_code == 302
 
@@ -140,7 +146,8 @@ def test_dump_for_unknown_resource_returns_404(client: TestClient) -> None:
 
 
 def test_dump_without_api_key_succeeds_when_public(
-    client: TestClient, fake_ckan: FakeCKAN,
+    client: TestClient,
+    fake_ckan: FakeCKAN,
 ) -> None:
     with _patch_dump(["https://example/a.csv?sig=1"]):
         client.headers.pop("Authorization", None)
@@ -150,7 +157,8 @@ def test_dump_without_api_key_succeeds_when_public(
 
 
 def test_dump_with_denied_key_returns_403(
-    client: TestClient, fake_ckan: FakeCKAN,
+    client: TestClient,
+    fake_ckan: FakeCKAN,
 ) -> None:
     fake_ckan.deny("test-token")
     response = client.get(DUMP_URL)
@@ -172,14 +180,8 @@ def test_build_export_select_iso_casts_timestamp_and_datetime() -> None:
         _bq_field("delivery_day", "DATE"),
     ]
     select = _export_select_list(schema, fmt="csv")
-    assert (
-        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `delivery_start`, 'UTC')"
-        in select
-    )
-    assert (
-        "FORMAT_DATETIME('%Y-%m-%dT%H:%M:%S', `delivery_local`)"
-        in select
-    )
+    assert "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `delivery_start`, 'UTC')" in select
+    assert "FORMAT_DATETIME('%Y-%m-%dT%H:%M:%S', `delivery_local`)" in select
     # No `Z` suffix and no `%E*S` (which would re-introduce fractional seconds).
     assert "Z'," not in select
     assert "%E*S" not in select
@@ -199,18 +201,20 @@ def test_build_export_select_parquet_casts_json_columns() -> None:
         _bq_field("delivery_start", "TIMESTAMP"),
     ]
     assert _export_select_list(schema, fmt="parquet") == (
-        "`id`, TO_JSON_STRING(`bidder_metadata`) AS `bidder_metadata`, "
-        "`delivery_start`"
+        "`id`, TO_JSON_STRING(`bidder_metadata`) AS `bidder_metadata`, `delivery_start`"
     )
 
 
 # --- helpers: too-large heuristic -----------------------------------------
 
 
-@pytest.mark.parametrize("message", [
-    "Operation cannot be completed when exporting to a single URI",
-    "Cannot export more than 1 GB to a single URI; use the wildcard operator",
-])
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Operation cannot be completed when exporting to a single URI",
+        "Cannot export more than 1 GB to a single URI; use the wildcard operator",
+    ],
+)
 def test_too_large_marker_is_recognised(message: str) -> None:
     assert _is_export_too_large(RuntimeError(message)) is True
 
@@ -320,12 +324,10 @@ def test_dump_cache_miss_submits_extract_then_returns_urls() -> None:
     # same one shard (nothing stale to delete on first dump ever).
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
     # The composite object's signed URL (csv always composes).
-    bucket_obj.blob.return_value.generate_signed_url.return_value = (
-        "https://composed"
-    )
+    bucket_obj.blob.return_value.generate_signed_url.return_value = "https://composed"
 
     # Job goes straight to DONE without errors.
-    job = MagicMock()          # `job.result()` returns without raising
+    job = MagicMock()  # `job.result()` returns without raising
     backend.client.query.return_value = job
 
     urls = _run_dump(backend, "res-1", "csv")
@@ -347,7 +349,7 @@ def test_dump_gzip_exports_headerless_and_composes() -> None:
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
 
-    job = MagicMock()          # `job.result()` returns without raising
+    job = MagicMock()  # `job.result()` returns without raising
     backend.client.query.return_value = job
 
     _run_dump(backend, "res-1", "gzip")
@@ -355,7 +357,7 @@ def test_dump_gzip_exports_headerless_and_composes() -> None:
     sql = backend.client.query.call_args.args[0]
     assert "format='CSV'" in sql
     assert "compression='GZIP'" in sql
-    assert "header=false" in sql          # header comes from the composed member
+    assert "header=false" in sql  # header comes from the composed member
     assert "_*.csv.gz" in sql
     prefixes = {c.kwargs["prefix"] for c in bucket_obj.list_blobs.call_args_list}
     assert all(p.startswith("dumps/res-1/gzip/") for p in prefixes)
@@ -371,7 +373,7 @@ def test_dump_parquet_export_uses_wildcard_uri() -> None:
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
 
-    job = MagicMock()          # `job.result()` returns without raising
+    job = MagicMock()  # `job.result()` returns without raising
     backend.client.query.return_value = job
 
     urls = _run_dump(backend, "res-1", "parquet")
@@ -419,8 +421,8 @@ def test_dump_ignores_an_attempt_without_success() -> None:
     urls = _run_dump(backend, "res-1", "parquet")
 
     assert urls == ["https://ok"]
-    assert backend.client.query.call_count == 1   # exported its own attempt
-    assert inflight.delete.call_count == 0        # never touched
+    assert backend.client.query.call_count == 1  # exported its own attempt
+    assert inflight.delete.call_count == 0  # never touched
 
 
 def test_dump_cache_key_changes_when_table_modified_advances() -> None:
@@ -451,9 +453,7 @@ def test_dump_cache_key_changes_when_table_modified_advances() -> None:
     asyncio.run(backend.dump("res-1", "csv"))
     second_prefix = bucket_obj.list_blobs.call_args_list[-2].kwargs["prefix"]
 
-    assert first_prefix != second_prefix, (
-        "table.modified change must produce a different cache key"
-    )
+    assert first_prefix != second_prefix, "table.modified change must produce a different cache key"
 
 
 # --- test infrastructure --------------------------------------------------

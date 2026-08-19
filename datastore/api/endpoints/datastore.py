@@ -47,8 +47,7 @@ router = APIRouter(tags=["Datastore"], responses=ERROR_RESPONSES)
 # migrate to `result.schema` — the wording mirrors the same field's
 # deprecation on `DatastoreCreateRequest`.
 _LEGACY_FIELDS_WARNING = (
-    "'fields' is deprecated — use 'schema' (Frictionless Table Schema) "
-    "instead."
+    "'fields' is deprecated — use 'schema' (Frictionless Table Schema) instead."
 )
 
 
@@ -128,7 +127,6 @@ async def datastore_upsert(
     data_dict.update(payload.model_dump())
     result = await upsert_datastore(context, data_dict)
     return _success_response(request, result)
-
 
 
 @router.get(
@@ -251,9 +249,7 @@ async def datastore_delete(
     Returns the original `filters` echoed back (CKAN convention) so the
     caller can confirm what the server actually applied.
     """
-    data_dict = await context.authorize(
-        resource_id=payload.resource_id, permission="delete"
-    )
+    data_dict = await context.authorize(resource_id=payload.resource_id, permission="delete")
     ensure_resource_writable(
         data_dict["resource"],
         force=payload.force,

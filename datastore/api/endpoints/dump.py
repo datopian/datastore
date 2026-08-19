@@ -48,24 +48,18 @@ def download_response(
     """
     if not urls:
         raise ServerError(
-            "export produced no downloadable files "
-            "(datastore engine is not configured)"
+            "export produced no downloadable files (datastore engine is not configured)"
         )
     if len(urls) == 1:
         return RedirectResponse(url=urls[0], status_code=302)
 
     ext = DUMP_EXTENSIONS[fmt]
-    members = [
-        (f"{filename_base}_{i + 1:02d}.{ext}", url)
-        for i, url in enumerate(urls)
-    ]
+    members = [(f"{filename_base}_{i + 1:02d}.{ext}", url) for i, url in enumerate(urls)]
     return StreamingResponse(
         zip_archive_writer(request.app.state.http, members),
         media_type="application/zip",
         headers={
-            "Content-Disposition": (
-                f'attachment; filename="{filename_base}.zip"'
-            ),
+            "Content-Disposition": (f'attachment; filename="{filename_base}.zip"'),
         },
     )
 
@@ -76,9 +70,7 @@ def download_response(
     responses={
         302: {"description": "Redirect to the signed download URL."},
         200: {
-            "description": (
-                "Sharded parquet export - one streamed zip of the parts."
-            ),
+            "description": ("Sharded parquet export - one streamed zip of the parts."),
             "content": {"application/zip": {}},
         },
     },
@@ -88,8 +80,7 @@ async def dump_sql(
     context: Context,
     params: Annotated[DatastoreDumpSQLRequest, Query()],
 ):
-    """Download query result as a file.
-    """
+    """Download query result as a file."""
     for resource_id in params.resource_ids:
         await context.authorize(resource_id=resource_id, permission="read")
 
@@ -111,9 +102,7 @@ async def dump_sql(
     responses={
         302: {"description": "Redirect to the signed Download URL."},
         200: {
-            "description": (
-                "Multi-file parquet export — one streamed zip."
-            ),
+            "description": ("Multi-file parquet export — one streamed zip."),
             "content": {"application/zip": {}},
         },
     },

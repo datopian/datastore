@@ -92,9 +92,7 @@ def test_create_with_resource_dict_rejected_when_auth_type_is_not_ckan(
     from datastore.main import create_app
 
     app = create_app()
-    app.dependency_overrides[get_config] = lambda: Config(
-        AUTH_TYPE="anonymous", CKAN_URL=""
-    )
+    app.dependency_overrides[get_config] = lambda: Config(AUTH_TYPE="anonymous", CKAN_URL="")
     app.dependency_overrides[get_ckan_client] = lambda: fake_ckan
     app.dependency_overrides[get_auth_provider] = lambda: AnonymousProvider()
 
@@ -123,9 +121,7 @@ def test_create_with_resource_id_succeeds_under_anonymous_auth(
     from datastore.main import create_app
 
     app = create_app()
-    app.dependency_overrides[get_config] = lambda: Config(
-        AUTH_TYPE="anonymous", CKAN_URL=""
-    )
+    app.dependency_overrides[get_config] = lambda: Config(AUTH_TYPE="anonymous", CKAN_URL="")
     app.dependency_overrides[get_ckan_client] = lambda: fake_ckan
     app.dependency_overrides[get_auth_provider] = lambda: AnonymousProvider()
 
@@ -136,9 +132,7 @@ def test_create_with_resource_id_succeeds_under_anonymous_auth(
         response = c.post(CREATE_URL, json=_valid_payload_with_resource_id())
 
     assert response.status_code == 200
-    assert response.json()["result"]["resource_id"] == (
-        "balancing_auction_results_2025"
-    )
+    assert response.json()["result"]["resource_id"] == ("balancing_auction_results_2025")
 
 
 # 2. Missing required field -------------------------------------------------
@@ -187,9 +181,7 @@ def test_create_field_missing_id_returns_validation_error(client: TestClient) ->
     assert any("fields[0].id" in path for path in body["error"]["fields"])
 
 
-@pytest.mark.parametrize(
-    "bad_name", ["auction-id", "price (GBP)", "col;drop", 'a"b', "naïve"]
-)
+@pytest.mark.parametrize("bad_name", ["auction-id", "price (GBP)", "col;drop", 'a"b', "naïve"])
 def test_create_field_id_with_special_chars_returns_validation_error(
     client: TestClient, bad_name: str
 ) -> None:
@@ -263,9 +255,7 @@ def test_create_resource_id_with_denied_key_returns_403(
     assert body["error"]["__type"] == "Authorization Error"
 
 
-def test_create_without_api_key_returns_403(
-    client: TestClient, fake_ckan: FakeCKAN
-) -> None:
+def test_create_without_api_key_returns_403(client: TestClient, fake_ckan: FakeCKAN) -> None:
     """Anonymous reads are allowed (CKAN decides on resource visibility),
     but writes always require an authenticated user — short-circuit
     with 403 before CKAN is even called."""
@@ -426,9 +416,7 @@ def test_create_with_resource_dict_tags_url_type_datastore(
 def test_create_on_readonly_resource_requires_force(
     client: TestClient, fake_ckan: FakeCKAN
 ) -> None:
-    fake_ckan.add_resource(
-        "ro-res", package_id="pkg-balancing-2025", url_type="upload"
-    )
+    fake_ckan.add_resource("ro-res", package_id="pkg-balancing-2025", url_type="upload")
     payload = {
         "resource_id": "ro-res",
         "fields": [{"id": "auction_id", "type": "int4"}],
@@ -446,9 +434,7 @@ def test_create_on_readonly_resource_requires_force(
 def test_create_on_readonly_resource_with_force_succeeds(
     client: TestClient, fake_ckan: FakeCKAN
 ) -> None:
-    fake_ckan.add_resource(
-        "ro-res", package_id="pkg-balancing-2025", url_type="upload"
-    )
+    fake_ckan.add_resource("ro-res", package_id="pkg-balancing-2025", url_type="upload")
     payload = {
         "resource_id": "ro-res",
         "force": True,

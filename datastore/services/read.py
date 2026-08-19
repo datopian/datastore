@@ -28,9 +28,9 @@ if TYPE_CHECKING:
 
 
 _WRITERS = {
-    "csv":     stream_csv,
-    "tsv":     stream_tsv,
-    "lists":   stream_lists,
+    "csv": stream_csv,
+    "tsv": stream_tsv,
+    "lists": stream_lists,
     "objects": stream_objects,
 }
 
@@ -87,7 +87,7 @@ async def search_datastore(
     )
 
     fields, _ = frictionless_schema_to_fields(result.schema)
-    
+
     envelope_kwargs = dict(
         help_url=request_url,
         resource_id=data_dict["resource_id"],
@@ -147,7 +147,9 @@ async def search_sql_datastore(
     # Off the event loop — submitting the query + fetching the first
     # page blocks; streaming writer below picks up the rest in threadpool.
     result = await asyncio.to_thread(
-        engine.search_sql, sql=data_dict["sql"], limit=limit,
+        engine.search_sql,
+        sql=data_dict["sql"],
+        limit=limit,
     )
     fields, _ = frictionless_schema_to_fields(result.schema)
     return stream_objects(
@@ -175,9 +177,7 @@ async def search_sql_datastore(
     )
 
 
-async def dump_sql_datastore(
-    context: RequestContext, data_dict: dict[str, Any]
-) -> list[str]:
+async def dump_sql_datastore(context: RequestContext, data_dict: dict[str, Any]) -> list[str]:
     """Export a vetted SELECT's result via the engine; return signed URLs.
 
     The download-mode sibling of `search_sql_datastore`: same function
@@ -202,7 +202,8 @@ async def dump_sql_datastore(
 
 
 def _ensure_allowed_sql_functions(
-    context: RequestContext, function_names: list[str],
+    context: RequestContext,
+    function_names: list[str],
 ) -> None:
     """Reject SQL that calls functions outside the engine's allow-list.
 
@@ -234,7 +235,8 @@ async def info_datastore(
     """
     engine = get_datastore_engine(context, mode="ro")
     result = await asyncio.to_thread(
-        engine.info, resource_id=data_dict["resource_id"],
+        engine.info,
+        resource_id=data_dict["resource_id"],
     )
 
     schema = result.schema
@@ -293,18 +295,22 @@ def _build_pagination_links(
     base_pairs = [(k, v) for k, v in pairs if k != "offset"]
 
     def _qs(pairs: list[tuple[str, str]]) -> str:
-        return urlunparse((
-            parsed.scheme, parsed.netloc, parsed.path,
-            "", urlencode(pairs), "",
-        ))
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                "",
+                urlencode(pairs),
+                "",
+            )
+        )
 
     out: dict[str, Any] = {"start": _qs(base_pairs)}
     if offset > 0:
         prev_offset = max(0, offset - limit)
         out["prev"] = _qs(base_pairs + [("offset", str(prev_offset))])
-    has_next = (
-        limit > 0 and total is not None and offset + limit < total
-    )
+    has_next = limit > 0 and total is not None and offset + limit < total
     if has_next:
         out["next"] = _qs(base_pairs + [("offset", str(offset + limit))])
     if limit > 0:
@@ -340,26 +346,26 @@ def _build_sql_pagination_links(
     of `sql` with a new OFFSET literal (LIMIT is preserved exactly).
     """
     parsed = urlparse(url)
-    base_pairs = [
-        (k, v)
-        for k, v in parse_qsl(parsed.query, keep_blank_values=True)
-        if k != "sql"
-    ]
+    base_pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k != "sql"]
 
     def _link_for(target_offset: int) -> str:
         new_sql = rewrite_sql_offset(sql, target_offset)
         pairs = base_pairs + [("sql", new_sql)]
-        return urlunparse((
-            parsed.scheme, parsed.netloc, parsed.path,
-            "", urlencode(pairs), "",
-        ))
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                "",
+                urlencode(pairs),
+                "",
+            )
+        )
 
     out: dict[str, Any] = {"start": _link_for(0)}
     if offset > 0:
         out["prev"] = _link_for(max(0, offset - limit))
-    has_next = (
-        limit > 0 and total is not None and offset + limit < total
-    )
+    has_next = limit > 0 and total is not None and offset + limit < total
     if has_next:
         out["next"] = _link_for(offset + limit)
     if limit > 0:

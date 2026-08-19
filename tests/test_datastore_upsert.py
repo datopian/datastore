@@ -38,6 +38,7 @@ def _payload(**overrides: Any) -> dict[str, Any]:
 
 # 1. Methods -----------------------------------------------------------------
 
+
 def test_upsert_method_succeeds(client: TestClient) -> None:
     response = client.post(UPSERT_URL, json=_payload(method="upsert"))
 
@@ -75,6 +76,7 @@ def test_default_method_is_upsert(client: TestClient) -> None:
 
 # 2. Optional flags ---------------------------------------------------------
 
+
 def test_include_records_echoes_records(client: TestClient) -> None:
     payload = _payload(include_records=True)
 
@@ -106,6 +108,7 @@ def test_default_omits_optional_fields(client: TestClient) -> None:
 
 # 3. Records optional --------------------------------------------------------
 
+
 def test_records_optional(client: TestClient) -> None:
     payload = _payload()
     payload.pop("records")
@@ -117,6 +120,7 @@ def test_records_optional(client: TestClient) -> None:
 
 
 # 4. Validation --------------------------------------------------------------
+
 
 def test_missing_resource_id_returns_validation_error(client: TestClient) -> None:
     payload = _payload()
@@ -150,10 +154,9 @@ def test_extra_field_rejected(client: TestClient) -> None:
 
 # 5. Auth --------------------------------------------------------------------
 
+
 def test_unknown_resource_id_returns_404(client: TestClient) -> None:
-    response = client.post(
-        UPSERT_URL, json=_payload(resource_id="does-not-exist")
-    )
+    response = client.post(UPSERT_URL, json=_payload(resource_id="does-not-exist"))
 
     assert response.status_code == 404
     body = response.json()
@@ -161,9 +164,7 @@ def test_unknown_resource_id_returns_404(client: TestClient) -> None:
     assert "does-not-exist" in body["error"]["message"]
 
 
-def test_denied_key_returns_403(
-    client: TestClient, fake_ckan: FakeCKAN
-) -> None:
+def test_denied_key_returns_403(client: TestClient, fake_ckan: FakeCKAN) -> None:
     fake_ckan.deny("test-token")  # conftest sets this header on the client
 
     response = client.post(UPSERT_URL, json=_payload())
@@ -179,9 +180,7 @@ def test_denied_key_returns_403(
 def test_upsert_on_readonly_resource_requires_force(
     client: TestClient, fake_ckan: FakeCKAN
 ) -> None:
-    fake_ckan.add_resource(
-        "ro-res", package_id="pkg-balancing-2025", url_type="upload"
-    )
+    fake_ckan.add_resource("ro-res", package_id="pkg-balancing-2025", url_type="upload")
 
     response = client.post(UPSERT_URL, json=_payload(resource_id="ro-res"))
 
@@ -194,13 +193,9 @@ def test_upsert_on_readonly_resource_requires_force(
 def test_upsert_on_readonly_resource_with_force_succeeds(
     client: TestClient, fake_ckan: FakeCKAN
 ) -> None:
-    fake_ckan.add_resource(
-        "ro-res", package_id="pkg-balancing-2025", url_type="upload"
-    )
+    fake_ckan.add_resource("ro-res", package_id="pkg-balancing-2025", url_type="upload")
 
-    response = client.post(
-        UPSERT_URL, json=_payload(resource_id="ro-res", force=True)
-    )
+    response = client.post(UPSERT_URL, json=_payload(resource_id="ro-res", force=True))
 
     assert response.status_code == 200
     assert response.json()["success"] is True

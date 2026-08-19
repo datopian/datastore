@@ -10,24 +10,36 @@ from datastore.auth.base import Decision
 
 def test_authorize_returns_empty_decision_regardless_of_inputs() -> None:
     provider = AnonymousProvider()
-    decision = asyncio.run(provider.authorize(
-        credential=None,
-        resource_id="any",
-        package_id=None,
-        permission="read",
-    ))
+    decision = asyncio.run(
+        provider.authorize(
+            credential=None,
+            resource_id="any",
+            package_id=None,
+            permission="read",
+        )
+    )
     assert decision == Decision()
 
 
 def test_authorize_does_not_care_about_credential() -> None:
     provider = AnonymousProvider()
     # Same result whether or not a token is presented.
-    a = asyncio.run(provider.authorize(
-        credential="token-1", resource_id="r", package_id=None, permission="read",
-    ))
-    b = asyncio.run(provider.authorize(
-        credential=None, resource_id="r", package_id=None, permission="read",
-    ))
+    a = asyncio.run(
+        provider.authorize(
+            credential="token-1",
+            resource_id="r",
+            package_id=None,
+            permission="read",
+        )
+    )
+    b = asyncio.run(
+        provider.authorize(
+            credential=None,
+            resource_id="r",
+            package_id=None,
+            permission="read",
+        )
+    )
     assert a == b == Decision()
 
 

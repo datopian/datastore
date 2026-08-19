@@ -101,10 +101,7 @@ def absolutize_example_urls(app: FastAPI, api_url: str) -> None:
     def openapi() -> dict[str, Any]:
         schema = default_openapi()
         example = (
-            schema.get("components", {})
-            .get("schemas", {})
-            .get("ErrorEnvelope", {})
-            .get("example")
+            schema.get("components", {}).get("schemas", {}).get("ErrorEnvelope", {}).get("example")
         )
         if isinstance(example, dict):
             help_path = example.get("help", "")
@@ -283,13 +280,11 @@ def api_description(auth_type: str) -> str:
 OPENAPI_TAGS = [
     {
         "name": "Health",
-        "description": ("Liveness and readiness probes for " "orchestration."),
+        "description": ("Liveness and readiness probes for orchestration."),
     },
     {
         "name": "Datastore",
-        "description": (
-            "API endpoint - create, upsert, delete, search" "search_sql, and info."
-        ),
+        "description": ("API endpoint - create, upsert, delete, searchsearch_sql, and info."),
     },
     {
         "name": "Datastore Download",

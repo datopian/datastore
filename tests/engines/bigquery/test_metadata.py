@@ -24,10 +24,7 @@ from datastore.infrastructure.engines.bigquery.lib import (
 
 def _table(description: str | None = None, columns: list[tuple[str, str]] | None = None) -> Any:
     """A `bigquery.Table` stand-in carrying `description` + `schema`."""
-    schema = [
-        SimpleNamespace(name=name, field_type=ftype)
-        for name, ftype in (columns or [])
-    ]
+    schema = [SimpleNamespace(name=name, field_type=ftype) for name, ftype in (columns or [])]
     return SimpleNamespace(description=description, schema=schema)
 
 

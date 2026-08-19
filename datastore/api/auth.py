@@ -45,14 +45,10 @@ async def authorize(
         raise ValidationError("exactly one of resource_id or package_id required")
 
     if permission is not None and permission not in ALLOWED_PERMISSIONS:
-        raise ValidationError(
-            f"permission must be one of {sorted(ALLOWED_PERMISSIONS)}"
-        )
+        raise ValidationError(f"permission must be one of {sorted(ALLOWED_PERMISSIONS)}")
 
     if not api_key and permission not in ANONYMOUS_PERMISSIONS:
-        raise AuthorizationError(
-            "Access denied: Action requires an authenticated user"
-        )
+        raise AuthorizationError("Access denied: Action requires an authenticated user")
 
     decision = await provider.authorize(
         credential=api_key,
@@ -63,9 +59,7 @@ async def authorize(
     return {"resource": decision.resource or {}, "package": decision.package or {}}
 
 
-def ensure_resource_writable(
-    resource: dict[str, Any], *, force: bool, auth_type: str
-) -> None:
+def ensure_resource_writable(resource: dict[str, Any], *, force: bool, auth_type: str) -> None:
     """Block writes to a CKAN resource the datastore doesn't own, unless
     `force` is set.
 
@@ -87,6 +81,4 @@ def ensure_resource_writable(
     if url_type is None:
         return
     if not force and url_type != "datastore":
-        raise ValidationError(
-            'Cannot update a read-only resource. Use "force" to force update.'
-        )
+        raise ValidationError('Cannot update a read-only resource. Use "force" to force update.')

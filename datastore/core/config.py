@@ -10,9 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from datastore.core.constants import DEFAULT_API_URL
 
-_ENGINES_DIR = (
-    Path(__file__).resolve().parent.parent / "infrastructure" / "engines"
-)
+_ENGINES_DIR = Path(__file__).resolve().parent.parent / "infrastructure" / "engines"
 _AUTH_DIR = Path(__file__).resolve().parent.parent / "auth"
 
 
@@ -20,10 +18,9 @@ def _subdirs(root: Path) -> set[str]:
     if not root.is_dir():
         return set()
     return {
-        p.name for p in root.iterdir()
-        if p.is_dir()
-        and not p.name.startswith(("_", "."))
-        and p.name != "__pycache__"
+        p.name
+        for p in root.iterdir()
+        if p.is_dir() and not p.name.startswith(("_", ".")) and p.name != "__pycache__"
     }
 
 
@@ -118,10 +115,7 @@ class Config(BaseSettings):
     )
     DOCS_SITE_TITLE: str = Field(
         default="",
-        description=(
-            "Title shown in the docs page header. Empty falls back to the "
-            "OpenAPI title."
-        ),
+        description=("Title shown in the docs page header. Empty falls back to the OpenAPI title."),
     )
     DOCS_LOGO_URL: str = Field(
         default="",
@@ -149,8 +143,7 @@ class Config(BaseSettings):
     DATASTORE_ENGINE: str = Field(
         default="bigquery",
         description=(
-            "Backend engine name — must match an "
-            "`infrastructure/engines/<name>/` package."
+            "Backend engine name — must match an `infrastructure/engines/<name>/` package."
         ),
     )
 
@@ -160,8 +153,7 @@ class Config(BaseSettings):
         available = _available_engines()
         if v not in available:
             raise ValueError(
-                f"DATASTORE_ENGINE={v!r} has no engine package; "
-                f"available: {sorted(available)}"
+                f"DATASTORE_ENGINE={v!r} has no engine package; available: {sorted(available)}"
             )
         return v
 
@@ -215,25 +207,19 @@ class Config(BaseSettings):
     )
     BIGQUERY_EXPORT_BUCKET: str = Field(
         default="",
-        description=(
-            "GCS bucket name (no `gs://` prefix) that `<API_BASE_PREFIX>/dump/<rid>` "
-        ),
+        description=("GCS bucket name (no `gs://` prefix) that `<API_BASE_PREFIX>/dump/<rid>` "),
     )
     BIGQUERY_EXPORT_URL_EXPIRY_HOURS: int = Field(
         default=1,
         ge=1,
         le=168,
-        description=(
-            "Signed-URL TTL for dump manifest entries (hours). Defaults to 1h."
-        ),
+        description=("Signed-URL TTL for dump manifest entries (hours). Defaults to 1h."),
     )
 
     # Per-row system columns
     INCLUDE_UPDATED_AT: bool = Field(
         default=True,
-        description=(
-            "Add a `_updated_at` TIMESTAMP system column on each resource tables. "
-        ),
+        description=("Add a `_updated_at` TIMESTAMP system column on each resource tables. "),
     )
 
     # Search
@@ -284,8 +270,7 @@ class Config(BaseSettings):
         available = _available_auth_types()
         if v not in available:
             raise ValueError(
-                f"AUTH_TYPE={v!r} has no provider package; "
-                f"available: {sorted(available)}"
+                f"AUTH_TYPE={v!r} has no provider package; available: {sorted(available)}"
             )
         return v
 
@@ -295,8 +280,7 @@ class Config(BaseSettings):
     ] = Field(
         default="HS256",
         description=(
-            "JWT signing algorithm. HS* uses JWT_SECRET; "
-            "RS*/ES* uses JWT_PUBLIC_KEY (PEM)."
+            "JWT signing algorithm. HS* uses JWT_SECRET; RS*/ES* uses JWT_PUBLIC_KEY (PEM)."
         ),
     )
     JWT_SECRET: str = Field(
@@ -332,8 +316,6 @@ class Config(BaseSettings):
         return self
 
 
-
 @lru_cache
 def get_config() -> Config:
     return Config()
-

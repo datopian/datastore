@@ -191,9 +191,7 @@ class DatastoreUpsertRequest(BaseModel):
     resource_id: str = Field(
         description="Target table — must already exist (call `datastore_create` first)."
     )
-    records: list[dict[str, Any]] | None = Field(
-        default=None, description="Rows to write."
-    )
+    records: list[dict[str, Any]] | None = Field(default=None, description="Rows to write.")
     method: UpsertMethod = Field(
         default="upsert",
         description=(
@@ -209,9 +207,7 @@ class DatastoreUpsertRequest(BaseModel):
         default=False,
         description="Run `COUNT(*)` after the write and return `result.total`.",
     )
-    force: bool = Field(
-        default=False, description="Bypass optional client-side guards (reserved)."
-    )
+    force: bool = Field(default=False, description="Bypass optional client-side guards (reserved).")
 
 
 class DatastoreSearchRequest(BaseModel):
@@ -267,9 +263,7 @@ class DatastoreSearchRequest(BaseModel):
         ge=0,
         description="Max rows to return (capped by `SEARCH_RESULT_ROWS_MAX`).",
     )
-    offset: int = Field(
-        default=0, ge=0, description="Rows to skip — pagination offset."
-    )
+    offset: int = Field(default=0, ge=0, description="Rows to skip — pagination offset.")
     fields: str | None = Field(
         default=None,
         description="Comma-separated columns to project. Default: all columns.",
@@ -333,13 +327,8 @@ class DatastoreSearchSQLRequest(BaseModel):
     _REQUIRE_LIMIT: ClassVar[bool] = True
 
     sql: str = Field(
-        description=(
-            "A  Datastore read API with `SELECT` / `WITH` statement."
-        ),
-        examples=[
-            'SELECT * FROM "balancing_auction_results_2025" '
-            "WHERE accepted = true LIMIT 100"
-        ],
+        description=("A  Datastore read API with `SELECT` / `WITH` statement."),
+        examples=['SELECT * FROM "balancing_auction_results_2025" WHERE accepted = true LIMIT 100'],
     )
 
     # Set by `_extract_sql_references` after sql validates. Private so
@@ -425,7 +414,8 @@ class DatastoreSearchSQLRequest(BaseModel):
         """
         self._resource_ids, self._function_names = parse_sql_references(self.sql)
         self._limit, self._offset = parse_sql_pagination(
-            self.sql, require_limit=self._REQUIRE_LIMIT,
+            self.sql,
+            require_limit=self._REQUIRE_LIMIT,
         )
         return self
 
@@ -444,21 +434,13 @@ class DatastoreDumpSQLRequest(DatastoreSearchSQLRequest):
     _REQUIRE_LIMIT: ClassVar[bool] = False
 
     sql: str = Field(
-        description=(
-            "A  Datastore read API with`SELECT` / `WITH` statement."
-        ),
-        examples=[
-            'SELECT * FROM "balancing_auction_results_2025" '
-            "WHERE accepted = true"
-        ],
+        description=("A  Datastore read API with`SELECT` / `WITH` statement."),
+        examples=['SELECT * FROM "balancing_auction_results_2025" WHERE accepted = true'],
     )
 
     format: DumpFormat = Field(
         default="csv",
-        description=(
-            "Export format: `csv` | `gzip` (gzipped CSV) | `ndjson` | "
-            "`parquet`."
-        ),
+        description=("Export format: `csv` | `gzip` (gzipped CSV) | `ndjson` | `parquet`."),
     )
 
 
@@ -474,9 +456,7 @@ class DatastoreInfoRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    resource_id: str | None = Field(
-        default=None, description="Resource (table) to describe."
-    )
+    resource_id: str | None = Field(default=None, description="Resource (table) to describe.")
     id: str | None = Field(
         default=None, description="CKAN alias for `resource_id`. Send exactly one."
     )
@@ -485,14 +465,9 @@ class DatastoreInfoRequest(BaseModel):
     def _require_resource_id_or_id(self) -> DatastoreInfoRequest:
         if self.resource_id is None and self.id is None:
             raise ValueError("either 'resource_id' or 'id' is required")
-        if (
-            self.resource_id is not None
-            and self.id is not None
-            and self.resource_id != self.id
-        ):
+        if self.resource_id is not None and self.id is not None and self.resource_id != self.id:
             raise ValueError(
-                "'resource_id' and 'id' both provided with different "
-                "values; send exactly one"
+                "'resource_id' and 'id' both provided with different values; send exactly one"
             )
         if self.resource_id is None:
             self.resource_id = self.id
@@ -532,9 +507,7 @@ class DatastoreDeleteRequest(BaseModel):
     )
     fields: list[str] | None = Field(
         default=None,
-        description=(
-            "Drop these columns instead of rows. Mutually exclusive with `filters`."
-        ),
+        description=("Drop these columns instead of rows. Mutually exclusive with `filters`."),
     )
     force: bool = Field(
         default=False, description="Required to delete from a CKAN read-only resource."
@@ -544,14 +517,9 @@ class DatastoreDeleteRequest(BaseModel):
     def _require_resource_id_or_id(self) -> DatastoreDeleteRequest:
         if self.resource_id is None and self.id is None:
             raise ValueError("either 'resource_id' or 'id' is required")
-        if (
-            self.resource_id is not None
-            and self.id is not None
-            and self.resource_id != self.id
-        ):
+        if self.resource_id is not None and self.id is not None and self.resource_id != self.id:
             raise ValueError(
-                "'resource_id' and 'id' both provided with different "
-                "values; send exactly one"
+                "'resource_id' and 'id' both provided with different values; send exactly one"
             )
         if self.resource_id is None:
             self.resource_id = self.id

@@ -47,9 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         app.state.http = http
         ckan: CKANClient | None = (
-            CKANClient(base_url=config.CKAN_URL, http=http)
-            if config.AUTH_TYPE == "ckan"
-            else None
+            CKANClient(base_url=config.CKAN_URL, http=http) if config.AUTH_TYPE == "ckan" else None
         )
         app.state.ckan = ckan
 
@@ -57,9 +55,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if hasattr(cache, "close"):
             stack.push_async_callback(cache.close)
         app.state.cache = cache
-        
+
         app.state.auth_provider = get_auth_provider(
-            config, ckan=ckan, cache=cache, cache_ttl=config.AUTH_CACHE_TTL,
+            config,
+            ckan=ckan,
+            cache=cache,
+            cache_ttl=config.AUTH_CACHE_TTL,
         )
 
         # Build + initialise rw/ro engines once; surface credential

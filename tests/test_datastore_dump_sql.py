@@ -99,9 +99,7 @@ def _expected_prefix(sql: str, fmt: str = "csv") -> str:
     modified 2026-01-01 UTC)."""
     qualified = qualify_table_refs(sql, project="proj-1", dataset="ds-1")
     qhash = hashlib.sha256(qualified.encode()).hexdigest()[:16]
-    us = int(
-        dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc).timestamp() * 1_000_000
-    )
+    us = int(dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc).timestamp() * 1_000_000)
     rev = hashlib.sha256(f"res1:{us}".encode()).hexdigest()[:16]
     return f"dumps/{qhash}/{fmt}/{rev}/"
 
@@ -133,9 +131,7 @@ def test_cache_miss_dry_runs_then_exports() -> None:
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
-    bucket_obj.blob.return_value.generate_signed_url.return_value = (
-        "https://composed"
-    )
+    bucket_obj.blob.return_value.generate_signed_url.return_value = "https://composed"
     backend.client.query.side_effect = [_dry_job(), _export_job()]
 
     urls = _run(backend)
@@ -160,9 +156,7 @@ def test_cache_miss_dry_runs_then_exports() -> None:
 def test_cache_prefix_matches_qhash_and_table_rev_scheme() -> None:
     """Pre-check prefix is `dumps/<sha256(qualified sql)[:16]>/
     <fmt>/<sha256(rid:modified_us pairs)[:16]>/`."""
-    backend, storage_client = _engine_with_storage(
-        _attempt("dumps/h/csv/rev/", "data.csv")
-    )
+    backend, storage_client = _engine_with_storage(_attempt("dumps/h/csv/rev/", "data.csv"))
     bucket_obj = storage_client.bucket.return_value
 
     sql = "SELECT * FROM res1"
@@ -173,26 +167,20 @@ def test_cache_prefix_matches_qhash_and_table_rev_scheme() -> None:
 
 
 def test_cache_prefix_stable_across_identical_calls() -> None:
-    backend, storage_client = _engine_with_storage(
-        _attempt("dumps/h/csv/rev/", "data.csv")
-    )
+    backend, storage_client = _engine_with_storage(_attempt("dumps/h/csv/rev/", "data.csv"))
     bucket_obj = storage_client.bucket.return_value
 
     _run(backend)
     _run(backend)
 
-    prefixes = {
-        c.kwargs["prefix"] for c in bucket_obj.list_blobs.call_args_list
-    }
+    prefixes = {c.kwargs["prefix"] for c in bucket_obj.list_blobs.call_args_list}
     assert len(prefixes) == 1
 
 
 def test_rev_changes_when_any_referenced_table_changes() -> None:
     """Multi-table SQL: bumping either table's `modified` produces a new
     revision prefix; the other table alone can't satisfy the cache."""
-    backend, storage_client = _engine_with_storage(
-        _attempt("dumps/h/csv/rev/", "data.csv")
-    )
+    backend, storage_client = _engine_with_storage(_attempt("dumps/h/csv/rev/", "data.csv"))
     bucket_obj = storage_client.bucket.return_value
 
     t1, t2 = MagicMock(), MagicMock()
@@ -223,7 +211,10 @@ def test_non_deterministic_sql_bypasses_cache() -> None:
     # No pre-check list per run — only post-export refresh + GC sweep.
     bucket_obj.list_blobs.side_effect = [[b1], [b1], [b2], [b2]]
     backend.client.query.side_effect = [
-        _dry_job(), _export_job(), _dry_job(), _export_job(),
+        _dry_job(),
+        _export_job(),
+        _dry_job(),
+        _export_job(),
     ]
 
     _run(backend, function_names=["now"])
@@ -245,7 +236,10 @@ def test_table_modified_none_is_non_cacheable() -> None:
     b2 = _blob("y2", "https://two")
     bucket_obj.list_blobs.side_effect = [[b1], [b1], [b2], [b2]]
     backend.client.query.side_effect = [
-        _dry_job(), _export_job(), _dry_job(), _export_job(),
+        _dry_job(),
+        _export_job(),
+        _dry_job(),
+        _export_job(),
     ]
 
     _run(backend)
@@ -275,18 +269,18 @@ def test_gc_spares_young_attempts_and_reaps_old_revisions() -> None:
     young_sibling = _blob(f"{prefix}att2/part_000.parquet", age_hours=0.0)
 
     bucket_obj.list_blobs.side_effect = [
-        [],                                  # pre-check (cache miss)
-        [current],                           # post-export refresh
-        [current, old_rev, young_sibling],   # GC sweep
+        [],  # pre-check (cache miss)
+        [current],  # post-export refresh
+        [current, old_rev, young_sibling],  # GC sweep
     ]
     backend.client.query.side_effect = [_dry_job(), _export_job()]
 
     urls = _run(backend, sql=sql, fmt="parquet")
 
     assert urls == ["https://fresh"]
-    assert current.delete.call_count == 0        # our own attempt
+    assert current.delete.call_count == 0  # our own attempt
     assert young_sibling.delete.call_count == 0  # may still be exporting
-    assert old_rev.delete.call_count == 1        # past the URL expiry
+    assert old_rev.delete.call_count == 1  # past the URL expiry
 
 
 def test_gc_stale_blobs_no_age_gate_deletes_all_non_current() -> None:
@@ -300,7 +294,9 @@ def test_gc_stale_blobs_no_age_gate_deletes_all_non_current() -> None:
     rw_gcs.list_blobs.return_value = [current, old, young]
 
     deleted = _delete_old_cache(
-        rw_gcs, sweep_prefix="dumps/h/csv/", keep_prefix=keep,
+        rw_gcs,
+        sweep_prefix="dumps/h/csv/",
+        keep_prefix=keep,
         min_age=None,
     )
 
@@ -322,7 +318,9 @@ def test_gc_stale_blobs_age_gate_keeps_young() -> None:
     rw_gcs.list_blobs.return_value = [current, old, young]
 
     deleted = _delete_old_cache(
-        rw_gcs, sweep_prefix="dumps/h/csv/", keep_prefix=keep,
+        rw_gcs,
+        sweep_prefix="dumps/h/csv/",
+        keep_prefix=keep,
         min_age=dt.timedelta(hours=1),
     )
 
@@ -435,9 +433,7 @@ def test_csv_export_iso_casts_timestamps_from_dry_run_schema() -> None:
     assert "format='CSV'" in export_sql
     # header=false: the single header is composed in as a separate member.
     assert "header=false" in export_sql
-    assert (
-        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `ts`, 'UTC')" in export_sql
-    )
+    assert "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `ts`, 'UTC')" in export_sql
 
 
 def test_multi_shard_parquet_returns_every_url() -> None:
@@ -491,11 +487,11 @@ def test_csv_multishard_composes_header_and_shards_into_one_url() -> None:
 
     composite = next(n for n in made if n.endswith("data.csv"))
     header = next(n for n in made if n.endswith("header.csv"))
-    assert urls == [f"url:{composite}"]                 # single URL
+    assert urls == [f"url:{composite}"]  # single URL
     made[header].upload_from_string.assert_called_once()  # header written
     made[composite].compose.assert_called_once()
     sources = made[composite].compose.call_args.args[0]
-    assert made[header] is sources[0]                   # header sorts first
+    assert made[header] is sources[0]  # header sorts first
     assert shard0 in sources and shard1 in sources
     assert shard0.delete.called and shard1.delete.called  # parts removed
 
@@ -576,11 +572,11 @@ def test_attempt_without_success_is_invisible() -> None:
 
     urls = _run(backend, fmt="csv")
 
-    assert backend.client.query.call_count == 2          # exported its own
+    assert backend.client.query.call_count == 2  # exported its own
     composite = next(n for n in made if n.endswith("data.csv"))
     assert urls == [f"url:{composite}"]
     for b in inflight:
-        assert b.delete.call_count == 0                  # left alone
+        assert b.delete.call_count == 0  # left alone
 
 
 def test_published_attempt_wins_over_an_inflight_one() -> None:
@@ -618,8 +614,9 @@ def test_success_marker_is_never_composed_or_signed() -> None:
     sources = composite.compose.call_args.args[0]
     assert not any("_SUCCESS" in getattr(s, "name", "") for s in sources)
     assert not any("_SUCCESS" in u for u in urls)
-    made[next(n for n in made if n.endswith("_SUCCESS"))]\
-        .upload_from_string.assert_called_once_with(b"")
+    made[
+        next(n for n in made if n.endswith("_SUCCESS"))
+    ].upload_from_string.assert_called_once_with(b"")
 
 
 def test_compose_deletes_shards_and_header_but_not_the_marker() -> None:
@@ -679,8 +676,8 @@ def test_response_does_not_wait_for_shard_deletion() -> None:
 
     urls, pending = asyncio.run(go())
 
-    assert urls                       # served without waiting
-    assert pending                    # …while cleanup was still running
+    assert urls  # served without waiting
+    assert pending  # …while cleanup was still running
     for shard in shards:
         assert shard.delete.call_count == 1
 
@@ -689,12 +686,14 @@ def test_leftover_shards_are_not_served_beside_the_composite() -> None:
     """A published attempt still holds its pre-compose shards until the
     background delete runs; only the composed object is handed out."""
     base = "dumps/h/csv/rev/att1/"
-    backend, _ = _engine_with_storage([
-        _blob(f"{base}data.csv", "https://composed"),
-        _blob(f"{base}part_000.csv", "https://part0"),
-        _blob(f"{base}header.csv", "https://header"),
-        _blob(f"{base}_SUCCESS"),
-    ])
+    backend, _ = _engine_with_storage(
+        [
+            _blob(f"{base}data.csv", "https://composed"),
+            _blob(f"{base}part_000.csv", "https://part0"),
+            _blob(f"{base}header.csv", "https://header"),
+            _blob(f"{base}_SUCCESS"),
+        ]
+    )
 
     urls = _run(backend)
 
@@ -716,10 +715,10 @@ def test_legacy_multishard_csv_hit_is_rebuilt_to_composite() -> None:
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value
     bucket_obj.list_blobs.side_effect = [
-        legacy,     # pre-check (ro): invalid hit (no composite)
-        legacy,     # re-list (rw) for the clear
-        [fresh],    # post-export refresh
-        [],         # GC sweep
+        legacy,  # pre-check (ro): invalid hit (no composite)
+        legacy,  # re-list (rw) for the clear
+        [fresh],  # post-export refresh
+        [],  # GC sweep
     ]
     backend.client.query.side_effect = [_dry_job(), _export_job()]
     factory, made = _distinct_blob_factory()
@@ -728,10 +727,10 @@ def test_legacy_multishard_csv_hit_is_rebuilt_to_composite() -> None:
     urls = _run(backend, fmt="csv")
 
     for b in legacy:
-        assert b.delete.called            # stale cache cleared
-    assert backend.client.query.call_count == 2   # re-exported
+        assert b.delete.called  # stale cache cleared
+    assert backend.client.query.call_count == 2  # re-exported
     composite = next(n for n in made if n.endswith("data.csv"))
-    assert urls == [f"url:{composite}"]   # single URL again
+    assert urls == [f"url:{composite}"]  # single URL again
 
 
 def test_lone_raw_csv_shard_hit_is_rebuilt() -> None:
@@ -757,9 +756,7 @@ def test_lone_raw_csv_shard_hit_is_rebuilt() -> None:
 def test_ndjson_single_shard_hit_is_valid() -> None:
     """ndjson needs no header member, so a published single shard is a
     perfectly good hit — served directly, no `data.json`."""
-    backend, _ = _engine_with_storage(
-        _attempt("dumps/h/ndjson/rev/", "part_000.json")
-    )
+    backend, _ = _engine_with_storage(_attempt("dumps/h/ndjson/rev/", "part_000.json"))
 
     urls = _run(backend, fmt="ndjson")
 
@@ -798,9 +795,14 @@ def test_ndjson_multishard_hit_is_rebuilt() -> None:
 
 def test_placeholder_mode_returns_empty_list() -> None:
     backend = BigQueryBackend(mode="ro")
-    urls = asyncio.run(backend.dump_sql(
-        "SELECT 1", "csv", resource_ids=[], function_names=[],
-    ))
+    urls = asyncio.run(
+        backend.dump_sql(
+            "SELECT 1",
+            "csv",
+            resource_ids=[],
+            function_names=[],
+        )
+    )
     assert urls == []
 
 
@@ -808,9 +810,14 @@ def test_non_ro_mode_rejected() -> None:
     backend = BigQueryBackend(mode="rw")
     backend.client = MagicMock()
     with pytest.raises(ServerError, match="read-only"):
-        asyncio.run(backend.dump_sql(
-            "SELECT 1", "csv", resource_ids=[], function_names=[],
-        ))
+        asyncio.run(
+            backend.dump_sql(
+                "SELECT 1",
+                "csv",
+                resource_ids=[],
+                function_names=[],
+            )
+        )
 
 
 def test_bucket_unset_raises_server_error() -> None:
@@ -819,9 +826,14 @@ def test_bucket_unset_raises_server_error() -> None:
     backend.config = MagicMock()
     backend.config.BIGQUERY_EXPORT_BUCKET = ""
     with pytest.raises(ServerError, match="BIGQUERY_EXPORT_BUCKET"):
-        asyncio.run(backend.dump_sql(
-            "SELECT 1", "csv", resource_ids=[], function_names=[],
-        ))
+        asyncio.run(
+            backend.dump_sql(
+                "SELECT 1",
+                "csv",
+                resource_ids=[],
+                function_names=[],
+            )
+        )
 
 
 def test_missing_table_raises_not_found() -> None:
@@ -907,12 +919,14 @@ def _patch_dump_sql(urls_or_exc: list[str] | Exception):
         resource_ids: list[str],
         function_names: list[str],
     ) -> list[str]:
-        calls.append({
-            "sql": sql,
-            "fmt": fmt,
-            "resource_ids": resource_ids,
-            "function_names": function_names,
-        })
+        calls.append(
+            {
+                "sql": sql,
+                "fmt": fmt,
+                "resource_ids": resource_ids,
+                "function_names": function_names,
+            }
+        )
         if isinstance(urls_or_exc, Exception):
             raise urls_or_exc
         return urls_or_exc
@@ -921,7 +935,8 @@ def _patch_dump_sql(urls_or_exc: list[str] | Exception):
 
 
 def test_forwards_sql_and_names_verbatim(
-    client: TestClient, fake_ckan: FakeCKAN,
+    client: TestClient,
+    fake_ckan: FakeCKAN,
 ) -> None:
     """The engine receives the SQL exactly as sent (LIMIT intact) plus
     the schema-parsed table / function names."""
@@ -934,12 +949,14 @@ def test_forwards_sql_and_names_verbatim(
             follow_redirects=False,
         )
     assert response.status_code == 302
-    assert calls == [{
-        "sql": sql,
-        "fmt": "ndjson",
-        "resource_ids": ["balancing_auction_results_2025"],
-        "function_names": ["count"],
-    }]
+    assert calls == [
+        {
+            "sql": sql,
+            "fmt": "ndjson",
+            "resource_ids": ["balancing_auction_results_2025"],
+            "function_names": ["count"],
+        }
+    ]
 
 
 def test_format_defaults_to_csv(client: TestClient) -> None:
@@ -981,9 +998,12 @@ def test_limit_above_search_cap_allowed(client: TestClient) -> None:
 
 
 def test_offset_without_limit_rejected(client: TestClient) -> None:
-    response = client.get(DUMP_SQL_URL, params={
-        "sql": "SELECT 1 OFFSET 10",
-    })
+    response = client.get(
+        DUMP_SQL_URL,
+        params={
+            "sql": "SELECT 1 OFFSET 10",
+        },
+    )
     assert response.status_code == 400
     body = response.json()
     assert body["error"]["__type"] == "Validation Error"
@@ -991,9 +1011,13 @@ def test_offset_without_limit_rejected(client: TestClient) -> None:
 
 
 def test_bogus_format_rejected(client: TestClient) -> None:
-    response = client.get(DUMP_SQL_URL, params={
-        "sql": "SELECT 1 LIMIT 5", "format": "xml",
-    })
+    response = client.get(
+        DUMP_SQL_URL,
+        params={
+            "sql": "SELECT 1 LIMIT 5",
+            "format": "xml",
+        },
+    )
     assert response.status_code == 400
     assert response.json()["error"]["__type"] == "Validation Error"
 
@@ -1035,16 +1059,17 @@ def test_multi_file_parquet_streams_one_zip(client: TestClient) -> None:
 
     patcher, _ = _patch_dump_sql(list(parts))
     with patcher:
-        response = client.get(DUMP_SQL_URL, params={
-            "sql": "SELECT 1 LIMIT 5", "format": "parquet",
-        })
+        response = client.get(
+            DUMP_SQL_URL,
+            params={
+                "sql": "SELECT 1 LIMIT 5",
+                "format": "parquet",
+            },
+        )
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/zip"
-    assert (
-        response.headers["content-disposition"]
-        == 'attachment; filename="query.zip"'
-    )
+    assert response.headers["content-disposition"] == 'attachment; filename="query.zip"'
 
     archive = zipfile.ZipFile(io.BytesIO(response.content))
     assert archive.testzip() is None
@@ -1057,9 +1082,13 @@ def test_payload_too_large_error_maps_to_413(client: TestClient) -> None:
         PayloadTooLargeError("exported as multiple parquet shards"),
     )
     with patcher:
-        response = client.get(DUMP_SQL_URL, params={
-            "sql": "SELECT 1 LIMIT 5", "format": "parquet",
-        })
+        response = client.get(
+            DUMP_SQL_URL,
+            params={
+                "sql": "SELECT 1 LIMIT 5",
+                "format": "parquet",
+            },
+        )
     assert response.status_code == 413
     assert response.json()["error"]["__type"] == "Payload Too Large"
 
@@ -1069,34 +1098,46 @@ def test_disallowed_function_rejected_before_engine(
 ) -> None:
     """The function allow-list applies here too — the service raises
     before any engine/export work."""
-    response = client.get(DUMP_SQL_URL, params={
-        "sql": "SELECT pg_read_file('/etc/passwd') LIMIT 1",
-    })
+    response = client.get(
+        DUMP_SQL_URL,
+        params={
+            "sql": "SELECT pg_read_file('/etc/passwd') LIMIT 1",
+        },
+    )
     assert response.status_code == 400
     assert "pg_read_file" in response.json()["error"]["message"].lower()
 
 
 def test_unknown_table_returns_404(
-    client: TestClient, fake_ckan: FakeCKAN,
+    client: TestClient,
+    fake_ckan: FakeCKAN,
 ) -> None:
-    response = client.get(DUMP_SQL_URL, params={
-        "sql": 'SELECT * FROM "does-not-exist" LIMIT 10',
-    })
+    response = client.get(
+        DUMP_SQL_URL,
+        params={
+            "sql": 'SELECT * FROM "does-not-exist" LIMIT 10',
+        },
+    )
     assert response.status_code == 404
 
 
 def test_denied_key_returns_403(
-    client: TestClient, fake_ckan: FakeCKAN,
+    client: TestClient,
+    fake_ckan: FakeCKAN,
 ) -> None:
     fake_ckan.deny("test-token")
-    response = client.get(DUMP_SQL_URL, params={
-        "sql": 'SELECT * FROM "balancing_auction_results_2025" LIMIT 10',
-    })
+    response = client.get(
+        DUMP_SQL_URL,
+        params={
+            "sql": 'SELECT * FROM "balancing_auction_results_2025" LIMIT 10',
+        },
+    )
     assert response.status_code == 403
 
 
 def test_join_authorizes_each_table(
-    client: TestClient, fake_ckan: FakeCKAN,
+    client: TestClient,
+    fake_ckan: FakeCKAN,
 ) -> None:
     fake_ckan.add_resource("other_table", package_id="pkg-balancing-2025")
     before = fake_ckan.authorize_calls
@@ -1119,8 +1160,11 @@ def test_join_authorizes_each_table(
 def test_unconfigured_engine_returns_500(client: TestClient) -> None:
     """Placeholder engine (no BQ creds in the test env) exports nothing;
     the endpoint refuses to serve an empty file and 500s explicitly."""
-    response = client.get(DUMP_SQL_URL, params={
-        "sql": "SELECT 1 LIMIT 5",
-    })
+    response = client.get(
+        DUMP_SQL_URL,
+        params={
+            "sql": "SELECT 1 LIMIT 5",
+        },
+    )
     assert response.status_code == 500
     assert "not configured" in response.json()["error"]["message"]

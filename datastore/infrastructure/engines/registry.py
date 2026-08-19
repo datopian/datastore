@@ -24,9 +24,7 @@ _ENGINES_DIR = Path(__file__).parent
 
 
 @functools.lru_cache(maxsize=8)
-def get_allowed_sql_functions(
-    engine: str, *, override_path: str | None = None
-) -> frozenset[str]:
+def get_allowed_sql_functions(engine: str, *, override_path: str | None = None) -> frozenset[str]:
     """Per-engine `datastore_search_sql` function allow-list.
 
     Default path: `<engine>/allowed_functions.txt` inside this directory
@@ -48,8 +46,8 @@ def get_allowed_sql_functions(
 
     Cached per (engine, override_path) pair so file I/O happens once.
     """
-    path = Path(override_path) if override_path else (
-        _ENGINES_DIR / engine / "allowed_functions.txt"
+    path = (
+        Path(override_path) if override_path else (_ENGINES_DIR / engine / "allowed_functions.txt")
     )
     if not path.exists():
         return frozenset()
@@ -62,8 +60,8 @@ def get_allowed_sql_functions(
     return frozenset(names)
 
 
-
 _INSTANCES: dict[tuple[str, Mode], DatastoreBackend] = {}
+
 
 def _build_engine(
     engine: str,
@@ -81,19 +79,13 @@ def _build_engine(
     a new backend is a folder drop with a `Backend = …` re-export.
     """
     try:
-        module = importlib.import_module(
-            f"datastore.infrastructure.engines.{engine}"
-        )
+        module = importlib.import_module(f"datastore.infrastructure.engines.{engine}")
     except ImportError as e:
-        raise NotImplementedError(
-            f"engine package not available: {engine!r}"
-        ) from e
+        raise NotImplementedError(f"engine package not available: {engine!r}") from e
 
     backend_cls = getattr(module, "Backend", None)
     if backend_cls is None:
-        raise NotImplementedError(
-            f"engine {engine!r} has no `Backend` export — engine packages "
-        )
+        raise NotImplementedError(f"engine {engine!r} has no `Backend` export — engine packages ")
     backend = backend_cls(context=context, config=config, mode=mode)
     backend.initialize()
     return backend
@@ -138,7 +130,5 @@ def get_datastore_engine(
     engine = context.config.DATASTORE_ENGINE
     key = (engine, mode)
     if key not in _INSTANCES:
-        _INSTANCES[key] = _build_engine(
-            engine, mode, config=context.config, context=context
-        )
+        _INSTANCES[key] = _build_engine(engine, mode, config=context.config, context=context)
     return _INSTANCES[key]

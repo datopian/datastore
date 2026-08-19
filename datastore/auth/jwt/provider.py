@@ -28,15 +28,11 @@ class JWTAuthProvider:
         self._issuer = config.JWT_ISSUER or None
         if algo.startswith("HS"):
             if not config.JWT_SECRET:
-                raise ValueError(
-                    f"JWT_SECRET required when JWT_ALGORITHM={algo}"
-                )
+                raise ValueError(f"JWT_SECRET required when JWT_ALGORITHM={algo}")
             self._key: str = config.JWT_SECRET
         else:
             if not config.JWT_PUBLIC_KEY:
-                raise ValueError(
-                    f"JWT_PUBLIC_KEY required when JWT_ALGORITHM={algo}"
-                )
+                raise ValueError(f"JWT_PUBLIC_KEY required when JWT_ALGORITHM={algo}")
             self._key = config.JWT_PUBLIC_KEY
 
     async def authorize(

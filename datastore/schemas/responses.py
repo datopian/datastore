@@ -137,8 +137,7 @@ class DatastoreDeleteResponse(ResponseModel):
 
 
 class DatastoreSearchResponse(ResponseModel):
-    """Response for `GET /api/3/datastore_search` 
-    """
+    """Response for `GET /api/3/datastore_search`"""
 
     class Result(BaseModel):
         # `_links` starts with an underscore, which pydantic treats as a

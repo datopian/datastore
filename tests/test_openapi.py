@@ -23,9 +23,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 
-def _build_schema(
-    monkeypatch: pytest.MonkeyPatch, auth_type: str
-) -> dict[str, Any]:
+def _build_schema(monkeypatch: pytest.MonkeyPatch, auth_type: str) -> dict[str, Any]:
     monkeypatch.setenv("AUTH_TYPE", auth_type)
     get_config.cache_clear()
     return create_app().openapi()
@@ -47,6 +45,7 @@ def _operations(schema: dict[str, Any]) -> list[dict[str, Any]]:
 
 # 1. ckan ---------------------------------------------------------------------
 
+
 def test_ckan_scheme_describes_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -67,13 +66,15 @@ def test_ckan_operations_reference_the_scheme(
     schema = _build_schema(monkeypatch, "ckan")
 
     secured = [
-        op for op in _operations(schema)
+        op
+        for op in _operations(schema)
         if any("Authorization" in req for req in op.get("security", []))
     ]
     assert secured, "no operation references the Authorization scheme"
 
 
 # 2. jwt ----------------------------------------------------------------------
+
 
 def test_jwt_scheme_describes_bearer_token(
     monkeypatch: pytest.MonkeyPatch,
@@ -88,6 +89,7 @@ def test_jwt_scheme_describes_bearer_token(
 
 
 # 3. anonymous ----------------------------------------------------------------
+
 
 def test_anonymous_has_no_security_scheme(
     monkeypatch: pytest.MonkeyPatch,
@@ -109,6 +111,7 @@ def test_anonymous_operations_carry_no_security(
 
 
 # 3b. description tracks AUTH_TYPE ------------------------------------------
+
 
 @pytest.mark.parametrize(
     ("auth_type", "expected", "forbidden"),
@@ -177,6 +180,7 @@ def test_description_survives_literal_braces(
 
 # 3c. contract version, not build version -----------------------------------
 
+
 def test_info_version_is_the_api_contract_version(client: TestClient) -> None:
     """`info.version` describes the API contract, not the installed build.
 
@@ -195,13 +199,13 @@ def test_info_version_matches_the_url_prefix(client: TestClient) -> None:
     schema = client.get(f"{API_PREFIX}/openapi.json").json()
 
     documented = schema["info"]["version"]
-    assert any(
-        path.startswith(f"/datastore/api/{documented}/")
-        for path in schema["paths"]
-    ), f"no route served under the documented version {documented!r}"
+    assert any(path.startswith(f"/datastore/api/{documented}/") for path in schema["paths"]), (
+        f"no route served under the documented version {documented!r}"
+    )
 
 
 # 3d. `help` deep-links into the docs ---------------------------------------
+
 
 def test_help_deep_links_to_the_operation(client: TestClient) -> None:
     """`help` points at the endpoint's own entry in Swagger, not back at the
@@ -253,6 +257,7 @@ def test_operation_ids_are_the_handler_names(client: TestClient) -> None:
 
 # 3e. schema examples are absolute and consistent ---------------------------
 
+
 def test_error_example_url_matches_the_route_prefix(client: TestClient) -> None:
     """The example `help` is built from `API_PREFIX`, so it can't drift out of
     sync with the paths the service actually serves."""
@@ -260,9 +265,7 @@ def test_error_example_url_matches_the_route_prefix(client: TestClient) -> None:
 
     example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
 
-    assert example["help"] == (
-        f"{DEFAULT_API_URL}{API_PREFIX}/docs#/Datastore/datastore_search"
-    )
+    assert example["help"] == (f"{DEFAULT_API_URL}{API_PREFIX}/docs#/Datastore/datastore_search")
 
 
 def test_api_url_sets_the_example_host(
@@ -340,6 +343,7 @@ def test_live_help_is_derived_from_the_request(client: TestClient) -> None:
 
 # 4. Swagger UI page ------------------------------------------------------------
 
+
 def test_docs_page_renders_swagger_ui(client: TestClient) -> None:
     response = client.get("/datastore/api/v2/docs")
 
@@ -369,8 +373,7 @@ def test_docs_page_widens_authorize_input() -> None:
     """The Authorize modal's token input is ~230px stock — too short to see
     a pasted JWT/API key. The theme widens the modal and the input."""
     css = (
-        Path(__file__).resolve().parent.parent
-        / "datastore/api/static/theme/theme.css"
+        Path(__file__).resolve().parent.parent / "datastore/api/static/theme/theme.css"
     ).read_text()
 
     assert "max-width: 900px" in css

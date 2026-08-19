@@ -87,12 +87,14 @@ def test_authorize_binds_credential_and_maps_response_to_decision() -> None:
     ckan = FakeCKAN()
     provider = _provider(ckan=ckan)
 
-    decision = asyncio.run(provider.authorize(
-        credential="token-xyz",
-        resource_id="res-1",
-        package_id=None,
-        permission="read",
-    ))
+    decision = asyncio.run(
+        provider.authorize(
+            credential="token-xyz",
+            resource_id="res-1",
+            package_id=None,
+            permission="read",
+        )
+    )
 
     assert ckan.calls == [
         {
@@ -116,9 +118,14 @@ def test_authorize_propagates_ckan_authorization_error() -> None:
     provider = _provider(ckan=ckan)
 
     with pytest.raises(AuthorizationError, match="denied"):
-        asyncio.run(provider.authorize(
-            credential="t", resource_id="r", package_id=None, permission="read",
-        ))
+        asyncio.run(
+            provider.authorize(
+                credential="t",
+                resource_id="r",
+                package_id=None,
+                permission="read",
+            )
+        )
 
 
 def test_authorize_handles_missing_metadata_fields() -> None:
@@ -127,9 +134,14 @@ def test_authorize_handles_missing_metadata_fields() -> None:
     ckan = FakeCKAN(result={"package": {"id": "pkg-1"}})
     provider = _provider(ckan=ckan)
 
-    decision = asyncio.run(provider.authorize(
-        credential="t", resource_id=None, package_id="pkg-1", permission="create",
-    ))
+    decision = asyncio.run(
+        provider.authorize(
+            credential="t",
+            resource_id=None,
+            package_id="pkg-1",
+            permission="create",
+        )
+    )
     assert decision.package == {"id": "pkg-1"}
     assert decision.resource is None
 
@@ -142,12 +154,22 @@ def test_cache_hit_skips_ckan_on_second_call() -> None:
     cache = InMemoryCache()
     provider = _provider(ckan=ckan, cache=cache)
 
-    asyncio.run(provider.authorize(
-        credential="tok", resource_id="res-1", package_id=None, permission="read",
-    ))
-    asyncio.run(provider.authorize(
-        credential="tok", resource_id="res-1", package_id=None, permission="read",
-    ))
+    asyncio.run(
+        provider.authorize(
+            credential="tok",
+            resource_id="res-1",
+            package_id=None,
+            permission="read",
+        )
+    )
+    asyncio.run(
+        provider.authorize(
+            credential="tok",
+            resource_id="res-1",
+            package_id=None,
+            permission="read",
+        )
+    )
 
     # CKAN called exactly once across both authorizations.
     assert len(ckan.calls) == 1
@@ -158,14 +180,24 @@ def test_cache_key_uses_anon_marker_when_no_credential() -> None:
     cache = InMemoryCache()
     provider = _provider(ckan=ckan, cache=cache)
 
-    asyncio.run(provider.authorize(
-        credential=None, resource_id="res-1", package_id=None, permission="read",
-    ))
+    asyncio.run(
+        provider.authorize(
+            credential=None,
+            resource_id="res-1",
+            package_id=None,
+            permission="read",
+        )
+    )
 
     # Verify by hitting again with the same shape — second call must be cached.
-    asyncio.run(provider.authorize(
-        credential=None, resource_id="res-1", package_id=None, permission="read",
-    ))
+    asyncio.run(
+        provider.authorize(
+            credential=None,
+            resource_id="res-1",
+            package_id=None,
+            permission="read",
+        )
+    )
     assert len(ckan.calls) == 1
 
 
@@ -174,12 +206,22 @@ def test_separate_credentials_get_separate_cache_entries() -> None:
     cache = InMemoryCache()
     provider = _provider(ckan=ckan, cache=cache)
 
-    asyncio.run(provider.authorize(
-        credential="user-a", resource_id="r", package_id=None, permission="read",
-    ))
-    asyncio.run(provider.authorize(
-        credential="user-b", resource_id="r", package_id=None, permission="read",
-    ))
+    asyncio.run(
+        provider.authorize(
+            credential="user-a",
+            resource_id="r",
+            package_id=None,
+            permission="read",
+        )
+    )
+    asyncio.run(
+        provider.authorize(
+            credential="user-b",
+            resource_id="r",
+            package_id=None,
+            permission="read",
+        )
+    )
 
     # Two distinct cache entries → two CKAN calls.
     assert len(ckan.calls) == 2
@@ -191,12 +233,22 @@ def test_package_scoped_call_uses_pkg_cache_namespace() -> None:
     provider = _provider(ckan=ckan, cache=cache)
 
     # res-scoped and pkg-scoped calls share neither key nor cache entry.
-    asyncio.run(provider.authorize(
-        credential="tok", resource_id="x", package_id=None, permission="read",
-    ))
-    asyncio.run(provider.authorize(
-        credential="tok", resource_id=None, package_id="x", permission="create",
-    ))
+    asyncio.run(
+        provider.authorize(
+            credential="tok",
+            resource_id="x",
+            package_id=None,
+            permission="read",
+        )
+    )
+    asyncio.run(
+        provider.authorize(
+            credential="tok",
+            resource_id=None,
+            package_id="x",
+            permission="create",
+        )
+    )
     assert len(ckan.calls) == 2
 
 
@@ -205,9 +257,14 @@ def test_cache_failure_falls_through_to_ckan() -> None:
     provider = _provider(ckan=ckan, cache=ExplodingCache())
 
     # Fail-open: a broken cache must not break the request.
-    decision = asyncio.run(provider.authorize(
-        credential="tok", resource_id="res-1", package_id=None, permission="read",
-    ))
+    decision = asyncio.run(
+        provider.authorize(
+            credential="tok",
+            resource_id="res-1",
+            package_id=None,
+            permission="read",
+        )
+    )
 
     assert decision.resource == {"id": "res-1", "package_id": "pkg-1"}
     assert len(ckan.calls) == 1
@@ -220,14 +277,17 @@ def test_malformed_cache_entry_falls_through_to_ckan() -> None:
     ckan = FakeCKAN()
     cache = InMemoryCache()
     provider = _provider(ckan=ckan, cache=cache)
-    cache_key = (
-        f"auth:ckan:{provider.key_id('tok')}:res:res-1:read"
-    )
+    cache_key = f"auth:ckan:{provider.key_id('tok')}:res:res-1:read"
     asyncio.run(cache.set(cache_key, orjson.dumps("not-a-dict"), 60))
 
-    decision = asyncio.run(provider.authorize(
-        credential="tok", resource_id="res-1", package_id=None, permission="read",
-    ))
+    decision = asyncio.run(
+        provider.authorize(
+            credential="tok",
+            resource_id="res-1",
+            package_id=None,
+            permission="read",
+        )
+    )
 
     # Fell back to CKAN and got the canned decision.
     assert decision.resource == {"id": "res-1", "package_id": "pkg-1"}
@@ -240,10 +300,14 @@ def test_subject_in_cached_decision_is_hashed_not_raw_credential() -> None:
     ckan = FakeCKAN()
     provider = _provider(ckan=ckan, cache=InMemoryCache())
 
-    decision = asyncio.run(provider.authorize(
-        credential="raw-api-key-do-not-leak",
-        resource_id="res-1", package_id=None, permission="read",
-    ))
+    decision = asyncio.run(
+        provider.authorize(
+            credential="raw-api-key-do-not-leak",
+            resource_id="res-1",
+            package_id=None,
+            permission="read",
+        )
+    )
 
     assert decision.subject is not None
     assert "raw-api-key-do-not-leak" not in decision.subject

@@ -25,19 +25,19 @@ if TYPE_CHECKING:
 # deliberately absent — filter equality against those is rejected (see
 # `build_search`). Anything else falls back to STRING.
 _PARAM_TYPE: dict[str, str] = {
-    "integer":  "INT64",
-    "number":   "FLOAT64",
-    "boolean":  "BOOL",
-    "string":   "STRING",
-    "date":     "DATE",
+    "integer": "INT64",
+    "number": "FLOAT64",
+    "boolean": "BOOL",
+    "string": "STRING",
+    "date": "DATE",
     "datetime": "TIMESTAMP",
-    "time":     "TIME",
-    "any":      "STRING",
+    "time": "TIME",
+    "any": "STRING",
 }
 
 # System columns are always available for projection / filter / sort.
 _SYSTEM_FIELD_DEFS: dict[str, dict] = {
-    "_id":         {"name": "_id",         "type": "integer"},
+    "_id": {"name": "_id", "type": "integer"},
     "_updated_at": {"name": "_updated_at", "type": "datetime"},
 }
 
@@ -93,16 +93,11 @@ def parse_sort(sort_str: str, allowed: set[str]) -> list[tuple[str, str]]:
                 "'<column>' or '<column> asc|desc'"
             )
         col = tokens[0]
-        direction = (tokens[1].upper() if len(tokens) == 2 else "ASC")
+        direction = tokens[1].upper() if len(tokens) == 2 else "ASC"
         if col not in allowed:
-            raise ValueError(
-                f"sort references unknown column {col!r}"
-            )
+            raise ValueError(f"sort references unknown column {col!r}")
         if direction not in ("ASC", "DESC"):
-            raise ValueError(
-                f"sort direction for {col!r} must be ASC or DESC, "
-                f"got {direction!r}"
-            )
+            raise ValueError(f"sort direction for {col!r} must be ASC or DESC, got {direction!r}")
         out.append((col, direction))
     return out
 
@@ -111,11 +106,7 @@ def project_schema(schema: dict, projected_cols: list[str]) -> dict:
     """Filter the table schema to just the projected columns, preserving
     order. System columns get synthesised entries when projected.
     """
-    by_name = {
-        f["name"]: f
-        for f in schema.get("fields", [])
-        if f.get("name")
-    }
+    by_name = {f["name"]: f for f in schema.get("fields", []) if f.get("name")}
     out_fields: list[dict] = []
     for col in projected_cols:
         if col in by_name:
@@ -130,12 +121,14 @@ def project_schema(schema: dict, projected_cols: list[str]) -> dict:
 
 def _make_param(name: str, fr_type: str, value: Any) -> "bigquery.ScalarQueryParameter":
     from google.cloud import bigquery
+
     bq_type = _PARAM_TYPE.get(fr_type, "STRING")
     return bigquery.ScalarQueryParameter(name, bq_type, value)
 
 
 def _make_array_param(name: str, fr_type: str, values: list[Any]) -> "bigquery.ArrayQueryParameter":
     from google.cloud import bigquery
+
     bq_type = _PARAM_TYPE.get(fr_type, "STRING")
     return bigquery.ArrayQueryParameter(name, bq_type, values)
 
@@ -165,9 +158,7 @@ def _build_where(
     if filters:
         for col, value in filters.items():
             if col not in type_map:
-                raise ValueError(
-                    f"filters references unknown column {col!r}"
-                )
+                raise ValueError(f"filters references unknown column {col!r}")
             ftype = type_map[col]
             if ftype in JSON_FRICTIONLESS_TYPES:
                 raise ValueError(
@@ -195,9 +186,7 @@ def _build_where(
     elif isinstance(q, dict):
         for col, term in q.items():
             if col not in type_map:
-                raise ValueError(
-                    f"q references unknown column {col!r}"
-                )
+                raise ValueError(f"q references unknown column {col!r}")
             name = f"f{len(params)}"
             params.append(_make_param(name, "string", str(term)))
             clauses.append(f"SEARCH(`{col}`, @{name})")
@@ -258,9 +247,7 @@ def build_search(
     else:
         for f in fields:
             if f not in all_cols:
-                raise ValueError(
-                    f"fields references unknown column {f!r}"
-                )
+                raise ValueError(f"fields references unknown column {f!r}")
         projected = list(fields)
     if not projected:
         raise ValueError("`fields` must select at least one column")
@@ -275,16 +262,16 @@ def build_search(
 
     params: list = []
     where = _build_where(
-        filters=filters, q=q, type_map=type_map,
-        table_alias="t", params=params,
+        filters=filters,
+        q=q,
+        type_map=type_map,
+        table_alias="t",
+        params=params,
     )
 
     parts: list[str] = []
     projection = ", ".join(_project_column(c, type_map) for c in projected)
-    parts.append(
-        f"SELECT {'DISTINCT ' if distinct else ''}{projection} "
-        f"FROM {table_ref} AS t"
-    )
+    parts.append(f"SELECT {'DISTINCT ' if distinct else ''}{projection} FROM {table_ref} AS t")
     if where:
         parts.append(f"WHERE {where}")
     if sort_pairs:
@@ -294,9 +281,7 @@ def build_search(
         # operate on the native TIMESTAMP, not the formatted string. (The
         # ISO format happens to sort lexicographically the same way, but
         # the explicit reference future-proofs us if the format changes.)
-        parts.append(
-            "ORDER BY " + ", ".join(f"t.`{c}` {d}" for c, d in sort_pairs)
-        )
+        parts.append("ORDER BY " + ", ".join(f"t.`{c}` {d}" for c, d in sort_pairs))
     parts.append(f"LIMIT {int(limit)} OFFSET {int(offset)}")
 
     sql = " ".join(parts)
@@ -332,15 +317,16 @@ def build_count(
     else:
         for f in fields:
             if f not in all_cols:
-                raise ValueError(
-                    f"fields references unknown column {f!r}"
-                )
+                raise ValueError(f"fields references unknown column {f!r}")
         projected = list(fields)
 
     params: list = []
     where = _build_where(
-        filters=filters, q=q, type_map=type_map,
-        table_alias="t", params=params,
+        filters=filters,
+        q=q,
+        type_map=type_map,
+        table_alias="t",
+        params=params,
     )
 
     # Same projection rewrite as `build_search` — datetime columns are
@@ -348,10 +334,7 @@ def build_count(
     # then dedupes on the formatted (second-precision) string, matching
     # what the user sees in the data response.
     projection = ", ".join(_project_column(c, type_map) for c in projected)
-    inner_parts = [
-        f"SELECT {'DISTINCT ' if distinct else ''}{projection} "
-        f"FROM {table_ref} AS t"
-    ]
+    inner_parts = [f"SELECT {'DISTINCT ' if distinct else ''}{projection} FROM {table_ref} AS t"]
     if where:
         inner_parts.append(f"WHERE {where}")
     inner = " ".join(inner_parts)

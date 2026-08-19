@@ -246,7 +246,8 @@ def test_denied_key_returns_403(client: TestClient, fake_ckan: FakeCKAN) -> None
 
 
 def test_anonymous_read_calls_ckan_and_succeeds(
-    client: TestClient, fake_ckan: FakeCKAN,
+    client: TestClient,
+    fake_ckan: FakeCKAN,
 ) -> None:
     """No Authorization header on a read → we still call CKAN's
     `datastore_authorize`. CKAN itself decides based on resource
@@ -392,9 +393,7 @@ def _install_mock_search(
     return consumed
 
 
-def test_objects_format_streams_rows(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_objects_format_streams_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     consumed = _install_mock_search(monkeypatch)
 
     response = client.get(SEARCH_URL, params=_params())
@@ -427,9 +426,7 @@ def test_lists_format_streams_positional_arrays(
     ]
 
 
-def test_csv_format_streams_data_rows(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_csv_format_streams_data_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """`records_format=csv` — JSON envelope, `records` is one CSV string of
     data rows only. Column names live on `result.fields` (no header in the
     records string)."""
@@ -440,14 +437,10 @@ def test_csv_format_streams_data_rows(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
-    assert body["result"]["records"] == (
-        "144,DCL,47.82\n" "145,DCH,51.1\n" "146,FFR,32.4\n"
-    )
+    assert body["result"]["records"] == ("144,DCL,47.82\n145,DCH,51.1\n146,FFR,32.4\n")
 
 
-def test_tsv_format_streams_data_rows(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_tsv_format_streams_data_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """`records_format=tsv` — JSON envelope, `records` is one TSV string of
     data rows only."""
     _install_mock_search(monkeypatch)
@@ -457,9 +450,7 @@ def test_tsv_format_streams_data_rows(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
-    assert body["result"]["records"] == (
-        "144\tDCL\t47.82\n" "145\tDCH\t51.1\n" "146\tFFR\t32.4\n"
-    )
+    assert body["result"]["records"] == ("144\tDCL\t47.82\n145\tDCH\t51.1\n146\tFFR\t32.4\n")
 
 
 def test_csv_quotes_values_with_special_chars(
@@ -489,9 +480,7 @@ def test_csv_quotes_values_with_special_chars(
     assert response.status_code == 200
     body = response.json()
     assert body["result"]["records"] == (
-        "plain,ordinary value\n"
-        '"with,comma","with""quote"\n'
-        '"with\nnewline",tab\there\n'
+        'plain,ordinary value\n"with,comma","with""quote"\n"with\nnewline",tab\there\n'
     )
 
 

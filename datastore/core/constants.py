@@ -143,19 +143,31 @@ FRICTIONLESS_TO_POSTGRES: dict[str, str] = {
 # (`duration`, `year`, `yearmonth`, …) are rejected at the request
 # boundary so storage layout stays predictable and engine type maps
 # don't need to grow ad-hoc.
-ALLOWED_FRICTIONLESS_TYPES: frozenset[str] = frozenset({
-    "integer", "number", "boolean", "string",
-    "date", "time", "datetime",
-    "object", "array",
-    "geojson", "geopoint",
-    "any",
-})
+ALLOWED_FRICTIONLESS_TYPES: frozenset[str] = frozenset(
+    {
+        "integer",
+        "number",
+        "boolean",
+        "string",
+        "date",
+        "time",
+        "datetime",
+        "object",
+        "array",
+        "geojson",
+        "geopoint",
+        "any",
+    }
+)
 
 
 # Field names reserved for engine-managed system columns. User schemas
 # that try to declare these must be rejected at the request boundary —
 # silently dropping them would leave the response advertising a column
 # the engine refuses to populate.
-RESERVED_SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset({
-    "_id", "_updated_at",
-})
+RESERVED_SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset(
+    {
+        "_id",
+        "_updated_at",
+    }
+)

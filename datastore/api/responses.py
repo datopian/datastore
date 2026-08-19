@@ -59,9 +59,7 @@ def _help(request: Request) -> str:
     return help_url(request, getattr(route, "name", None))
 
 
-def _deprecation_warnings(
-    payload: BaseModel, provided: Iterable[str] | None = None
-) -> list[str]:
+def _deprecation_warnings(payload: BaseModel, provided: Iterable[str] | None = None) -> list[str]:
     """Build body-level warnings from `Field(deprecated=...)` metadata.
 
     For every field the caller explicitly provided whose declaration

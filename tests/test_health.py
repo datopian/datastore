@@ -27,6 +27,7 @@ def _clean_engine_cache() -> Iterator[None]:
 
 # 1. No landing endpoint ----------------------------------------------------
 
+
 def test_root_is_not_routed(client: TestClient) -> None:
     """There is no welcome/landing endpoint — every route lives under the
     versioned API prefix."""
@@ -40,6 +41,7 @@ def test_action_prefix_root_is_not_routed(client: TestClient) -> None:
 
 # 2. /health ----------------------------------------------------------------
 
+
 def test_health_returns_ok(client: TestClient) -> None:
     """Liveness — always 200 while the process is up."""
     response = client.get("/datastore/api/health")
@@ -50,6 +52,7 @@ def test_health_returns_ok(client: TestClient) -> None:
 
 
 # 3. /ready -----------------------------------------------------------------
+
 
 def test_ready_503_when_engine_unhealthy(client: TestClient) -> None:
     """Default test env has `bigquery` engine + no BIGQUERY_PROJECT, so
@@ -84,9 +87,7 @@ def test_ready_200_when_engines_healthy(
     assert body["result"]["status"] == "ready"
 
 
-def test_ready_503_when_only_rw_fails(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_ready_503_when_only_rw_fails(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """If rw fails but ro passes, /ready still 503s — pod isn't really
     'ready' until both modes are reachable. Envelope stays in
     StatusResponse shape (`result.status` = "not_ready")."""
@@ -112,12 +113,11 @@ def test_ready_handles_engine_construction_error(
 ) -> None:
     """If building the engine raises (bad credentials, missing module),
     /ready returns 503 in StatusResponse shape instead of bubbling a 500."""
+
     def boom(*args: object, **kwargs: object) -> object:
         raise RuntimeError("engine construction failed")
 
-    monkeypatch.setattr(
-        "datastore.api.endpoints.health.get_datastore_engine", boom
-    )
+    monkeypatch.setattr("datastore.api.endpoints.health.get_datastore_engine", boom)
 
     response = client.get("/datastore/api/ready")
 

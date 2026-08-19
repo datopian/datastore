@@ -80,9 +80,7 @@ def test_can_widen_allows_supported_and_rejects_others() -> None:
 
 def test_data_table_ref_uses_backticks(mock_client: MagicMock) -> None:
     """Backticks let CKAN UUID-like ids parse without further escaping."""
-    assert _backend(mock_client)._data_table_ref("res-abc-123") == (
-        "`proj-1.ds-1.res-abc-123`"
-    )
+    assert _backend(mock_client)._data_table_ref("res-abc-123") == ("`proj-1.ds-1.res-abc-123`")
 
 
 def test_create_table_sql_emits_ddl_with_options(
@@ -98,7 +96,7 @@ def test_create_table_sql_emits_ddl_with_options(
         "res-1",
         {
             "fields": [
-                {"name": "id",    "type": "integer", "title": "ID"},
+                {"name": "id", "type": "integer", "title": "ID"},
                 {"name": "label", "type": "string"},
             ],
             "primaryKey": ["id"],
@@ -116,9 +114,7 @@ def test_create_table_sql_emits_ddl_with_options(
     # Table-level OPTIONS contains the full user schema, verbatim.
     assert '"title":"ID"' in sql
     assert '"primaryKey":["id"]' in sql
-    assert sql.endswith(
-        ', labels = [("datastore_managed", "true")])'
-    )
+    assert sql.endswith(', labels = [("datastore_managed", "true")])')
 
 
 def test_alter_adds_new_columns_widens_types_then_refreshes_options(
@@ -130,10 +126,12 @@ def test_alter_adds_new_columns_widens_types_then_refreshes_options(
     statement)."""
     backend = _backend(mock_client)
     old = {"fields": [{"name": "a", "type": "integer"}]}
-    new = {"fields": [
-        {"name": "a", "type": "number"},   # widen INT64 → FLOAT64
-        {"name": "b", "type": "string"},   # add
-    ]}
+    new = {
+        "fields": [
+            {"name": "a", "type": "number"},  # widen INT64 → FLOAT64
+            {"name": "b", "type": "string"},  # add
+        ]
+    }
 
     backend._alter_data_table("res-1", old, new)
 
@@ -143,9 +141,7 @@ def test_alter_adds_new_columns_widens_types_then_refreshes_options(
     assert "ALTER TABLE `proj-1.ds-1.res-1`" in col_sql
     assert "ADD COLUMN IF NOT EXISTS `b` STRING" in col_sql
     assert "ALTER COLUMN `a` SET DATA TYPE FLOAT64" in col_sql
-    assert opts_sql.startswith(
-        "ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS("
-    )
+    assert opts_sql.startswith("ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS(")
     # Refreshed table OPTIONS carries the new schema verbatim.
     assert '"name":"a","type":"number"' in opts_sql
     assert '"name":"b","type":"string"' in opts_sql
@@ -196,10 +192,12 @@ def test_insert_records_issues_dml_insert_with_rows_param(
     rows go straight to storage and subsequent MERGE/UPDATE can touch
     them immediately."""
     backend = _backend(mock_client)
-    schema = {"fields": [
-        {"name": "auction_id", "type": "integer"},
-        {"name": "bidder_metadata", "type": "object"},
-    ]}
+    schema = {
+        "fields": [
+            {"name": "auction_id", "type": "integer"},
+            {"name": "bidder_metadata", "type": "object"},
+        ]
+    }
     records = [
         {"auction_id": 144, "bidder_metadata": {"unit_id": "X"}},
         {"auction_id": 145, "bidder_metadata": {"unit_id": "Y"}},
@@ -221,10 +219,7 @@ def test_insert_records_issues_dml_insert_with_rows_param(
     # System columns auto-injected — `_id` from the inlined MAX subquery
     # + ROW_NUMBER(), `_updated_at` from CURRENT_TIMESTAMP().
     assert "`_id`, `_updated_at`" in sql
-    assert (
-        "(SELECT IFNULL(MAX(`_id`), 0) FROM `proj-1.ds-1.res-1`) "
-        "+ ROW_NUMBER() OVER ()"
-    ) in sql
+    assert ("(SELECT IFNULL(MAX(`_id`), 0) FROM `proj-1.ds-1.res-1`) + ROW_NUMBER() OVER ()") in sql
     assert "CURRENT_TIMESTAMP()" in sql
     # Only `@rows` is passed as a parameter now — no separate probe.
     params = {p.name: p.value for p in kwargs["job_config"].query_parameters}
@@ -306,14 +301,13 @@ def test_client_query_errors_surface_as_server_error_with_context(
 ) -> None:
     """Raw BQ exceptions on `client.query` are wrapped as ServerError
     carrying op + resource_id — never leak as `RuntimeError`."""
-    mock_client.query.return_value.result.side_effect = RuntimeError(
-        "Insufficient permissions"
-    )
+    mock_client.query.return_value.result.side_effect = RuntimeError("Insufficient permissions")
     backend = _backend(mock_client)
     with pytest.raises(ServerError) as exc:
         backend._run_query(
             "CREATE TABLE foo (x INT64)",
-            op="CREATE TABLE", resource_id="res-1",
+            op="CREATE TABLE",
+            resource_id="res-1",
         )
     assert "CREATE TABLE" in str(exc.value)
     assert "'res-1'" in str(exc.value)
@@ -438,16 +432,20 @@ def test_create_with_no_records_on_existing_resource_alters_columns(
     records still adds the columns — `_read_schema` runs unconditionally
     so the diff fires whether or not the caller had rows to insert."""
     backend = _backend(mock_client)
-    backend._read_schema = MagicMock(return_value={
-        "fields": [{"name": "a", "type": "integer"}],
-    })
+    backend._read_schema = MagicMock(
+        return_value={
+            "fields": [{"name": "a", "type": "integer"}],
+        }
+    )
 
     backend.create(
         "res-1",
-        schema={"fields": [
-            {"name": "a", "type": "integer"},
-            {"name": "b", "type": "string"},
-        ]},
+        schema={
+            "fields": [
+                {"name": "a", "type": "integer"},
+                {"name": "b", "type": "string"},
+            ]
+        },
         records=None,
         include_total=False,
     )
@@ -457,9 +455,7 @@ def test_create_with_no_records_on_existing_resource_alters_columns(
     col_sql = mock_client.query.call_args_list[0].args[0]
     opts_sql = mock_client.query.call_args_list[1].args[0]
     assert "ADD COLUMN IF NOT EXISTS `b` STRING" in col_sql
-    assert opts_sql.startswith(
-        "ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS("
-    )
+    assert opts_sql.startswith("ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS(")
 
 
 def test_create_propagates_insert_failure_as_server_error(
@@ -539,13 +535,8 @@ def test_merge_sql_renders_typed_extractors_on_match_update_no_match_insert() ->
     # NOT MATCHED inserts system columns + user columns. `_id` is
     # `(SELECT MAX(_id) FROM tbl) + S._rn` — inlined to avoid a
     # separate probe round-trip.
-    assert (
-        "WHEN NOT MATCHED THEN INSERT (`_id`, `_updated_at`, "
-        "`id`, `label`, `meta`)"
-    ) in sql
-    assert (
-        "(SELECT IFNULL(MAX(`_id`), 0) FROM `p.d.r`) + S._rn"
-    ) in sql
+    assert ("WHEN NOT MATCHED THEN INSERT (`_id`, `_updated_at`, `id`, `label`, `meta`)") in sql
+    assert ("(SELECT IFNULL(MAX(`_id`), 0) FROM `p.d.r`) + S._rn") in sql
 
 
 def test_update_sql_renders_dml_update_keyed_on_primary_key() -> None:
@@ -599,17 +590,14 @@ def test_insert_conflict_count_sql_counts_batch_and_existing_dups() -> None:
     assert "IFNULL(SUM(_n - 1), 0)" in sql
     # Existing-row collisions via a composite-key JOIN against the table.
     assert (
-        "JOIN `p.d.r` T ON d.`auction_id` = T.`auction_id` "
-        "AND d.`product_code` = T.`product_code`"
+        "JOIN `p.d.r` T ON d.`auction_id` = T.`auction_id` AND d.`product_code` = T.`product_code`"
     ) in sql
     assert sql.rstrip().endswith("AS n")
 
 
 def test_insert_conflict_count_sql_rejects_missing_primary_key() -> None:
     with pytest.raises(ValueError, match="primaryKey"):
-        insert_conflict_count_sql(
-            "`p.d.r`", {"fields": [{"name": "id", "type": "integer"}]}
-        )
+        insert_conflict_count_sql("`p.d.r`", {"fields": [{"name": "id", "type": "integer"}]})
 
 
 def test_insert_guarded_sql_wraps_check_and_insert_in_one_script() -> None:
@@ -646,17 +634,13 @@ def test_insert_guarded_sql_wraps_check_and_insert_in_one_script() -> None:
 
 def test_insert_guarded_sql_rejects_missing_primary_key() -> None:
     with pytest.raises(ValueError, match="primaryKey"):
-        insert_guarded_sql(
-            "`p.d.r`", {"fields": [{"name": "id", "type": "integer"}]}
-        )
+        insert_guarded_sql("`p.d.r`", {"fields": [{"name": "id", "type": "integer"}]})
 
 
 # --- upsert() dispatch ----------------------------------------------------
 
 
-def _backend_with_schema(
-    mock_client: MagicMock, schema: dict[str, Any]
-) -> BigQueryBackend:
+def _backend_with_schema(mock_client: MagicMock, schema: dict[str, Any]) -> BigQueryBackend:
     backend = _backend(mock_client)
     backend._read_schema = MagicMock(return_value=schema)
     return backend
@@ -721,8 +705,7 @@ def test_upsert_method_insert_rejects_pk_conflict(
     )
 
     with pytest.raises(ValidationError, match="method='upsert'"):
-        backend.upsert("res-1", [{"id": 1}], method="insert",
-                       include_total=False)
+        backend.upsert("res-1", [{"id": 1}], method="insert", include_total=False)
 
     assert mock_client.query.call_count == 1  # single guarded job
 
@@ -793,9 +776,7 @@ def test_upsert_undeclared_resource_raises_not_found(
     backend._read_schema = MagicMock(return_value=None)
 
     with pytest.raises(NotFoundError, match="not found"):
-        backend.upsert(
-            "ghost", [{"a": 1}], method="upsert", include_total=False
-        )
+        backend.upsert("ghost", [{"a": 1}], method="upsert", include_total=False)
 
 
 def test_upsert_missing_primary_key_raises_validation(
@@ -808,9 +789,7 @@ def test_upsert_missing_primary_key_raises_validation(
         {"fields": [{"name": "id", "type": "integer"}]},  # no primaryKey
     )
     with pytest.raises(ValidationError, match="primaryKey"):
-        backend.upsert(
-            "res-1", [{"id": 1}], method="upsert", include_total=False
-        )
+        backend.upsert("res-1", [{"id": 1}], method="upsert", include_total=False)
     mock_client.query.assert_not_called()
 
 
@@ -823,7 +802,10 @@ def test_upsert_unknown_method_raises_validation(
     )
     with pytest.raises(ValidationError, match="unknown upsert method"):
         backend.upsert(
-            "res-1", [], method="merge", include_total=False  # bogus
+            "res-1",
+            [],
+            method="merge",
+            include_total=False,  # bogus
         )
 
 
@@ -835,8 +817,7 @@ def test_upsert_translates_bigquery_scalar_subquery_error_to_duplicate_pk(
     backend translates that into a clear ValidationError naming the
     actual cause."""
     mock_client.query.return_value.result.side_effect = RuntimeError(
-        "400 Scalar subquery produced more than one element; reason: "
-        "invalidQuery, location: query"
+        "400 Scalar subquery produced more than one element; reason: invalidQuery, location: query"
     )
     backend = _backend_with_schema(
         mock_client,
@@ -936,7 +917,9 @@ def test_upsert_translates_bigquery_bad_int64_value_to_type_mismatch(
 
     with pytest.raises(ValidationError) as exc:
         backend.upsert(
-            "res-1", [{"id": "not-a-number"}], method="upsert",
+            "res-1",
+            [{"id": "not-a-number"}],
+            method="upsert",
             include_total=False,
         )
     assert "'not-a-number'" in str(exc.value)
@@ -961,7 +944,9 @@ def test_translate_invalid_timestamp_value(mock_client: MagicMock) -> None:
 
     with pytest.raises(ValidationError) as exc:
         backend.upsert(
-            "res-1", [{"id": 1, "ts": "2025-99-99"}], method="upsert",
+            "res-1",
+            [{"id": 1, "ts": "2025-99-99"}],
+            method="upsert",
             include_total=False,
         )
     assert "'2025-99-99'" in str(exc.value)
@@ -981,7 +966,10 @@ def test_translate_could_not_cast_literal_error(mock_client: MagicMock) -> None:
     )
     with pytest.raises(ValidationError) as exc:
         backend.upsert(
-            "res-1", [{"id": "jk"}], method="upsert", include_total=False,
+            "res-1",
+            [{"id": "jk"}],
+            method="upsert",
+            include_total=False,
         )
     msg = str(exc.value)
     assert "'jk'" in msg
@@ -1006,8 +994,10 @@ def test_translate_could_not_parse_as_type_error(
     )
     with pytest.raises(ValidationError) as exc:
         backend.upsert(
-            "res-1", [{"id": 1, "price": "abc"}],
-            method="upsert", include_total=False,
+            "res-1",
+            [{"id": 1, "price": "abc"}],
+            method="upsert",
+            include_total=False,
         )
     msg = str(exc.value)
     assert "'abc'" in msg
@@ -1018,8 +1008,7 @@ def test_translate_value_out_of_range(mock_client: MagicMock) -> None:
     """Numeric value that parses but exceeds the column type's range
     → ValidationError mentioning out-of-range."""
     mock_client.query.return_value.result.side_effect = RuntimeError(
-        "400 Value out of range for INT64: 99999999999999999999; "
-        "reason: invalidQuery"
+        "400 Value out of range for INT64: 99999999999999999999; reason: invalidQuery"
     )
     backend = _backend_with_schema(
         mock_client,
@@ -1029,8 +1018,10 @@ def test_translate_value_out_of_range(mock_client: MagicMock) -> None:
         backend.upsert(
             # Use string to avoid orjson's 64-bit int limit — the test
             # checks the BigQuery-side error, not orjson encoding.
-            "res-1", [{"id": "99999999999999999999"}],
-            method="upsert", include_total=False,
+            "res-1",
+            [{"id": "99999999999999999999"}],
+            method="upsert",
+            include_total=False,
         )
     msg = str(exc.value)
     assert "out of range" in msg
@@ -1055,8 +1046,10 @@ def test_translate_bad_numeric_value(mock_client: MagicMock) -> None:
     )
     with pytest.raises(ValidationError) as exc:
         backend.upsert(
-            "res-1", [{"id": 1, "amount": "not-a-num"}],
-            method="upsert", include_total=False,
+            "res-1",
+            [{"id": 1, "amount": "not-a-num"}],
+            method="upsert",
+            include_total=False,
         )
     assert "'not-a-num'" in str(exc.value)
     assert "number" in str(exc.value)
@@ -1165,10 +1158,7 @@ def test_info_returns_stored_schema_total_and_primary_key(
     result = backend.info("balancing_auction_results_2025")
 
     sql = mock_client.query.call_args[0][0]
-    assert sql == (
-        "SELECT COUNT(*) AS n FROM "
-        "`proj-1.ds-1.balancing_auction_results_2025`"
-    )
+    assert sql == ("SELECT COUNT(*) AS n FROM `proj-1.ds-1.balancing_auction_results_2025`")
     assert result.schema == schema
     assert result.meta["resource_id"] == "balancing_auction_results_2025"
     assert result.meta["total"] == 18420
@@ -1286,7 +1276,8 @@ def test_build_search_renders_full_param_set() -> None:
     assert by_name["f2"].value == "apple"
     # Result schema reflects the projection, in user-specified order.
     assert [f["name"] for f in projected["fields"]] == [
-        "auction_id", "product_code",
+        "auction_id",
+        "product_code",
     ]
 
 
@@ -1344,8 +1335,12 @@ def test_build_search_rejects_unknown_columns() -> None:
         table_ref="`p.d.r`",
         schema=schema,
         include_updated_at=False,
-        filters=None, q=None, distinct=False, sort=None,
-        limit=10, offset=0,
+        filters=None,
+        q=None,
+        distinct=False,
+        sort=None,
+        limit=10,
+        offset=0,
     )
     with pytest.raises(ValueError, match="fields references unknown"):
         build_search(fields=["ghost"], **kwargs)
@@ -1370,8 +1365,11 @@ def test_build_search_rejects_filters_on_json_columns() -> None:
             include_updated_at=False,
             fields=None,
             filters={"blob": {"k": "v"}},
-            q=None, distinct=False, sort=None,
-            limit=10, offset=0,
+            q=None,
+            distinct=False,
+            sort=None,
+            limit=10,
+            offset=0,
         )
 
 
@@ -1424,8 +1422,11 @@ def test_search_returns_projection_schema_and_lazy_rows(
         resource_id="res-1",
         filters={"product_code": "DCL"},
         q=None,
-        distinct=False, plain=True, language="english",
-        limit=100, offset=0,
+        distinct=False,
+        plain=True,
+        language="english",
+        limit=100,
+        offset=0,
         fields=["auction_id", "product_code"],
         sort=None,
         include_total=True,
@@ -1446,7 +1447,8 @@ def test_search_returns_projection_schema_and_lazy_rows(
     assert rows == [(1, "DCL")]
     # Projected schema is what the writer needs to label columns.
     assert [f["name"] for f in result.schema["fields"]] == [
-        "auction_id", "product_code",
+        "auction_id",
+        "product_code",
     ]
 
 
@@ -1472,9 +1474,16 @@ def test_search_unfiltered_uses_cheap_row_count(
 
     result = backend.search(
         resource_id="res-1",
-        filters=None, q=None, distinct=False, plain=True,
-        language="english", limit=10, offset=0,
-        fields=None, sort=None, include_total=True,
+        filters=None,
+        q=None,
+        distinct=False,
+        plain=True,
+        language="english",
+        limit=10,
+        offset=0,
+        fields=None,
+        sort=None,
+        include_total=True,
     )
 
     assert mock_client.query.call_count == 2
@@ -1489,9 +1498,7 @@ def test_search_unfiltered_uses_cheap_row_count(
         "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `_updated_at`, 'UTC') "
         "AS `_updated_at` FROM `proj-1.ds-1.res-1` AS t"
     )
-    assert sqls[1] == (
-        "SELECT COUNT(*) AS n FROM `proj-1.ds-1.res-1`"
-    )
+    assert sqls[1] == ("SELECT COUNT(*) AS n FROM `proj-1.ds-1.res-1`")
     # No filtered count subquery anywhere.
     assert not any("FROM (SELECT" in s for s in sqls)
     assert result.total == 42
@@ -1506,9 +1513,16 @@ def test_search_raises_not_found_for_undeclared_resource(
     with pytest.raises(NotFoundError, match="not found"):
         backend.search(
             resource_id="ghost",
-            filters=None, q=None, distinct=False, plain=True,
-            language="english", limit=10, offset=0,
-            fields=None, sort=None, include_total=False,
+            filters=None,
+            q=None,
+            distinct=False,
+            plain=True,
+            language="english",
+            limit=10,
+            offset=0,
+            fields=None,
+            sort=None,
+            include_total=False,
         )
     mock_client.query.assert_not_called()
 
@@ -1524,9 +1538,16 @@ def test_search_translates_builder_error_to_validation_error(
     with pytest.raises(ValidationError, match="unknown column"):
         backend.search(
             resource_id="res-1",
-            filters=None, q=None, distinct=False, plain=True,
-            language="english", limit=10, offset=0,
-            fields=["ghost"], sort=None, include_total=False,
+            filters=None,
+            q=None,
+            distinct=False,
+            plain=True,
+            language="english",
+            limit=10,
+            offset=0,
+            fields=["ghost"],
+            sort=None,
+            include_total=False,
         )
     mock_client.query.assert_not_called()
 
@@ -1580,7 +1601,9 @@ def test_delete_with_filters_binds_typed_parameters(
     backend = _backend_with_schema(mock_client, schema)
 
     backend.delete(
-        "res-1", filters={"auction_id": 144, "accepted": False}, fields=None,
+        "res-1",
+        filters={"auction_id": 144, "accepted": False},
+        fields=None,
     )
 
     sql_arg, kwargs = mock_client.query.call_args
@@ -1622,12 +1645,9 @@ def test_delete_with_fields_drops_columns_and_refreshes_options(
     drop_sql = mock_client.query.call_args_list[0].args[0]
     opts_sql = mock_client.query.call_args_list[1].args[0]
     assert drop_sql == (
-        "ALTER TABLE `proj-1.ds-1.res-1` "
-        "DROP COLUMN `extra`, DROP COLUMN `obsolete`"
+        "ALTER TABLE `proj-1.ds-1.res-1` DROP COLUMN `extra`, DROP COLUMN `obsolete`"
     )
-    assert opts_sql.startswith(
-        "ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS("
-    )
+    assert opts_sql.startswith("ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS(")
     # Refreshed table metadata only references surviving fields + PK.
     assert '"primaryKey":["id"]' in opts_sql
     assert '"name":"id"' in opts_sql
@@ -1731,8 +1751,8 @@ def test_search_sql_streams_rows_with_result_schema(
     backend = _ro_backend(mock_client)
 
     bq_schema = [
-        MagicMock(name="day",   field_type="DATE"),
-        MagicMock(name="avg",   field_type="FLOAT64"),
+        MagicMock(name="day", field_type="DATE"),
+        MagicMock(name="avg", field_type="FLOAT64"),
         MagicMock(name="count", field_type="INT64"),
     ]
     # MagicMock binds `name` as kwarg-to-MagicMock-name, not to attr —
@@ -1760,7 +1780,8 @@ def test_search_sql_streams_rows_with_result_schema(
     mock_client.query.side_effect = [count_job, data_job]
 
     result = backend.search_sql(
-        "SELECT day, avg, count FROM x LIMIT 100", limit=100,
+        "SELECT day, avg, count FROM x LIMIT 100",
+        limit=100,
     )
 
     # Two queries fire. For this unfiltered plain SELECT the total comes
@@ -1781,8 +1802,8 @@ def test_search_sql_streams_rows_with_result_schema(
     # Frictionless types come back from the BQ type map.
     assert result.schema == {
         "fields": [
-            {"name": "day",   "type": "date"},
-            {"name": "avg",   "type": "number"},
+            {"name": "day", "type": "date"},
+            {"name": "avg", "type": "number"},
             {"name": "count", "type": "integer"},
         ],
     }
@@ -1879,7 +1900,8 @@ def test_search_sql_filtered_uses_count_subquery(
     mock_client.query.side_effect = [count_job, data_job]
 
     result = backend.search_sql(
-        "SELECT n FROM x WHERE n > 5 LIMIT 10", limit=10,
+        "SELECT n FROM x WHERE n > 5 LIMIT 10",
+        limit=10,
     )
 
     count_sql = mock_client.query.call_args_list[0][0][0]
@@ -1970,15 +1992,13 @@ def test_qualify_table_refs_prepends_project_dataset() -> None:
     from datastore.infrastructure.engines.bigquery.lib import (
         qualify_table_refs,
     )
+
     out = qualify_table_refs(
         'SELECT * FROM "c6153a74-43cb-4edf-8bdf-bb664feca937" LIMIT 10',
         project="my-project",
         dataset="my_dataset",
     )
-    assert (
-        "`my-project`.`my_dataset`.`c6153a74-43cb-4edf-8bdf-bb664feca937`"
-        in out
-    )
+    assert "`my-project`.`my_dataset`.`c6153a74-43cb-4edf-8bdf-bb664feca937`" in out
     assert out.endswith("LIMIT 10")
 
 
@@ -1987,9 +2007,11 @@ def test_qualify_table_refs_handles_joins() -> None:
     from datastore.infrastructure.engines.bigquery.lib import (
         qualify_table_refs,
     )
+
     out = qualify_table_refs(
         'SELECT a.id FROM "tbl_a" a JOIN "tbl_b" b ON a.id = b.id LIMIT 10',
-        project="p", dataset="d",
+        project="p",
+        dataset="d",
     )
     assert "`p`.`d`.`tbl_a`" in out
     assert "`p`.`d`.`tbl_b`" in out
@@ -2000,9 +2022,11 @@ def test_qualify_table_refs_skips_cte_aliases() -> None:
     from datastore.infrastructure.engines.bigquery.lib import (
         qualify_table_refs,
     )
+
     out = qualify_table_refs(
-        'WITH t AS (SELECT 1 AS a) SELECT * FROM t LIMIT 10',
-        project="p", dataset="d",
+        "WITH t AS (SELECT 1 AS a) SELECT * FROM t LIMIT 10",
+        project="p",
+        dataset="d",
     )
     assert "`p`.`d`.`t`" not in out
     # CTE name `t` survives unqualified.
@@ -2014,9 +2038,11 @@ def test_qualify_table_refs_leaves_already_qualified_refs_alone() -> None:
     from datastore.infrastructure.engines.bigquery.lib import (
         qualify_table_refs,
     )
+
     out = qualify_table_refs(
         "SELECT * FROM other_project.other_dataset.tbl LIMIT 10",
-        project="p", dataset="d",
+        project="p",
+        dataset="d",
     )
     assert "`p`.`d`.`other_project`" not in out
     assert "other_project" in out and "other_dataset" in out
@@ -2064,8 +2090,14 @@ def test_search_passes_use_query_cache_true_on_data_and_count_jobs(
     backend.search(
         resource_id="res-1",
         filters={"product_code": "DCL"},
-        q=None, distinct=False, plain=True, language="english",
-        limit=10, offset=0, fields=["auction_id"], sort=None,
+        q=None,
+        distinct=False,
+        plain=True,
+        language="english",
+        limit=10,
+        offset=0,
+        fields=["auction_id"],
+        sort=None,
         include_total=True,
     )
 
@@ -2095,7 +2127,8 @@ def test_search_sql_passes_use_query_cache_true_on_data_and_count_jobs(
     mock_client.query.side_effect = [count_job, data_job]
 
     backend.search_sql(
-        "SELECT n FROM res1 WHERE n > 0 LIMIT 10", limit=10,
+        "SELECT n FROM res1 WHERE n > 0 LIMIT 10",
+        limit=10,
     )
 
     assert mock_client.query.call_count == 2
@@ -2111,7 +2144,8 @@ def test_info_count_rows_passes_use_query_cache_true(
     """`datastore_info` calls `_count_rows`, which issues
     `SELECT COUNT(*) FROM <table>`. That SELECT must ride the cache."""
     backend = _backend_with_schema(
-        mock_client, {"fields": [{"name": "id", "type": "integer"}]},
+        mock_client,
+        {"fields": [{"name": "id", "type": "integer"}]},
     )
     count_row = MagicMock()
     count_row.__getitem__.side_effect = lambda k: 7 if k == "n" else None
@@ -2134,7 +2168,8 @@ def test_use_query_cache_respects_config_opt_out(
     integration tests / freshness-sensitive deployments can force a
     fresh scan."""
     backend = _backend_with_schema(
-        mock_client, {"fields": [{"name": "id", "type": "integer"}]},
+        mock_client,
+        {"fields": [{"name": "id", "type": "integer"}]},
     )
     backend.config.BIGQUERY_USE_QUERY_CACHE = False
     count_row = MagicMock()

@@ -26,10 +26,7 @@ _auth_header = APIKeyHeader(
     name="Authorization",
     scheme_name="Authorization",
     auto_error=False,
-    description=(
-        "API token for the active `AUTH_TYPE`. Accepts a raw token or "
-        "`Bearer <token>`."
-    ),
+    description=("API token for the active `AUTH_TYPE`. Accepts a raw token or `Bearer <token>`."),
 )
 
 
@@ -46,9 +43,7 @@ def get_auth_provider(request: Request) -> AuthProvider:
     """Auth provider installed by the app lifespan."""
     provider = getattr(request.app.state, "auth_provider", None)
     if provider is None:
-        raise RuntimeError(
-            "auth provider is not initialised; check the lifespan wiring"
-        )
+        raise RuntimeError("auth provider is not initialised; check the lifespan wiring")
     return provider  # type: ignore[no-any-return]
 
 

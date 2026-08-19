@@ -1,6 +1,6 @@
 {
   "info": {
-    "_postman_id": "4a423ff3-570d-4f47-bab9-dbfbfacec483",
+    "_postman_id": "fa56adc4-1610-477b-b095-713e228cad51",
     "name": "Datastore API",
     "description": "CKAN-compatible datastore API \u2014 auto-generated from `example_payload/`. Set `baseUrl` to your server, `apiKey` to a CKAN API key (anonymous reads are allowed; writes require a key), and `resourceId` to the table you want to hit.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"

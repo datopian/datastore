@@ -326,7 +326,10 @@ def parse_sql_references(sql: str, *, dialect: str = "postgres") -> tuple[list[s
 
 
 def parse_sql_pagination(
-    sql: str, *, dialect: str = "postgres", require_limit: bool = True,
+    sql: str,
+    *,
+    dialect: str = "postgres",
+    require_limit: bool = True,
 ) -> tuple[int | None, int]:
     """Extract `(limit, offset)` from a SELECT.
 
@@ -368,13 +371,9 @@ def parse_sql_pagination(
         if tree.args.get("offset") is not None:
             raise ValueError("OFFSET without LIMIT is not supported")
     else:
-        limit_expr = (
-            limit_node.expression if isinstance(limit_node, exp.Limit) else None
-        )
+        limit_expr = limit_node.expression if isinstance(limit_node, exp.Limit) else None
         if not isinstance(limit_expr, exp.Literal) or not limit_expr.is_int:
-            raise ValueError(
-                "LIMIT must be a constant integer literal"
-            )
+            raise ValueError("LIMIT must be a constant integer literal")
         limit = int(limit_expr.this)
         if limit < 0:
             raise ValueError("LIMIT must be >= 0")
@@ -382,14 +381,9 @@ def parse_sql_pagination(
     offset = 0
     offset_node = tree.args.get("offset")
     if offset_node is not None:
-        offset_expr = (
-            offset_node.expression
-            if isinstance(offset_node, exp.Offset) else None
-        )
+        offset_expr = offset_node.expression if isinstance(offset_node, exp.Offset) else None
         if not isinstance(offset_expr, exp.Literal) or not offset_expr.is_int:
-            raise ValueError(
-                "OFFSET must be a constant integer literal"
-            )
+            raise ValueError("OFFSET must be a constant integer literal")
         offset = int(offset_expr.this)
         if offset < 0:
             raise ValueError("OFFSET must be >= 0")
@@ -398,7 +392,10 @@ def parse_sql_pagination(
 
 
 def rewrite_sql_offset(
-    sql: str, new_offset: int, *, dialect: str = "postgres",
+    sql: str,
+    new_offset: int,
+    *,
+    dialect: str = "postgres",
 ) -> str:
     """Return `sql` with its OFFSET replaced (or inserted) at `new_offset`.
 
@@ -442,9 +439,9 @@ class FieldSpec(BaseModel):
     @classmethod
     def _check_not_reserved(cls, v: str) -> str:
         from datastore.core.constants import RESERVED_SYSTEM_COLUMN_NAMES
+
         if v in RESERVED_SYSTEM_COLUMN_NAMES:
             raise ValueError(
-                f"field id {v!r} is reserved for engine-managed system "
-                "columns; rename the field"
+                f"field id {v!r} is reserved for engine-managed system columns; rename the field"
             )
         return check_field_name(v)

@@ -264,9 +264,7 @@ def _stream_envelope(
     yield b"}"  # close envelope
 
 
-def _records_object_array(
-    columns: list[str], records: Iterator[tuple]
-) -> Iterator[bytes]:
+def _records_object_array(columns: list[str], records: Iterator[tuple]) -> Iterator[bytes]:
     """`[{col: value, ...}, ...]`."""
     yield b"["
     first = True
@@ -318,9 +316,9 @@ def _delimited_row(row: Any, *, delimiter: str) -> str:
     `StringIO` is constant-size so memory stays bounded.
     """
     buf = io.StringIO()
-    csv.writer(
-        buf, delimiter=delimiter, quoting=csv.QUOTE_MINIMAL, lineterminator="\n"
-    ).writerow(row)
+    csv.writer(buf, delimiter=delimiter, quoting=csv.QUOTE_MINIMAL, lineterminator="\n").writerow(
+        row
+    )
     return buf.getvalue()
 
 
@@ -403,9 +401,7 @@ async def zip_archive_writer(
     ) as archive:
         for filename, url in members:
             with archive.open(filename, mode="w", force_zip64=True) as entry:
-                async with http.stream(
-                    "GET", url, timeout=_ZIP_FETCH_TIMEOUT
-                ) as response:
+                async with http.stream("GET", url, timeout=_ZIP_FETCH_TIMEOUT) as response:
                     response.raise_for_status()
                     async for chunk in response.aiter_bytes(_ZIP_CHUNK_BYTES):
                         entry.write(chunk)

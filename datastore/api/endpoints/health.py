@@ -14,9 +14,7 @@ from datastore.schemas.responses import StatusResponse
 probe_router = APIRouter(tags=["Health"])
 
 
-@probe_router.get(
-    "/health", response_model=StatusResponse, summary="Liveness probe"
-)
+@probe_router.get("/health", response_model=StatusResponse, summary="Liveness probe")
 def health(request: Request):
     """Liveness — always 200 while the process is up."""
     return _success_response(request, StatusResponse.Result(status="ok"))
