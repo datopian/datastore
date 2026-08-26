@@ -37,13 +37,13 @@ from urllib.parse import parse_qs
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from datastore.core.constants import API_BASE_PREFIX, API_PREFIX
+from datastore.core.constants import API_PREFIX, DUMP_PREFIX
 
 log = logging.getLogger(__name__)
 
 ACTION_PREFIX = f"{API_PREFIX}/"
-DUMP_PREFIX = f"{API_BASE_PREFIX}/dump/"
-DUMP_QUERY_PATH = f"{API_BASE_PREFIX}/dump/query"
+DUMP_PATH_PREFIX = f"{DUMP_PREFIX}/"
+DUMP_QUERY_PATH = f"{DUMP_PREFIX}/query"
 
 # Served under the versioned prefix but not part of the API surface, so
 # they must not be recorded as action calls.
@@ -54,7 +54,7 @@ def action_name(path: str) -> str | None:
     """What to call the event for this path, or None if it is not tracked."""
     if path == DUMP_QUERY_PATH:
         return "datastore_dump_query"
-    if path.startswith(DUMP_PREFIX):
+    if path.startswith(DUMP_PATH_PREFIX):
         return "datastore_dump"
     if path.startswith(ACTION_PREFIX):
         name = path[len(ACTION_PREFIX):].strip("/").split("/", 1)[0]
@@ -199,8 +199,8 @@ class AnalyticsMiddleware:
         those events rely on ``authorization_dict`` alone.
         """
         path: str = scope["path"]
-        if path.startswith(DUMP_PREFIX):
-            ref = path[len(DUMP_PREFIX):].split("/", 1)[0]
+        if path.startswith(DUMP_PATH_PREFIX):
+            ref = path[len(DUMP_PATH_PREFIX):].split("/", 1)[0]
             return ref if ref and ref != "query" else None
 
         query: bytes = scope.get("query_string", b"")

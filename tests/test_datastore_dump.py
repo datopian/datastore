@@ -1,4 +1,4 @@
-"""Tests for `GET /datastore/api/dump/{resource_id}`.
+"""Tests for `GET <DUMP_PREFIX>/{resource_id}`.
 
 The engine returns one signed URL (csv / gzip / ndjson shards are
 composed into a single object), so every format 302s. Only a sharded
@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from datastore.core.constants import DUMP_PREFIX
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
 from datastore.infrastructure.engines.bigquery.export import (
     _export_select_list,
@@ -27,7 +28,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
 
-DUMP_URL = "/datastore/api/dump/balancing_auction_results_2025"
+DUMP_URL = f"{DUMP_PREFIX}/balancing_auction_results_2025"
 
 
 def _patch_dump(urls_or_exc: list[str] | Exception):
@@ -138,7 +139,7 @@ def test_unknown_format_returns_validation_error(client: TestClient) -> None:
 
 
 def test_dump_for_unknown_resource_returns_404(client: TestClient) -> None:
-    response = client.get("/datastore/api/dump/missing-resource")
+    response = client.get(f"{DUMP_PREFIX}/missing-resource")
     assert response.status_code == 404
 
 

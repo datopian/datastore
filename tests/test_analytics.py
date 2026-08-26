@@ -20,7 +20,7 @@ from datastore.api.context import RequestContext, get_auth_provider, get_ckan_cl
 from datastore.auth.base import Decision
 from datastore.auth.ckan import Provider as CKANAuthProvider
 from datastore.core.config import get_config
-from datastore.core.constants import API_BASE_PREFIX, API_PREFIX
+from datastore.core.constants import API_BASE_PREFIX, API_PREFIX, DUMP_PREFIX
 from datastore.infrastructure.cache import InMemoryCache
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
 from datastore.main import create_app
@@ -121,7 +121,7 @@ def test_a_dump_is_recorded_as_a_download(
         return [url]
 
     with patch.object(BigQueryBackend, "dump", fake_dump):
-        response = client.get(f"{API_BASE_PREFIX}/dump/{RESOURCE}", follow_redirects=False)
+        response = client.get(f"{DUMP_PREFIX}/{RESOURCE}", follow_redirects=False)
 
     assert response.status_code == 302
     event = recorded[0]
@@ -133,7 +133,7 @@ def test_a_dump_is_recorded_as_a_download(
 def test_a_sql_dump_is_recorded_under_its_own_name(
     client: TestClient, recorded: list[dict]
 ) -> None:
-    client.get(f"{API_BASE_PREFIX}/dump/query", params={"sql": "SELECT 1"})
+    client.get(f"{DUMP_PREFIX}/query", params={"sql": "SELECT 1"})
 
     assert recorded[0]["action_type"] == "datastore_dump_query"
 
@@ -331,8 +331,8 @@ def test_the_docs_surface_is_not_recorded(suffix: str) -> None:
     [
         (f"{API_PREFIX}/datastore_search", "datastore_search"),
         (f"{API_PREFIX}/datastore_create", "datastore_create"),
-        (f"{API_BASE_PREFIX}/dump/query", "datastore_dump_query"),
-        (f"{API_BASE_PREFIX}/dump/res-1", "datastore_dump"),
+        (f"{DUMP_PREFIX}/query", "datastore_dump_query"),
+        (f"{DUMP_PREFIX}/res-1", "datastore_dump"),
         (f"{API_BASE_PREFIX}/health", None),
         (f"{API_BASE_PREFIX}/ready", None),
     ],

@@ -179,7 +179,7 @@ async def datastore_search_sql(
 ):
     """`GET /api/3/datastore_search_sql` — execute a raw SQL SELECT and stream.
     Accepts a single `sql` query parameter. To export the result as a
-    file instead, use `GET <API_BASE_PREFIX>/dump/query`.
+    file instead, use `GET <DUMP_PREFIX>/query`.
     """
     for resource_id in params.resource_ids:
         await context.authorize(resource_id=resource_id, permission="read")

@@ -216,7 +216,7 @@ class Config(BaseSettings):
     )
     BIGQUERY_EXPORT_BUCKET: str = Field(
         default="",
-        description=("GCS bucket name (no `gs://` prefix) that `<API_BASE_PREFIX>/dump/<rid>` "),
+        description=("GCS bucket name (no `gs://` prefix) that `<DUMP_PREFIX>/<rid>` "),
     )
     BIGQUERY_EXPORT_URL_EXPIRY_HOURS: int = Field(
         default=1,

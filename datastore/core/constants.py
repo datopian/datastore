@@ -8,10 +8,24 @@ from typing import Literal
 # default nor the setting affects runtime behaviour.
 DEFAULT_API_URL = "https://example.com"
 
-API_BASE_PREFIX = "/datastore/api"
+# Route namespace. Three prefixes, because the surface is versioned in
+# parts:
+#   - the action API carries the version — its request/response shapes are
+#     the compatibility contract;
+#   - the health probes sit outside it, so an orchestrator's probe URL
+#     doesn't churn when the contract gets a new version;
+#   - downloads sit outside the `/api` segment entirely, since a dump URL is
+#     handed to a browser or a `curl` rather than driven by an API client.
+#
+# Note this is NOT the prefix used to *call* an upstream CKAN — those
+# requests go to CKAN's own `/api/3/action/` (see
+# `infrastructure/ckan_client.py`).
+SERVICE_PREFIX = "/datastore"
+API_BASE_PREFIX = f"{SERVICE_PREFIX}/api"
 API_VERSION = "v2"
 API_PREFIX = f"{API_BASE_PREFIX}/{API_VERSION}"
-# Download formats served by the export pipeline (`<API_BASE_PREFIX>/dump/…` and
+DUMP_PREFIX = f"{SERVICE_PREFIX}/dump"
+# Download formats served by the export pipeline (`<DUMP_PREFIX>/…` and
 # `datastore_search_sql?download=…`). Lives here — not in `api/` — because
 # both the request schemas (pydantic layer) and the endpoints (starlette
 # layer) need it, and `schemas/` must not import from `api/`.

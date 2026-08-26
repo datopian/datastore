@@ -421,7 +421,7 @@ class DatastoreSearchSQLRequest(BaseModel):
 
 
 class DatastoreDumpSQLRequest(DatastoreSearchSQLRequest):
-    """Query parameters for `GET <API_BASE_PREFIX>/dump/query`.
+    """Query parameters for `GET <DUMP_PREFIX>/query`.
 
     Same vetted-SELECT contract as `DatastoreSearchSQLRequest` (single
     SELECT / WITH, table + function extraction, `extra="forbid"`), but

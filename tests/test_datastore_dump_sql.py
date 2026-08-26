@@ -26,6 +26,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from datastore.core.constants import DUMP_PREFIX
 from datastore.core.exceptions import (
     NotFoundError,
     PayloadTooLargeError,
@@ -45,7 +46,7 @@ from tests.test_datastore_dump import (
     stub_signed_urls,
 )
 
-DUMP_SQL_URL = "/datastore/api/dump/query"
+DUMP_SQL_URL = f"{DUMP_PREFIX}/query"
 
 _NOW = dt.datetime.now(dt.timezone.utc)
 
@@ -899,7 +900,7 @@ def test_zero_table_sql_exports_without_get_table() -> None:
 
 
 # =============================================================================
-# Endpoint: GET /datastore/api/dump/query
+# Endpoint: GET <DUMP_PREFIX>/query
 # =============================================================================
 
 
@@ -1023,7 +1024,7 @@ def test_bogus_format_rejected(client: TestClient) -> None:
 
 
 def test_missing_sql_names_the_field(client: TestClient) -> None:
-    """`/datastore/api/dump/query` resolves to the SQL route (declared before
+    """`<DUMP_PREFIX>/query` resolves to the SQL route (declared before
     `/{resource_id}`, so `query` is a reserved resource name) — a missing
     `sql` param is a validation error on this endpoint, not a 404 dump
     of a table called 'query'."""
