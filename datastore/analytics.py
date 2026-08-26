@@ -99,6 +99,11 @@ class AnalyticsMiddleware:
     REAL_IP_HEADER = "x-real-ip"
     FORWARDED_FOR_HEADER = "x-forwarded-for"
 
+    #: Set by known internal callers (e.g. the data explorer sends
+    #: ``data-explorer``) so usage reporting can tell UI-driven traffic apart
+    #: from genuine external API use. Absent on ordinary calls.
+    REQUEST_SOURCE_HEADER = "request-source"
+
     def __init__(self, app: ASGIApp, service: str = "datastore-api") -> None:
         self.app = app
         self.service = service
@@ -169,6 +174,7 @@ class AnalyticsMiddleware:
             "status_code": status,
             "user_agent": headers.get("user-agent") or None,
             "request_ip": self._request_ip(scope, headers),
+            "request_source": headers.get(self.REQUEST_SOURCE_HEADER) or None,
             "user": resolved.get("user"),
             "dataset": resolved.get("dataset"),
             "resource": resolved.get("resource") or self._resource_ref(scope, body),

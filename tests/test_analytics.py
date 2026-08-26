@@ -39,6 +39,7 @@ FIELDS = {
     "status_code",
     "user_agent",
     "request_ip",
+    "request_source",
     "user",
     "dataset",
     "resource",
@@ -218,6 +219,26 @@ def test_the_ip_falls_back_to_the_last_forwarded_for_entry(
     )
 
     assert recorded[0]["request_ip"] == "203.0.113.7"
+
+
+def test_request_source_is_recorded_when_the_header_is_sent(
+    client: TestClient, recorded: list[dict]
+) -> None:
+    client.get(
+        SEARCH_URL,
+        params={"resource_id": RESOURCE},
+        headers={"Request-Source": "data-explorer"},
+    )
+
+    assert recorded[0]["request_source"] == "data-explorer"
+
+
+def test_request_source_is_none_when_the_header_is_absent(
+    client: TestClient, recorded: list[dict]
+) -> None:
+    client.get(SEARCH_URL, params={"resource_id": RESOURCE})
+
+    assert recorded[0]["request_source"] is None
 
 
 # --- what does not get recorded, and what cannot break ------------------------
