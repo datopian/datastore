@@ -24,7 +24,7 @@ from datastore.schemas.request import DatastoreDumpSQLRequest
 from datastore.services.read import dump_sql_datastore
 from datastore.services.streaming import zip_archive_writer
 
-router = APIRouter(tags=["Datastore Download"], responses=ERROR_RESPONSES)
+router = APIRouter(tags=["Datastore Downloads"], responses=ERROR_RESPONSES)
 
 
 # What a download actually returns, for OpenAPI. Without an explicit
