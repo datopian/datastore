@@ -9,7 +9,7 @@ archive, which keeps every download a single file at one URL.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 from starlette.requests import Request
@@ -17,7 +17,7 @@ from starlette.responses import RedirectResponse, StreamingResponse
 
 from datastore.api.context import Context
 from datastore.api.responses import ERROR_RESPONSES
-from datastore.core.constants import DUMP_EXTENSIONS, DumpFormat
+from datastore.core.constants import DUMP_EXTENSIONS, DUMP_MEDIA_TYPES, DumpFormat
 from datastore.core.exceptions import ServerError
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.request import DatastoreDumpSQLRequest
@@ -25,6 +25,38 @@ from datastore.services.read import dump_sql_datastore
 from datastore.services.streaming import zip_archive_writer
 
 router = APIRouter(tags=["Datastore Download"], responses=ERROR_RESPONSES)
+
+
+# What a download actually returns, for OpenAPI. Without an explicit
+# `response_class` FastAPI documents a JSON body on the 200 — wrong for
+# every path here, and it would have a generated client parsing a parquet
+# file as an envelope. The 302 is the usual answer; the 200 only happens
+# when a parquet export shards.
+_DOWNLOAD_RESPONSES: dict[int | str, dict[str, Any]] = {
+    302: {
+        "description": (
+            "The download. Redirects to a short-lived signed GCS URL — the "
+            "bytes stream from GCS, not through this API, so the transfer "
+            "is resumable. Content type follows `format`: "
+            + ", ".join(f"`{f}` → `{m}`" for f, m in DUMP_MEDIA_TYPES.items())
+            + ". The URL carries a `Content-Disposition` naming the file."
+        ),
+        "headers": {
+            "Location": {
+                "description": "Signed GCS URL holding the exported file.",
+                "schema": {"type": "string", "format": "uri"},
+            },
+        },
+    },
+    200: {
+        "description": (
+            "A parquet export that sharded: one streamed zip of the parts, "
+            "served by this API rather than redirected. Chunked, so there "
+            "is no `Content-Length` and no range support."
+        ),
+        "content": {"application/zip": {}},
+    },
+}
 
 
 def download_response(
@@ -67,13 +99,9 @@ def download_response(
 @router.get(
     "/query",
     summary="Download the result of a SQL SELECT",
-    responses={
-        302: {"description": "Redirect to the signed download URL."},
-        200: {
-            "description": ("Sharded parquet export - one streamed zip of the parts."),
-            "content": {"application/zip": {}},
-        },
-    },
+    response_class=RedirectResponse,
+    status_code=302,
+    responses=_DOWNLOAD_RESPONSES,
 )
 async def dump_sql(
     request: Request,
@@ -99,13 +127,9 @@ async def dump_sql(
 @router.get(
     "/{resource_id}",
     summary="Download an entire table",
-    responses={
-        302: {"description": "Redirect to the signed Download URL."},
-        200: {
-            "description": ("Multi-file parquet export — one streamed zip."),
-            "content": {"application/zip": {}},
-        },
-    },
+    response_class=RedirectResponse,
+    status_code=302,
+    responses=_DOWNLOAD_RESPONSES,
 )
 async def dump(
     request: Request,

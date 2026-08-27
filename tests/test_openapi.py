@@ -17,7 +17,12 @@ import pytest
 from datastore.api import docs as docs_module
 from datastore.api.docs import api_description
 from datastore.core.config import Config, get_config
-from datastore.core.constants import API_PREFIX, API_VERSION, DEFAULT_API_URL
+from datastore.core.constants import (
+    API_PREFIX,
+    API_VERSION,
+    DEFAULT_API_URL,
+    DUMP_PREFIX,
+)
 from datastore.main import create_app
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -476,3 +481,34 @@ def test_docs_page_falls_back_to_openapi_title(
         get_config.cache_clear()
 
     assert '<h1 class="docs-header-title">Datastore API</h1>' in body
+
+
+# Downloads are files, not envelopes ---------------------------------------
+
+def test_download_routes_do_not_advertise_a_json_body() -> None:
+    """A dump returns a file, so its success responses must not be typed as
+    JSON.
+
+    FastAPI documents `application/json` on the 200 for any route without an
+    explicit `response_class`. That default is wrong here — it would have a
+    generated client parsing a parquet file (or a redirect) as the CKAN
+    envelope. The error responses stay JSON: those really are envelopes.
+    """
+    schema = create_app().openapi()
+
+    for path in (f"{DUMP_PREFIX}/query", f"{DUMP_PREFIX}/{{resource_id}}"):
+        responses = schema["paths"][path]["get"]["responses"]
+
+        # 302 is the usual answer and carries no body at all.
+        assert "content" not in responses["302"]
+        assert "Location" in responses["302"]["headers"]
+
+        # 200 happens only for a sharded parquet export: a zip, never JSON.
+        assert list(responses["200"]["content"]) == ["application/zip"]
+
+        # Errors are the one place the JSON envelope belongs.
+        assert list(responses["400"]["content"]) == ["application/json"]
+
+        # RedirectResponse's own 307 default must not leak in as a
+        # documented "Successful Response" the route never returns.
+        assert "307" not in responses

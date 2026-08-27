@@ -43,6 +43,17 @@ DUMP_EXTENSIONS: dict[str, str] = {
     "parquet": "parquet",
 }
 
+# Media type per dump format. Only ever reaches the client through the
+# signed GCS URL's own headers — the API redirects rather than serving the
+# bytes — but OpenAPI needs them to document what a download actually is,
+# so a generated client doesn't assume the JSON envelope.
+DUMP_MEDIA_TYPES: dict[str, str] = {
+    "csv": "text/csv",
+    "gzip": "application/gzip",
+    "ndjson": "application/x-ndjson",
+    "parquet": "application/vnd.apache.parquet",
+}
+
 POSTGRES_TYPES: dict[str, str] = {
     # integer
     "int2": "int2",

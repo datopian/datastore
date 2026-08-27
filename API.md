@@ -391,6 +391,17 @@ row stats — a column-level metadata catalog without a side store.
 Download an entire resource. Pick the format with `?format=csv` (default),
 `gzip`, `ndjson`, or `parquet`.
 
+This route returns a **file**, never the JSON envelope — the only JSON it can
+produce is an error. The content type comes from the signed GCS URL and
+follows `format`:
+
+| `format` | Content-Type | Extension |
+|---|---|---|
+| `csv` | `text/csv` | `.csv` |
+| `gzip` | `application/gzip` | `.csv.gz` |
+| `ndjson` | `application/x-ndjson` | `.json` |
+| `parquet` | `application/vnd.apache.parquet` | `.parquet` |
+
 - **csv / gzip / ndjson** — `302` redirect to a signed GCS URL, at any size.
   Shards from a large export are stitched into one object server-side, so the
   bytes go straight from storage to the client (resumable, no server
