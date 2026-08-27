@@ -14,7 +14,10 @@ Two pieces:
     Pure ASGI, so handled error responses are recorded with their status and
     an unhandled crash is recorded as a 500 before it propagates. Tracks
     the versioned action namespace and ``<base>/dump/*``; probes, docs and the
-    welcome page are excluded by definition.
+    welcome page are excluded by definition. A request carrying the
+    configured ignore header/value (``ANALYTICS_IGNORE_HEADER`` /
+    ``ANALYTICS_IGNORE_VALUES``) is skipped entirely - not logged with a
+    distinguishing field, just never recorded.
 
 ``authorization_dict``
     Called by ``RequestContext.authorize`` with the authorized data_dict.
@@ -99,15 +102,37 @@ class AnalyticsMiddleware:
     REAL_IP_HEADER = "x-real-ip"
     FORWARDED_FOR_HEADER = "x-forwarded-for"
 
-    def __init__(self, app: ASGIApp, service: str = "datastore-api") -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        service: str = "datastore-api",
+        ignore_header: str = "",
+        ignore_values: frozenset[str] = frozenset(),
+    ) -> None:
         self.app = app
         self.service = service
+        #: A request whose ``ignore_header`` value is in ``ignore_values``
+        #: skips analytics entirely - not recorded with a distinguishing
+        #: field, just never logged. Known internal callers (e.g. the data
+        #: explorer) set this so their UI-driven traffic never counts as API
+        #: usage. Both configured via ``ANALYTICS_IGNORE_HEADER`` /
+        #: ``ANALYTICS_IGNORE_VALUES``; either empty disables the check.
+        self.ignore_header = ignore_header.lower()
+        self.ignore_values = ignore_values
+
+    def _is_ignored(self, scope: Scope) -> bool:
+        if not self.ignore_header or not self.ignore_values:
+            return False
+        value = Headers(scope=scope).get(self.ignore_header)
+        return value is not None and value.strip().lower() in self.ignore_values
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope["method"] not in self.METHODS:
             return await self.app(scope, receive, send)
         action = action_name(scope["path"])
         if action is None:
+            return await self.app(scope, receive, send)
+        if self._is_ignored(scope):
             return await self.app(scope, receive, send)
 
         # Created here if authorize has not run yet, so both sides mutate the
