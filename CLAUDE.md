@@ -430,9 +430,9 @@ Each endpoint takes a single `ContextDep`. The handler calls `context.authorize(
 | POST | `/datastore/api/v2/datastore_delete` | **implemented** | `DatastoreDeleteRequest` | `DatastoreDeleteResponse` |
 | GET  | `/datastore/api/v2/datastore_search` | **implemented** (streaming) | `DatastoreSearchRequest` | `DatastoreSearchResponse` |
 | GET  | `/datastore/api/v2/datastore_search_sql` | **implemented** (streaming) | `DatastoreSearchSQLRequest` | `DatastoreSearchResponse` |
-| GET  | `/datastore/dump/query` | **implemented** | `sql=<SELECT…>`, `format=csv\|gzip\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
+| GET  | `/datastore/api/v2/dump/query` | **implemented** | `sql=<SELECT…>`, `format=csv\|gzip\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 | GET  | `/datastore/api/v2/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
-| GET  | `/datastore/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
+| GET  | `/datastore/api/v2/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 
 The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, parameterised search, native table-level metadata (the Frictionless schema + unique_key are JSON-encoded into the table's own `description` OPTION) for the schema round-trip, a row-count fast path via `INFORMATION_SCHEMA.TABLE_STORAGE`, and `EXPORT DATA`-backed dump with `table.modified`-keyed GCS caching. The DuckLake engine is the next concrete adapter — see §7.
 
@@ -443,7 +443,7 @@ The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, pa
 
 **Read-only guard (`AUTH_TYPE=ckan` only).** `datastore_create`, `datastore_upsert`, and `datastore_delete` refuse to write a resource whose CKAN record carries `url_type="datastore"` unless the request sets `force: true` — a `Validation Error` ("Cannot update a read-only resource. Use \"force\" to force update.") otherwise. This mirrors CKAN's protection against clobbering datastore-managed data by accident. The guard is gated on `AUTH_TYPE=ckan` and skipped entirely under any other provider (only the CKAN provider attaches a resource record).
 
-### 5.3 `GET /datastore/dump/{resource_id}`
+### 5.3 `GET /datastore/api/v2/dump/{resource_id}`
 
 Full-table download, **one URL → one file** from the caller's point of
 view. Bytes never pass through API memory — the one exception is a
@@ -497,9 +497,9 @@ A single SA works if both perm sets land on the same identity — `BIGQUERY_CRED
 
 A 24h object-lifecycle rule on the bucket is **required** in practice: the engine GCs older revs already, but lifecycle is the only thing that cleans abandoned `dumps/<qhash>/` prefixes (SQL downloads whose query is never re-issued — see below) and anything stranded by a crashed dump.
 
-### SQL download (`GET /datastore/dump/query`)
+### SQL download (`GET /datastore/api/v2/dump/query`)
 
-`GET /datastore/dump/query?sql=<SELECT…>&format=csv|gzip|ndjson|parquet` exports the result of an arbitrary vetted SELECT through the same pipeline as `/datastore/dump/{resource_id}` — engine method `dump_sql` in [bigquery/export.py](datastore/infrastructure/engines/bigquery/export.py), response shaping shared via `download_response` in [api/endpoints/dump.py](datastore/api/endpoints/dump.py) (302 for the composed file · gzip streamed · JSON URL list for multi-file parquet). Same SQL validation + per-table auth as `datastore_search_sql` (`DatastoreDumpSQLRequest` subclasses its request schema); the action API itself stays pure JSON envelope. The route is declared before `/datastore/dump/{resource_id}`, making `query` a reserved resource name on the dump family.
+`GET /datastore/api/v2/dump/query?sql=<SELECT…>&format=csv|gzip|ndjson|parquet` exports the result of an arbitrary vetted SELECT through the same pipeline as `/datastore/api/v2/dump/{resource_id}` — engine method `dump_sql` in [bigquery/export.py](datastore/infrastructure/engines/bigquery/export.py), response shaping shared via `download_response` in [api/endpoints/dump.py](datastore/api/endpoints/dump.py) (302 for the composed file · gzip streamed · JSON URL list for multi-file parquet). Same SQL validation + per-table auth as `datastore_search_sql` (`DatastoreDumpSQLRequest` subclasses its request schema); the action API itself stays pure JSON envelope. The route is declared before `/datastore/api/v2/dump/{resource_id}`, making `query` a reserved resource name on the dump family.
 
 Deltas vs the whole-table dump:
 
@@ -799,7 +799,7 @@ Optional fields appear in `result` only when requested:
 
 ### 6.4 `GET /datastore/api/v2/datastore_search_sql`
 
-**Query params**: `sql` (required; must carry a `LIMIT` literal). To export the result as a file instead of the JSON envelope, use `GET /datastore/dump/query?sql=…&format=…` (LIMIT optional + uncapped there — see §5.3 "SQL download").
+**Query params**: `sql` (required; must carry a `LIMIT` literal). To export the result as a file instead of the JSON envelope, use `GET /datastore/api/v2/dump/query?sql=…&format=…` (LIMIT optional + uncapped there — see §5.3 "SQL download").
 
 **Example request — daily clearing-price summary**
 ```

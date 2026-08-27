@@ -648,7 +648,7 @@ def _get_export_bucket(backend: Any) -> str:
     if not bucket:
         raise ServerError(
             "BIGQUERY_EXPORT_BUCKET is not configured — "
-            "/datastore/dump cannot run without an export bucket."
+            "/datastore/api/v2/dump cannot run without an export bucket."
         )
     return bucket
 

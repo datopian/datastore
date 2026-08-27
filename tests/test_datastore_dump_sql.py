@@ -418,7 +418,7 @@ def test_parquet_export_casts_json_columns_from_dry_run_schema() -> None:
 
 def test_csv_export_iso_casts_timestamps_from_dry_run_schema() -> None:
     """CSV downloads render TIMESTAMP identically to `datastore_search`
-    and `/datastore/dump` (shared `format_select_column`)."""
+    and `/datastore/api/v2/dump` (shared `format_select_column`)."""
     new_blob = _blob("z_000.csv", "https://fresh")
     backend, storage_client = _engine_with_storage([])
     bucket_obj = storage_client.bucket.return_value

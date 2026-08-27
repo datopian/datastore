@@ -1,6 +1,6 @@
 {
   "info": {
-    "_postman_id": "fa56adc4-1610-477b-b095-713e228cad51",
+    "_postman_id": "bfb8a805-c676-4c5b-9832-520972b8d184",
     "name": "Datastore API",
     "description": "CKAN-compatible datastore API \u2014 auto-generated from `example_payload/`. Set `baseUrl` to your server, `apiKey` to a CKAN API key (anonymous reads are allowed; writes require a key), and `resourceId` to the table you want to hit.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -916,6 +916,188 @@
               ]
             },
             "description": "`force=true` bypasses the CKAN read-only guard."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "dump",
+      "description": "File downloads: `/datastore/api/v2/dump/{resource_id}` for a whole table, `/datastore/api/v2/dump/query` for a SQL result. One URL always yields one file \u2014 a 302 to a signed GCS URL for csv / gzip / ndjson, and for parquet either a 302 (single shard) or a streamed zip of the parts. Needs `BIGQUERY_EXPORT_BUCKET` set on the server.",
+      "item": [
+        {
+          "name": "Dump - whole table (CSV)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/datastore/api/v2/dump/{{resourceId}}?format=csv",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "datastore",
+                "api",
+                "v2",
+                "dump",
+                "{{resourceId}}"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "csv"
+                }
+              ]
+            },
+            "description": "Export the whole table. Responds 302 to a signed GCS URL \u2014 the bytes go straight from GCS to the client. Turn OFF Postman's \"Automatically follow redirects\" to inspect the `Location` header instead of downloading."
+          },
+          "response": []
+        },
+        {
+          "name": "Dump - whole table (gzip)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/datastore/api/v2/dump/{{resourceId}}?format=gzip",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "datastore",
+                "api",
+                "v2",
+                "dump",
+                "{{resourceId}}"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "gzip"
+                }
+              ]
+            },
+            "description": "Same export, gzipped by BigQuery. Shards compose into one `.csv.gz` carrying exactly one header member."
+          },
+          "response": []
+        },
+        {
+          "name": "Dump - whole table (NDJSON)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/datastore/api/v2/dump/{{resourceId}}?format=ndjson",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "datastore",
+                "api",
+                "v2",
+                "dump",
+                "{{resourceId}}"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "ndjson"
+                }
+              ]
+            },
+            "description": "Newline-delimited JSON, one object per row. Composes to a single object when the export shards."
+          },
+          "response": []
+        },
+        {
+          "name": "Dump - whole table (Parquet)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/datastore/api/v2/dump/{{resourceId}}?format=parquet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "datastore",
+                "api",
+                "v2",
+                "dump",
+                "{{resourceId}}"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "parquet"
+                }
+              ]
+            },
+            "description": "Parquet can't be composed (footer + magic bytes), so a sharded export returns 200 + a streamed zip of the parts rather than a redirect."
+          },
+          "response": []
+        },
+        {
+          "name": "Dump SQL - query result (CSV)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/datastore/api/v2/dump/query?sql=SELECT auction_id, product_code, clearing_price_gbp_per_mwh FROM \"{{resourceId}}\" WHERE accepted = true&format=csv",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "datastore",
+                "api",
+                "v2",
+                "dump",
+                "query"
+              ],
+              "query": [
+                {
+                  "key": "sql",
+                  "value": "SELECT auction_id, product_code, clearing_price_gbp_per_mwh FROM \"{{resourceId}}\" WHERE accepted = true"
+                },
+                {
+                  "key": "format",
+                  "value": "csv"
+                }
+              ]
+            },
+            "description": "Export an arbitrary vetted SELECT. Unlike `datastore_search_sql`, `LIMIT` is optional and uncapped here. `query` is a reserved resource name on this route."
+          },
+          "response": []
+        },
+        {
+          "name": "Dump SQL - aggregate (Parquet)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/datastore/api/v2/dump/query?sql=SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price, SUM(volume_mwh) AS total_volume FROM \"{{resourceId}}\" GROUP BY product_code&format=parquet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "datastore",
+                "api",
+                "v2",
+                "dump",
+                "query"
+              ],
+              "query": [
+                {
+                  "key": "sql",
+                  "value": "SELECT product_code, AVG(clearing_price_gbp_per_mwh) AS avg_price, SUM(volume_mwh) AS total_volume FROM \"{{resourceId}}\" GROUP BY product_code"
+                },
+                {
+                  "key": "format",
+                  "value": "parquet"
+                }
+              ]
+            },
+            "description": "Aggregate export. Results cache per (SQL, table version); a query calling `now()` / `current_date` bypasses the cache and re-exports."
           },
           "response": []
         }
