@@ -68,6 +68,29 @@ class Config(BaseSettings):
             "request. `false` leaves the analytics middleware unmounted."
         ),
     )
+    ANALYTICS_IGNORE_HEADER: str = Field(
+        default="",
+        description=(
+            "Request header name checked to decide whether to skip "
+            "analytics for a request entirely (e.g. `Request-Source`). "
+            "Empty disables the check - every tracked request is logged."
+        ),
+    )
+    ANALYTICS_IGNORE_VALUES: str = Field(
+        default="",
+        description=(
+            "Comma-separated header values that skip analytics logging "
+            "when ANALYTICS_IGNORE_HEADER matches (e.g. `data-explorer`). "
+            "Matched case-insensitively. Empty disables the check."
+        ),
+    )
+
+    @property
+    def analytics_ignore_values_set(self) -> frozenset[str]:
+        """`ANALYTICS_IGNORE_VALUES` split on commas, lowercased, blanks dropped."""
+        return frozenset(
+            v.strip().lower() for v in self.ANALYTICS_IGNORE_VALUES.split(",") if v.strip()
+        )
 
     # CORS
     # Public base URL of this service. Used only to render absolute URLs in

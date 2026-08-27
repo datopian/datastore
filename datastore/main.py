@@ -106,7 +106,12 @@ def create_app() -> FastAPI:
     # Outside the body-size guard, so a rejected oversize upload is an
     # event too; inside CORS, which only decorates headers.
     if config.ANALYTICS_ENABLED:
-        app.add_middleware(AnalyticsMiddleware, service="Datastore")
+        app.add_middleware(
+            AnalyticsMiddleware,
+            service="Datastore",
+            ignore_header=config.ANALYTICS_IGNORE_HEADER,
+            ignore_values=config.analytics_ignore_values_set,
+        )
     # Added last = outermost, so 4xx/5xx envelopes carry CORS headers too.
     # `CORS_ORIGINS=*` allows every origin, a comma-separated list allows
     # only those domains, empty skips the middleware entirely.

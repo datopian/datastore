@@ -39,7 +39,6 @@ FIELDS = {
     "status_code",
     "user_agent",
     "request_ip",
-    "request_source",
     "user",
     "dataset",
     "resource",
@@ -221,24 +220,113 @@ def test_the_ip_falls_back_to_the_last_forwarded_for_entry(
     assert recorded[0]["request_ip"] == "203.0.113.7"
 
 
-def test_request_source_is_recorded_when_the_header_is_sent(
+def _client_with_ignore_config(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    *,
+    header: str,
+    values: str,
+) -> TestClient:
+    monkeypatch.setenv("ANALYTICS_IGNORE_HEADER", header)
+    monkeypatch.setenv("ANALYTICS_IGNORE_VALUES", values)
+    get_config.cache_clear()
+
+    app = create_app()
+    app.dependency_overrides[get_ckan_client] = lambda: fake_ckan
+    app.dependency_overrides[get_auth_provider] = lambda: CKANAuthProvider(
+        ckan=fake_ckan, cache=cache, cache_ttl=60,
+    )
+    c = TestClient(app)
+    c.headers["Authorization"] = "test-token"
+    return c
+
+
+def test_a_request_with_the_ignore_header_is_not_recorded(
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    recorded: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c = _client_with_ignore_config(
+        monkeypatch, fake_ckan, cache, header="Request-Source", values="data-explorer"
+    )
+    with c:
+        response = c.get(
+            SEARCH_URL,
+            params={"resource_id": RESOURCE},
+            headers={"Request-Source": "data-explorer"},
+        )
+
+    assert response.status_code == 200
+    assert recorded == []
+
+
+def test_the_ignore_header_match_is_case_insensitive(
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    recorded: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c = _client_with_ignore_config(
+        monkeypatch, fake_ckan, cache, header="Request-Source", values="data-explorer"
+    )
+    with c:
+        c.get(
+            SEARCH_URL,
+            params={"resource_id": RESOURCE},
+            headers={"request-source": "Data-Explorer"},
+        )
+
+    assert recorded == []
+
+
+def test_a_request_without_the_ignore_header_is_still_recorded(
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    recorded: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c = _client_with_ignore_config(
+        monkeypatch, fake_ckan, cache, header="Request-Source", values="data-explorer"
+    )
+    with c:
+        c.get(SEARCH_URL, params={"resource_id": RESOURCE})
+
+    assert len(recorded) == 1
+
+
+def test_a_request_with_a_different_header_value_is_still_recorded(
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    recorded: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c = _client_with_ignore_config(
+        monkeypatch, fake_ckan, cache, header="Request-Source", values="data-explorer"
+    )
+    with c:
+        c.get(
+            SEARCH_URL,
+            params={"resource_id": RESOURCE},
+            headers={"Request-Source": "some-other-tool"},
+        )
+
+    assert len(recorded) == 1
+
+
+def test_the_ignore_check_is_disabled_when_unconfigured(
     client: TestClient, recorded: list[dict]
 ) -> None:
+    """Default env (empty header/values, set by conftest indirectly through
+    Config defaults) never skips - the shared `client` fixture proves it."""
     client.get(
         SEARCH_URL,
         params={"resource_id": RESOURCE},
         headers={"Request-Source": "data-explorer"},
     )
 
-    assert recorded[0]["request_source"] == "data-explorer"
-
-
-def test_request_source_is_none_when_the_header_is_absent(
-    client: TestClient, recorded: list[dict]
-) -> None:
-    client.get(SEARCH_URL, params={"resource_id": RESOURCE})
-
-    assert recorded[0]["request_source"] is None
+    assert len(recorded) == 1
 
 
 # --- what does not get recorded, and what cannot break ------------------------
