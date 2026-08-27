@@ -14,8 +14,10 @@ DEFAULT_API_URL = "https://example.com"
 #     the compatibility contract;
 #   - the health probes sit outside it, so an orchestrator's probe URL
 #     doesn't churn when the contract gets a new version;
-#   - downloads sit outside the `/api` segment entirely, since a dump URL is
-#     handed to a browser or a `curl` rather than driven by an API client.
+#   - downloads sit under the versioned prefix alongside the actions: a dump
+#     URL is handed to a browser or a `curl` rather than driven by an API
+#     client, but its query params and output layout are part of the same
+#     compatibility contract, so it versions with them.
 #
 # Note this is NOT the prefix used to *call* an upstream CKAN — those
 # requests go to CKAN's own `/api/3/action/` (see
@@ -24,7 +26,7 @@ SERVICE_PREFIX = "/datastore"
 API_BASE_PREFIX = f"{SERVICE_PREFIX}/api"
 API_VERSION = "v2"
 API_PREFIX = f"{API_BASE_PREFIX}/{API_VERSION}"
-DUMP_PREFIX = f"{SERVICE_PREFIX}/dump"
+DUMP_PREFIX = f"{API_PREFIX}/dump"
 # Download formats served by the export pipeline (`<DUMP_PREFIX>/…` and
 # `datastore_search_sql?download=…`). Lives here — not in `api/` — because
 # both the request schemas (pydantic layer) and the endpoints (starlette
@@ -39,6 +41,17 @@ DUMP_EXTENSIONS: dict[str, str] = {
     "gzip": "csv.gz",
     "ndjson": "json",
     "parquet": "parquet",
+}
+
+# Media type per dump format. Only ever reaches the client through the
+# signed GCS URL's own headers — the API redirects rather than serving the
+# bytes — but OpenAPI needs them to document what a download actually is,
+# so a generated client doesn't assume the JSON envelope.
+DUMP_MEDIA_TYPES: dict[str, str] = {
+    "csv": "text/csv",
+    "gzip": "application/gzip",
+    "ndjson": "application/x-ndjson",
+    "parquet": "application/vnd.apache.parquet",
 }
 
 POSTGRES_TYPES: dict[str, str] = {

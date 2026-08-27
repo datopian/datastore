@@ -327,7 +327,7 @@ class DatastoreSearchSQLRequest(BaseModel):
     _REQUIRE_LIMIT: ClassVar[bool] = True
 
     sql: str = Field(
-        description=("A  Datastore read API with `SELECT` / `WITH` statement."),
+        description=("A read-only `SELECT` / `WITH` statement."),
         examples=['SELECT * FROM "balancing_auction_results_2025" WHERE accepted = true LIMIT 100'],
     )
 
@@ -434,7 +434,7 @@ class DatastoreDumpSQLRequest(DatastoreSearchSQLRequest):
     _REQUIRE_LIMIT: ClassVar[bool] = False
 
     sql: str = Field(
-        description=("A  Datastore read API with`SELECT` / `WITH` statement."),
+        description=("A read-only `SELECT` / `WITH` statement to export."),
         examples=['SELECT * FROM "balancing_auction_results_2025" WHERE accepted = true'],
     )
 

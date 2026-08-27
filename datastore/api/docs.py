@@ -284,10 +284,12 @@ OPENAPI_TAGS = [
     },
     {
         "name": "Datastore",
-        "description": ("API endpoint - create, upsert, delete, searchsearch_sql, and info."),
+        "description": "JSON action API — every response is the CKAN envelope.",
     },
     {
-        "name": "Datastore Download",
-        "description": "Bulk download of an entire resource in available formats.",
+        "name": "Datastore Downloads",
+        "description": (
+            "File downloads — a `302` to a signed URL, not the JSON envelope."
+        ),
     },
 ]

@@ -6,9 +6,9 @@ Auto-generated from [`example_payload/`](../example_payload/) by
 
 ## Import
 
-In Postman: **File → Import** → `collection.json`. Seven folders appear:
+In Postman: **File → Import** → `collection.json`. Eight folders appear:
 `health`, `datastore_create`, `datastore_upsert`, `datastore_info`,
-`datastore_search`, `datastore_search_sql`, `datastore_delete`.
+`datastore_search`, `datastore_search_sql`, `datastore_delete`, `dump`.
 
 ## Variables
 
@@ -29,9 +29,18 @@ Run folders top-to-bottom on a fresh resource:
 3. **`datastore_info`** — confirm schema + row count.
 4. **`datastore_search`** — filter / full-text / paginated.
 5. **`datastore_search_sql`** — raw SQL; `LIMIT` required. JOIN/UNION variants need a second resource `balancing_auction_results_2024`.
-6. **`datastore_delete`** — row delete (`auction_id=1`) → drop column (`bidder_metadata`) → drop table.
+6. **`dump`** — download the table or a SQL result as a file. Run before
+   `datastore_delete`, while the rows still exist.
+7. **`datastore_delete`** — row delete (`auction_id=1`) → drop column (`bidder_metadata`) → drop table.
 
 `health` is independent — hit any time to check the server.
+
+**On the `dump` folder:** these return `302` to a signed GCS URL rather than a
+body. Postman follows the redirect by default and downloads the file; switch
+off **Settings → Automatically follow redirects** to inspect the `Location`
+header instead. A sharded parquet export returns `200` + a zip of the parts
+instead of a redirect. The server needs `BIGQUERY_EXPORT_BUCKET` set —
+without it every dump request is a `500`.
 
 ## Regenerate
 
@@ -40,6 +49,8 @@ python postman/generate_postman.py
 ```
 
 Drop new files under `example_payload/<action>/<name>.json` to add requests.
+The `dump` folder is the exception: its requests take a path parameter and no
+body, so they're declared inline as `DUMP_REQUESTS` in the generator.
 
 ## Auth
 

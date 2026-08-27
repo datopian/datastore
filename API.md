@@ -75,9 +75,9 @@ token (except under `anonymous`).
 | POST | `/datastore/api/v2/datastore_delete` | Delete rows, drop columns, or drop the table |
 | GET | `/datastore/api/v2/datastore_search` | Search a resource (streaming) |
 | GET | `/datastore/api/v2/datastore_search_sql` | Run a read-only SQL `SELECT` (streaming) |
-| GET | `/datastore/dump/query` | Download the result of a SQL `SELECT` as a file |
+| GET | `/datastore/api/v2/dump/query` | Download the result of a SQL `SELECT` as a file |
 | GET | `/datastore/api/v2/datastore_info` | Schema + row stats for a resource |
-| GET | `/datastore/dump/{resource_id}` | Download a whole resource (CSV/NDJSON/Parquet) |
+| GET | `/datastore/api/v2/dump/{resource_id}` | Download a whole resource (CSV/NDJSON/Parquet) |
 | GET | `/datastore/api/health` · `/datastore/api/ready` | Liveness / readiness |
 
 ---
@@ -314,7 +314,7 @@ GET /datastore/api/v2/datastore_search
 Run a single read-only `SELECT` / `WITH` statement and stream the result. Tables
 are referenced by `resource_id`; each is authorized individually, and functions
 are checked against the engine's allow-list. Include a `LIMIT` (required).
-To export the result as a file instead, use [`GET /datastore/dump/query`](#get-datastoredumpquery).
+To export the result as a file instead, use [`GET /datastore/api/v2/dump/query`](#get-datastoreapiv2dumpquery).
 
 ### Query parameters
 
@@ -386,10 +386,21 @@ row stats — a column-level metadata catalog without a side store.
 
 ---
 
-## `GET /datastore/dump/{resource_id}`
+## `GET /datastore/api/v2/dump/{resource_id}`
 
 Download an entire resource. Pick the format with `?format=csv` (default),
 `gzip`, `ndjson`, or `parquet`.
+
+This route returns a **file**, never the JSON envelope — the only JSON it can
+produce is an error. The content type comes from the signed GCS URL and
+follows `format`:
+
+| `format` | Content-Type | Extension |
+|---|---|---|
+| `csv` | `text/csv` | `.csv` |
+| `gzip` | `application/gzip` | `.csv.gz` |
+| `ndjson` | `application/x-ndjson` | `.json` |
+| `parquet` | `application/vnd.apache.parquet` | `.parquet` |
 
 - **csv / gzip / ndjson** — `302` redirect to a signed GCS URL, at any size.
   Shards from a large export are stitched into one object server-side, so the
@@ -405,13 +416,13 @@ Download an entire resource. Pick the format with `?format=csv` (default),
 Requires `read` permission on the resource and a configured export bucket
 (`BIGQUERY_EXPORT_BUCKET`).
 
-`query` is a **reserved name** on this route — `/datastore/dump/query` is the SQL
+`query` is a **reserved name** on this route — `/datastore/api/v2/dump/query` is the SQL
 download endpoint below, so a resource literally named `query` can't be dumped
 by this URL.
 
 ---
 
-## `GET /datastore/dump/query`
+## `GET /datastore/api/v2/dump/query`
 
 Download the result of a **SQL `SELECT`** as a single file — filtered
 downloads at any size. Same validation as `datastore_search_sql` (single
@@ -428,14 +439,14 @@ file itself, not the CKAN envelope.
 ### Example
 
 ```http
-GET /datastore/dump/query
+GET /datastore/api/v2/dump/query
     ?sql=SELECT * FROM "c6153a74-43cb-4edf-8bdf-bb664feca937" WHERE accepted = true
     &format=csv
 ```
 
 ### Response
 
-Identical to `/datastore/dump/{resource_id}` above:
+Identical to `/datastore/api/v2/dump/{resource_id}` above:
 
 - **csv / gzip / ndjson** — `302` to a signed GCS URL at any size (shards are
   composed into one object). The URL expires after

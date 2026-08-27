@@ -73,6 +73,69 @@ HEALTH_REQUESTS: list[tuple[str, str, str]] = [
 ]
 
 
+# Download requests. These aren't driven by `example_payload/` — the table
+# dump takes its resource on the path rather than in a body, and neither
+# request has a JSON payload. Each entry: name, path, query params, blurb.
+DUMP_REQUESTS: list[tuple[str, str, list[tuple[str, str]], str]] = [
+    (
+        "Dump - whole table (CSV)",
+        "datastore/api/v2/dump/{{resourceId}}",
+        [("format", "csv")],
+        "Export the whole table. Responds 302 to a signed GCS URL — the "
+        "bytes go straight from GCS to the client. Turn OFF Postman's "
+        "\"Automatically follow redirects\" to inspect the `Location` "
+        "header instead of downloading.",
+    ),
+    (
+        "Dump - whole table (gzip)",
+        "datastore/api/v2/dump/{{resourceId}}",
+        [("format", "gzip")],
+        "Same export, gzipped by BigQuery. Shards compose into one "
+        "`.csv.gz` carrying exactly one header member.",
+    ),
+    (
+        "Dump - whole table (NDJSON)",
+        "datastore/api/v2/dump/{{resourceId}}",
+        [("format", "ndjson")],
+        "Newline-delimited JSON, one object per row. Composes to a "
+        "single object when the export shards.",
+    ),
+    (
+        "Dump - whole table (Parquet)",
+        "datastore/api/v2/dump/{{resourceId}}",
+        [("format", "parquet")],
+        "Parquet can't be composed (footer + magic bytes), so a sharded "
+        "export returns 200 + a streamed zip of the parts rather than a "
+        "redirect.",
+    ),
+    (
+        "Dump SQL - query result (CSV)",
+        "datastore/api/v2/dump/query",
+        [
+            ("sql", "SELECT auction_id, product_code, "
+                    "clearing_price_gbp_per_mwh "
+                    "FROM \"{{resourceId}}\" WHERE accepted = true"),
+            ("format", "csv"),
+        ],
+        "Export an arbitrary vetted SELECT. Unlike `datastore_search_sql`, "
+        "`LIMIT` is optional and uncapped here. `query` is a reserved "
+        "resource name on this route.",
+    ),
+    (
+        "Dump SQL - aggregate (Parquet)",
+        "datastore/api/v2/dump/query",
+        [
+            ("sql", "SELECT product_code, AVG(clearing_price_gbp_per_mwh) "
+                    "AS avg_price, SUM(volume_mwh) AS total_volume "
+                    "FROM \"{{resourceId}}\" GROUP BY product_code"),
+            ("format", "parquet"),
+        ],
+        "Aggregate export. Results cache per (SQL, table version); a query "
+        "calling `now()` / `current_date` bypasses the cache and re-exports.",
+    ),
+]
+
+
 def _request_url(path: str, query: list[dict[str, str]] | None = None) -> dict[str, Any]:
     """Postman v2.1 structured URL — lets the Postman UI edit params."""
     parts = path.strip("/").split("/")
@@ -355,10 +418,39 @@ def _build_health_folder() -> dict[str, Any]:
     }
 
 
+def _build_dump_folder() -> dict[str, Any]:
+    items = []
+    for name, path, params, desc in DUMP_REQUESTS:
+        query = [{"key": k, "value": v} for k, v in params]
+        items.append({
+            "name": name,
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": _request_url(path, query=query),
+                "description": desc,
+            },
+            "response": [],
+        })
+    return {
+        "name": "dump",
+        "description": (
+            "File downloads: `/datastore/api/v2/dump/{resource_id}` for a "
+            "whole table, `/datastore/api/v2/dump/query` for a SQL result. "
+            "One URL always yields one file — a 302 to a signed GCS URL for "
+            "csv / gzip / ndjson, and for parquet either a 302 (single "
+            "shard) or a streamed zip of the parts. Needs "
+            "`BIGQUERY_EXPORT_BUCKET` set on the server."
+        ),
+        "item": items,
+    }
+
+
 def build_collection() -> dict[str, Any]:
     folders: list[dict[str, Any]] = [_build_health_folder()]
     for action, method, description in ENDPOINTS:
         folders.append(_build_endpoint_folder(action, method, description))
+    folders.append(_build_dump_folder())
     return {
         "info": {
             "_postman_id": str(uuid.uuid4()),
