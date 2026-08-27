@@ -293,18 +293,10 @@ OPENAPI_TAGS = [
     {
         "name": "Datastore Downloads",
         "description": (
-            "**Download endpoints — these return a file, not JSON.** Open "
-            "one in a browser or hand it to `curl -L`; there is no "
-            "envelope to parse and no `result` object.\n\n"
-            "Export a whole resource or the result of a SQL `SELECT` as "
-            "csv, gzip, ndjson or parquet. A download answers `302` with "
-            "a short-lived signed storage URL, so the bytes stream "
-            "straight from storage rather than through this API and the "
-            "transfer is resumable. The one exception is a parquet export "
-            "large enough to shard: those parts cannot be merged, so they "
-            "come back as a single streamed zip.\n\n"
-            "JSON appears only when something fails — an error is the "
-            "usual CKAN envelope."
+            "**These return a file, not JSON** — open one in a browser or "
+            "hand it to `curl -L`. Export a whole resource or a SQL "
+            "`SELECT` as csv, gzip, ndjson or parquet; the response is a "
+            "`302` to a short-lived signed storage URL."
         ),
     },
 ]
