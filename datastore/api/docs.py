@@ -284,19 +284,12 @@ OPENAPI_TAGS = [
     },
     {
         "name": "Datastore",
-        "description": (
-            "JSON action API — create, upsert, delete, search, search_sql "
-            "and info. Every response is the CKAN envelope: `help`, "
-            "`success`, and either `result` or `error`."
-        ),
+        "description": "JSON action API — every response is the CKAN envelope.",
     },
     {
         "name": "Datastore Downloads",
         "description": (
-            "**These return a file, not JSON** — open one in a browser or "
-            "hand it to `curl -L`. Export a whole resource or a SQL "
-            "`SELECT` as csv, gzip, ndjson or parquet; the response is a "
-            "`302` to a short-lived signed storage URL."
+            "File downloads — a `302` to a signed URL, not the JSON envelope."
         ),
     },
 ]
