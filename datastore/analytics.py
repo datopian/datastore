@@ -16,7 +16,9 @@ Two pieces:
     the versioned action namespace and ``<base>/dump/*``; probes, docs and the
     welcome page are excluded by definition. A request carrying the
     configured ignore header/value (``ANALYTICS_IGNORE_HEADER`` /
-    ``ANALYTICS_IGNORE_VALUES``), or arriving from a configured ignore IP
+    ``ANALYTICS_IGNORE_VALUES``), the same value on a configured query
+    param (``ANALYTICS_IGNORE_QUERY_PARAM`` - for plain ``<a href>`` links
+    that cannot set a header), or arriving from a configured ignore IP
     (``ANALYTICS_IGNORE_IPS``, a weaker fallback for callers that cannot yet
     set the header), is skipped entirely - not logged with a distinguishing
     field, just never recorded.
@@ -110,6 +112,7 @@ class AnalyticsMiddleware:
         service: str = "datastore-api",
         ignore_header: str = "",
         ignore_values: frozenset[str] = frozenset(),
+        ignore_query_param: str = "",
         ignore_ips: frozenset[str] = frozenset(),
     ) -> None:
         self.app = app
@@ -122,6 +125,11 @@ class AnalyticsMiddleware:
         #: ``ANALYTICS_IGNORE_VALUES``; either empty disables the check.
         self.ignore_header = ignore_header.lower()
         self.ignore_values = ignore_values
+        #: Same check, but on a query string param instead of a header - for
+        #: plain `<a href>` download links, which cannot set a header at
+        #: all. Matched against the same ``ignore_values``. Configured via
+        #: ``ANALYTICS_IGNORE_QUERY_PARAM``; empty disables the check.
+        self.ignore_query_param = ignore_query_param
         #: A request whose resolved ``request_ip`` is in ``ignore_ips`` skips
         #: analytics the same way - a fallback for callers that cannot yet
         #: set the ignore header (e.g. the DXP frontend's static egress IPs).
@@ -135,6 +143,12 @@ class AnalyticsMiddleware:
         if self.ignore_header and self.ignore_values:
             value = headers.get(self.ignore_header)
             if value is not None and value.strip().lower() in self.ignore_values:
+                return True
+        if self.ignore_query_param and self.ignore_values:
+            query: bytes = scope.get("query_string", b"")
+            params = parse_qs(query.decode("latin-1"))
+            values = params.get(self.ignore_query_param) or []
+            if any(v.strip().lower() in self.ignore_values for v in values):
                 return True
         if self.ignore_ips:
             if self._request_ip(scope, headers) in self.ignore_ips:

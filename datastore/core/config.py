@@ -79,9 +79,10 @@ class Config(BaseSettings):
     ANALYTICS_IGNORE_VALUES: str = Field(
         default="",
         description=(
-            "Comma-separated header values that skip analytics logging "
-            "when ANALYTICS_IGNORE_HEADER matches (e.g. `data-explorer`). "
-            "Matched case-insensitively. Empty disables the check."
+            "Comma-separated values that skip analytics logging when "
+            "ANALYTICS_IGNORE_HEADER or ANALYTICS_IGNORE_QUERY_PARAM "
+            "matches (e.g. `data-explorer`). Matched case-insensitively. "
+            "Empty disables both checks."
         ),
     )
 
@@ -91,6 +92,16 @@ class Config(BaseSettings):
         return frozenset(
             v.strip().lower() for v in self.ANALYTICS_IGNORE_VALUES.split(",") if v.strip()
         )
+
+    ANALYTICS_IGNORE_QUERY_PARAM: str = Field(
+        default="",
+        description=(
+            "Query string param name checked the same way as "
+            "ANALYTICS_IGNORE_HEADER, for plain `<a href>` download links "
+            "that cannot set a header (e.g. `request_source`). Matched "
+            "against ANALYTICS_IGNORE_VALUES. Empty disables the check."
+        ),
+    )
 
     ANALYTICS_IGNORE_IPS: str = Field(
         default="",
