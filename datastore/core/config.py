@@ -92,6 +92,22 @@ class Config(BaseSettings):
             v.strip().lower() for v in self.ANALYTICS_IGNORE_VALUES.split(",") if v.strip()
         )
 
+    ANALYTICS_IGNORE_IPS: str = Field(
+        default="",
+        description=(
+            "Comma-separated source IPs that skip analytics logging - a "
+            "fallback for callers that cannot yet set "
+            "ANALYTICS_IGNORE_HEADER (e.g. a frontend's static egress IPs). "
+            "Weaker than the header check: an IP can change on redeploy or "
+            "scaling without this list being updated. Empty disables the check."
+        ),
+    )
+
+    @property
+    def analytics_ignore_ips_set(self) -> frozenset[str]:
+        """`ANALYTICS_IGNORE_IPS` split on commas, blanks dropped."""
+        return frozenset(v.strip() for v in self.ANALYTICS_IGNORE_IPS.split(",") if v.strip())
+
     # CORS
     # Public base URL of this service. Used only to render absolute URLs in
     # the OpenAPI examples — live responses derive their URLs from the

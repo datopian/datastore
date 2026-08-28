@@ -225,11 +225,13 @@ def _client_with_ignore_config(
     fake_ckan: FakeCKAN,
     cache: InMemoryCache,
     *,
-    header: str,
-    values: str,
+    header: str = "",
+    values: str = "",
+    ips: str = "",
 ) -> TestClient:
     monkeypatch.setenv("ANALYTICS_IGNORE_HEADER", header)
     monkeypatch.setenv("ANALYTICS_IGNORE_VALUES", values)
+    monkeypatch.setenv("ANALYTICS_IGNORE_IPS", ips)
     get_config.cache_clear()
 
     app = create_app()
@@ -315,11 +317,78 @@ def test_a_request_with_a_different_header_value_is_still_recorded(
     assert len(recorded) == 1
 
 
+def test_a_request_from_an_ignored_ip_is_not_recorded(
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    recorded: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c = _client_with_ignore_config(
+        monkeypatch, fake_ckan, cache, ips="54.247.74.82,63.32.18.228"
+    )
+    with c:
+        response = c.get(
+            SEARCH_URL,
+            params={"resource_id": RESOURCE},
+            headers={"X-Real-IP": "54.247.74.82"},
+        )
+
+    assert response.status_code == 200
+    assert recorded == []
+
+
+def test_a_request_from_a_different_ip_is_still_recorded(
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    recorded: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c = _client_with_ignore_config(
+        monkeypatch, fake_ckan, cache, ips="54.247.74.82,63.32.18.228"
+    )
+    with c:
+        c.get(
+            SEARCH_URL,
+            params={"resource_id": RESOURCE},
+            headers={"X-Real-IP": "203.0.113.7"},
+        )
+
+    assert len(recorded) == 1
+
+
+def test_the_header_and_ip_checks_are_independent(
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    recorded: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Either check alone is enough to skip - a request doesn't need to
+    match both."""
+    c = _client_with_ignore_config(
+        monkeypatch,
+        fake_ckan,
+        cache,
+        header="Request-Source",
+        values="data-explorer",
+        ips="54.247.74.82",
+    )
+    with c:
+        response = c.get(
+            SEARCH_URL,
+            params={"resource_id": RESOURCE},
+            headers={"X-Real-IP": "54.247.74.82"},
+        )
+
+    assert response.status_code == 200
+    assert recorded == []
+
+
 def test_the_ignore_check_is_disabled_when_unconfigured(
     client: TestClient, recorded: list[dict]
 ) -> None:
-    """Default env (empty header/values, set by conftest indirectly through
-    Config defaults) never skips - the shared `client` fixture proves it."""
+    """Default env (empty header/values/ips, set by conftest indirectly
+    through Config defaults) never skips - the shared `client` fixture
+    proves it."""
     client.get(
         SEARCH_URL,
         params={"resource_id": RESOURCE},

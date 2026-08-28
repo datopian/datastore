@@ -16,8 +16,10 @@ Two pieces:
     the versioned action namespace and ``<base>/dump/*``; probes, docs and the
     welcome page are excluded by definition. A request carrying the
     configured ignore header/value (``ANALYTICS_IGNORE_HEADER`` /
-    ``ANALYTICS_IGNORE_VALUES``) is skipped entirely - not logged with a
-    distinguishing field, just never recorded.
+    ``ANALYTICS_IGNORE_VALUES``), or arriving from a configured ignore IP
+    (``ANALYTICS_IGNORE_IPS``, a weaker fallback for callers that cannot yet
+    set the header), is skipped entirely - not logged with a distinguishing
+    field, just never recorded.
 
 ``authorization_dict``
     Called by ``RequestContext.authorize`` with the authorized data_dict.
@@ -108,6 +110,7 @@ class AnalyticsMiddleware:
         service: str = "datastore-api",
         ignore_header: str = "",
         ignore_values: frozenset[str] = frozenset(),
+        ignore_ips: frozenset[str] = frozenset(),
     ) -> None:
         self.app = app
         self.service = service
@@ -119,12 +122,24 @@ class AnalyticsMiddleware:
         #: ``ANALYTICS_IGNORE_VALUES``; either empty disables the check.
         self.ignore_header = ignore_header.lower()
         self.ignore_values = ignore_values
+        #: A request whose resolved ``request_ip`` is in ``ignore_ips`` skips
+        #: analytics the same way - a fallback for callers that cannot yet
+        #: set the ignore header (e.g. the DXP frontend's static egress IPs).
+        #: Weaker than the header check: an IP can change on redeploy or
+        #: scaling without anyone updating this list, so it is a secondary
+        #: signal, not the primary one. Configured via
+        #: ``ANALYTICS_IGNORE_IPS``; empty disables the check.
+        self.ignore_ips = ignore_ips
 
-    def _is_ignored(self, scope: Scope) -> bool:
-        if not self.ignore_header or not self.ignore_values:
-            return False
-        value = Headers(scope=scope).get(self.ignore_header)
-        return value is not None and value.strip().lower() in self.ignore_values
+    def _is_ignored(self, scope: Scope, headers: Headers) -> bool:
+        if self.ignore_header and self.ignore_values:
+            value = headers.get(self.ignore_header)
+            if value is not None and value.strip().lower() in self.ignore_values:
+                return True
+        if self.ignore_ips:
+            if self._request_ip(scope, headers) in self.ignore_ips:
+                return True
+        return False
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope["method"] not in self.METHODS:
@@ -132,7 +147,7 @@ class AnalyticsMiddleware:
         action = action_name(scope["path"])
         if action is None:
             return await self.app(scope, receive, send)
-        if self._is_ignored(scope):
+        if self._is_ignored(scope, Headers(scope=scope)):
             return await self.app(scope, receive, send)
 
         # Created here if authorize has not run yet, so both sides mutate the
