@@ -111,6 +111,7 @@ def create_app() -> FastAPI:
             service="Datastore",
             ignore_header=config.ANALYTICS_IGNORE_HEADER,
             ignore_values=config.analytics_ignore_values_set,
+            ignore_query_param=config.ANALYTICS_IGNORE_QUERY_PARAM,
             ignore_ips=config.analytics_ignore_ips_set,
         )
     # Added last = outermost, so 4xx/5xx envelopes carry CORS headers too.

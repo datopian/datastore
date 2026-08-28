@@ -227,10 +227,12 @@ def _client_with_ignore_config(
     *,
     header: str = "",
     values: str = "",
+    query_param: str = "",
     ips: str = "",
 ) -> TestClient:
     monkeypatch.setenv("ANALYTICS_IGNORE_HEADER", header)
     monkeypatch.setenv("ANALYTICS_IGNORE_VALUES", values)
+    monkeypatch.setenv("ANALYTICS_IGNORE_QUERY_PARAM", query_param)
     monkeypatch.setenv("ANALYTICS_IGNORE_IPS", ips)
     get_config.cache_clear()
 
@@ -381,6 +383,60 @@ def test_the_header_and_ip_checks_are_independent(
 
     assert response.status_code == 200
     assert recorded == []
+
+
+def test_a_dump_link_with_the_ignore_query_param_is_not_recorded(
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    recorded: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real use case: a plain <a href> download link can't set a
+    header, so the same value rides in the query string instead."""
+    c = _client_with_ignore_config(
+        monkeypatch,
+        fake_ckan,
+        cache,
+        query_param="request_source",
+        values="admin-portal",
+    )
+    url = "https://storage.googleapis.com/bucket/dumps/x/abc.csv?Sig=abc"
+
+    async def fake_dump(self: BigQueryBackend, resource_id: str, fmt: str) -> list[str]:
+        return [url]
+
+    with c, patch.object(BigQueryBackend, "dump", fake_dump):
+        response = c.get(
+            f"{DUMP_PREFIX}/{RESOURCE}?request_source=admin-portal",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert recorded == []
+
+
+def test_a_dump_link_without_the_ignore_query_param_is_still_recorded(
+    fake_ckan: FakeCKAN,
+    cache: InMemoryCache,
+    recorded: list[dict],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c = _client_with_ignore_config(
+        monkeypatch,
+        fake_ckan,
+        cache,
+        query_param="request_source",
+        values="admin-portal",
+    )
+    url = "https://storage.googleapis.com/bucket/dumps/x/abc.csv?Sig=abc"
+
+    async def fake_dump(self: BigQueryBackend, resource_id: str, fmt: str) -> list[str]:
+        return [url]
+
+    with c, patch.object(BigQueryBackend, "dump", fake_dump):
+        c.get(f"{DUMP_PREFIX}/{RESOURCE}", follow_redirects=False)
+
+    assert len(recorded) == 1
 
 
 def test_the_ignore_check_is_disabled_when_unconfigured(
