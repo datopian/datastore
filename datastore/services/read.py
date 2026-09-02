@@ -240,11 +240,17 @@ async def info_datastore(
     )
 
     schema = result.schema
+    meta = result.meta
     if context.config.AUTH_TYPE == "ckan":
-        schema = data_dict.get("resource", {}).get("schema") or result.schema
-    fields, _ = frictionless_schema_to_fields(schema)
+        ckan_schema = (data_dict.get("resource") or {}).get("schema")
+        if ckan_schema:
+            schema = ckan_schema
+    fields, primary_key = frictionless_schema_to_fields(schema)
+
+    if "primary_key" in meta and primary_key != meta["primary_key"]:
+        meta = {**meta, "primary_key": primary_key}
     return DatastoreInfoResponse.Result(
-        meta=result.meta,
+        meta=meta,
         schema=schema,
         fields=fields,
     )

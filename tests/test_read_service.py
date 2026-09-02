@@ -23,10 +23,12 @@ from unittest.mock import patch
 import pytest
 from datastore.core.config import Config
 from datastore.core.exceptions import ValidationError
+from datastore.infrastructure.engines.base import InfoResult
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
 from datastore.services.read import (
     _build_pagination_links,
     dump_sql_datastore,
+    info_datastore,
     search_datastore,
 )
 
@@ -415,3 +417,98 @@ def test_dump_sql_service_forwards_args_and_returns_urls() -> None:
         "resource_ids": ["r1"],
         "function_names": ["count"],
     }
+
+
+# ── info_datastore: CKAN schema override ───────────────────────────────────
+#
+# Under AUTH_TYPE=ckan the authorized resource record's `schema` wins over
+# the engine's stored copy. `meta.primary_key` has to follow the same
+# descriptor — otherwise the response advertises CKAN's columns beside the
+# engine's key.
+
+_ENGINE_SCHEMA: dict[str, Any] = {
+    "fields": [{"name": "auction_id", "type": "integer"}],
+    "primaryKey": ["auction_id"],
+}
+_CKAN_SCHEMA: dict[str, Any] = {
+    "fields": [
+        {"name": "auction_id", "type": "integer", "title": "Auction ID"},
+        {"name": "product_code", "type": "string"},
+    ],
+    "primaryKey": ["auction_id", "product_code"],
+}
+
+
+def _info(
+    *,
+    auth_type: str,
+    resource: dict[str, Any] | None,
+    engine_schema: dict[str, Any] | None = None,
+    engine_meta: dict[str, Any] | None = None,
+) -> Any:
+    ctx = SimpleNamespace(config=Config(AUTH_TYPE=auth_type, CKAN_URL="http://ckan.test"))
+    result = InfoResult(
+        schema=engine_schema if engine_schema is not None else _ENGINE_SCHEMA,
+        meta=engine_meta
+        if engine_meta is not None
+        else {"resource_id": "res-1", "total": 7, "primary_key": ["auction_id"]},
+    )
+
+    def fake(self: BigQueryBackend, resource_id: str) -> InfoResult:
+        return result
+
+    data_dict: dict[str, Any] = {"resource_id": "res-1"}
+    if resource is not None:
+        data_dict["resource"] = resource
+    with patch.object(BigQueryBackend, "info", fake):
+        return asyncio.run(info_datastore(ctx, data_dict))
+
+
+def test_info_ckan_schema_overrides_fields_and_primary_key() -> None:
+    """CKAN's schema wins → `schema`, `fields`, and `meta.primary_key`
+    all describe the same descriptor."""
+    out = _info(auth_type="ckan", resource={"schema": _CKAN_SCHEMA})
+
+    assert out.schema == _CKAN_SCHEMA
+    assert [f["id"] for f in out.fields] == ["auction_id", "product_code"]
+    assert out.meta["primary_key"] == ["auction_id", "product_code"]
+    # Untouched engine metadata survives the override.
+    assert out.meta["total"] == 7
+
+
+def test_info_ckan_schema_without_primary_key_clears_engine_key() -> None:
+    """A CKAN schema that declares no `primaryKey` means the resource has
+    none — the engine's stale key must not leak through."""
+    out = _info(
+        auth_type="ckan",
+        resource={"schema": {"fields": [{"name": "auction_id", "type": "integer"}]}},
+    )
+
+    assert out.meta["primary_key"] == []
+
+
+def test_info_falls_back_to_engine_schema_when_ckan_has_none() -> None:
+    """No `schema` on the CKAN record → engine schema + engine key."""
+    out = _info(auth_type="ckan", resource={"id": "res-1"})
+
+    assert out.schema == _ENGINE_SCHEMA
+    assert out.meta["primary_key"] == ["auction_id"]
+
+
+def test_info_non_ckan_auth_ignores_resource_schema() -> None:
+    """Under JWT / anonymous the engine is the only source of truth."""
+    out = _info(auth_type="anonymous", resource={"schema": _CKAN_SCHEMA})
+
+    assert out.schema == _ENGINE_SCHEMA
+    assert out.meta["primary_key"] == ["auction_id"]
+
+
+def test_info_engine_meta_without_primary_key_stays_absent() -> None:
+    """Engines that don't report a key don't get one synthesised."""
+    out = _info(
+        auth_type="ckan",
+        resource={"schema": _CKAN_SCHEMA},
+        engine_meta={"resource_id": "res-1", "total": 7},
+    )
+
+    assert "primary_key" not in out.meta
