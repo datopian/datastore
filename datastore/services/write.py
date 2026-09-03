@@ -90,6 +90,7 @@ async def _sync_resource_to_ckan(
     *,
     schema: dict[str, Any] | None = None,
     clear_schema: bool = False,
+    dump_url: str | None = None,
 ) -> None:
     """Keep the CKAN resource metadata in sync with the datastore table.
 
@@ -115,6 +116,8 @@ async def _sync_resource_to_ckan(
         patch["schema"] = None
     elif schema is not None:
         patch["schema"] = schema
+    if dump_url is not None:
+        patch["url"] = dump_url
     await context.ckan.resource_patch(resource_id=resource_id, patch=patch)
 
 
@@ -144,7 +147,6 @@ async def create_datastore(
             resource={
                 **resource,
                 "url_type": "datastore",
-                "url": _dump_url(context.config, resource.get("id", "")),
                 "datastore_active": True,
             }
         )
@@ -163,7 +165,12 @@ async def create_datastore(
         include_total=include_total,
     )
 
-    await _sync_resource_to_ckan(context, resource_id, schema=schema)
+    await _sync_resource_to_ckan(
+        context,
+        resource_id,
+        schema=schema,
+        dump_url=_dump_url(context.config, resource_id),
+    )
 
     return DatastoreCreateResponse.Result(
         resource_id=resource_id,
