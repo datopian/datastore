@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from frictionless import Resource, Schema
 from frictionless.exception import FrictionlessException
 
+from datastore.core.config import Config
+from datastore.core.constants import DUMP_PREFIX
 from datastore.core.exceptions import ValidationError
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.responses import (
@@ -24,6 +26,20 @@ if TYPE_CHECKING:  # type-only — no runtime import from api/
 def _utc_now_iso() -> str:
     """Naive UTC ISO timestamp, matching CKAN's stored datetime format."""
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+
+
+def _dump_url(config: Config, resource_id: str) -> str:
+    """Absolute download URL for `resource_id` on this service.
+
+    Base is `API_URL` when set, else `CKAN_URL`. The fallback is safe on
+    this path: it only runs under `AUTH_TYPE=ckan`, where a config
+    validator already guarantees `CKAN_URL` is non-empty — so the URL is
+    never left host-less. It does assume the datastore is reachable on
+    CKAN's host, which is true for the deployments this serves; a split
+    host needs `API_URL` set explicitly.
+    """
+    base = (config.API_URL or config.CKAN_URL).rstrip("/")
+    return f"{base}{DUMP_PREFIX}/{resource_id}"
 
 
 def _validate_records(
@@ -128,6 +144,7 @@ async def create_datastore(
             resource={
                 **resource,
                 "url_type": "datastore",
+                "url": _dump_url(context.config, resource.get("id", "")),
                 "datastore_active": True,
             }
         )
