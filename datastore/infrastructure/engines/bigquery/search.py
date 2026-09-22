@@ -82,10 +82,20 @@ def parse_sort(sort_str: str, allowed: set[str]) -> list[tuple[str, str]]:
     name into the generated SQL (no parameter binding for identifiers).
     """
     out: list[tuple[str, str]] = []
-    for part in sort_str.split(","):
+    terms = sort_str.split(",")
+    # A wholly blank `sort` means "no sort" - absence, not a bad value.
+    # A blank *term* inside one (`"a,,b"`, `", ,"`) is a client mistake
+    # and used to be skipped silently, so a malformed sort returned
+    # unsorted rows with a 200.
+    if not sort_str.strip():
+        return out
+    for part in terms:
         part = part.strip()
         if not part:
-            continue
+            raise ValueError(
+                f"sort {sort_str!r} has an empty entry; expected "
+                "'<column>' or '<column> asc|desc' between commas"
+            )
         tokens = part.split()
         if len(tokens) > 2:
             raise ValueError(
