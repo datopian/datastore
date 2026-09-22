@@ -291,9 +291,9 @@ async def _prepare_download(
         blobs = await _list_files_sorted(rw_gcs, attempt)
         if not blobs:
             raise ServerError(
-            "the export produced no output",
-            detail=f"BigQuery EXPORT DATA wrote no shards for {what}; check job logs.",
-        )
+                "the export produced no output",
+                detail=f"BigQuery EXPORT DATA wrote no shards for {what}; check job logs.",
+            )
 
         blobs = await _compose_single_file(backend, rw_gcs, attempt, fmt, blobs, header_bytes)
 
@@ -544,8 +544,13 @@ async def _signed_urls(
     ext: str,
 ) -> list[str]:
     """V4-sign each blob with an attachment filename (`<base>.<ext>`,
-    or `<base>_NN.<ext>` when there are several)."""
+    or `<base>_NN.<ext>` when there are several).
+    """
     expiry = _url_expiry(backend)
+    bucket_name = _bucket_of(blobs[0]) if blobs else None
+    ro_bucket = (
+        backend._build_storage_client("ro").bucket(bucket_name) if bucket_name else None
+    )
 
     def sign_all() -> list[str]:
         out: list[str] = []
@@ -555,8 +560,11 @@ async def _signed_urls(
                 if len(blobs) == 1
                 else f"{filename_base}_{i + 1:02d}.{ext}"
             )
+            # Re-bind to ro; fall back to the blob as listed if the
+            # bucket could not be resolved.
+            signer = ro_bucket.blob(blob.name) if ro_bucket is not None else blob
             out.append(
-                blob.generate_signed_url(
+                signer.generate_signed_url(
                     version="v4",
                     expiration=expiry,
                     method="GET",
@@ -566,6 +574,13 @@ async def _signed_urls(
         return out
 
     return await asyncio.to_thread(sign_all)
+
+
+def _bucket_of(blob: Any) -> str | None:
+    """The bucket name a blob belongs to, or None if unresolvable."""
+    bucket = getattr(blob, "bucket", None)
+    name = getattr(bucket, "name", None)
+    return name if isinstance(name, str) else None
 
 
 # ============================================================================
