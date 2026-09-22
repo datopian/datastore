@@ -614,22 +614,35 @@ def _export_data_sql(
 
 
 def _export_select_list(schema: Any, fmt: str) -> str:
-    """SELECT column list: parquet casts JSON columns to strings (BQ
-    can't export native JSON to parquet); csv/ndjson use the same
-    `format_select_column` casts as `datastore_search`."""
+    """SELECT column list for an export.
+
+    Every format applies the same `format_select_column` casts as
+    `datastore_search`, so one row reads back identically whichever
+    format the caller picked. Parquet additionally casts JSON columns
+    to strings, because BigQuery cannot export native JSON to parquet.
+
+    Parquet used to export `*`, which kept BigQuery's native TIMESTAMP
+    while csv/ndjson rendered a whole-second ISO string - the same row
+    came back as `...T07:08:35` in csv and `...T07:08:35.908256` in
+    parquet. `*` is still emitted when there is nothing to cast, which
+    keeps the common case free of a column list.
+    """
+    fields = list(schema)
     if fmt == "parquet":
-        fields = list(schema)
-        if not any((f.field_type or "").upper() == "JSON" for f in fields):
+        if not any(
+            (f.field_type or "").upper() in ("JSON", "TIMESTAMP", "DATETIME")
+            for f in fields
+        ):
             return "*"
         return ", ".join(
             (
                 f"TO_JSON_STRING(`{f.name}`) AS `{f.name}`"
                 if (f.field_type or "").upper() == "JSON"
-                else f"`{f.name}`"
+                else format_select_column(f.name, f.field_type)
             )
             for f in fields
         )
-    return ", ".join(format_select_column(f.name, f.field_type) for f in schema)
+    return ", ".join(format_select_column(f.name, f.field_type) for f in fields)
 
 
 def _csv_header_bytes(schema: Any, fmt: str) -> bytes:
