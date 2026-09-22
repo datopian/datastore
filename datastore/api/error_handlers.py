@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
 from datastore.api.responses import ORJSONResponse, _error_response
@@ -87,6 +88,12 @@ def register_exception_handlers(app: FastAPI) -> None:
             fields=fields,
         )
 
+    # Starlette's router raises *its* HTTPException for an unmatched route
+    # (404) or a wrong method (405). `fastapi.HTTPException` subclasses it,
+    # so registering the subclass alone left those two falling through to
+    # the default `{"detail": ...}` body - not the envelope every other
+    # error uses. Registering the base class covers both.
+    @app.exception_handler(StarletteHTTPException)
     @app.exception_handler(HTTPException)
     async def _http(request: Request, exc: HTTPException) -> ORJSONResponse:
         label = HTTP_STATUS_TO_TYPE_LABEL.get(exc.status_code, "Internal Error")
