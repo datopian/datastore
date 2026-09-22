@@ -12,10 +12,17 @@ class APIError(Exception):
         message: str,
         *,
         fields: dict[str, list[str]] | None = None,
+        detail: str | None = None,
     ) -> None:
-        super().__init__(message)
+        # `str(exc)` carries the detail so tracebacks stay useful; the
+        # envelope is built from `.message` alone.
+        super().__init__(f"{message}: {detail}" if detail else message)
+        #: Sent to the caller. Keep it generic on 5xx - upstream text
+        #: names the engine, the cloud region and internal job ids.
         self.message = message
         self.fields = fields
+        #: Operator-only context. Logged, never serialised.
+        self.detail = detail
 
 
 class ValidationError(APIError):

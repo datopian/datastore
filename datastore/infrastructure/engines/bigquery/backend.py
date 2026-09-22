@@ -30,6 +30,7 @@ from typing import Any
 
 from datastore.core.config import Config
 from datastore.core.exceptions import (
+    APIError,
     NotFoundError,
     ServerError,
     ValidationError,
@@ -65,6 +66,45 @@ from datastore.infrastructure.engines.bigquery.lib import (
 )
 
 log = logging.getLogger(__name__)
+
+
+# BigQuery reasons that mean "the caller sent something bad" rather than
+# "we are broken": an unknown column, a filter value that will not parse
+# as the column's type. Those are 400s.
+_CLIENT_ERROR_REASONS = frozenset({"invalidQuery", "invalid", "notFound"})
+
+_CLIENT_ERROR_MESSAGE = (
+    "the query could not be executed; check column names, filter values "
+    "and types against the resource schema"
+)
+
+
+def _bq_error_reason(e: Exception) -> str:
+    """Pull BigQuery's machine-readable `reason`.
+
+    `google.api_core` exposes it inside the `errors` list, *not* as an
+    attribute - `BadRequest.reason` is `None`. Reading the attribute
+    alone silently classifies every error as a server fault.
+    """
+    for err in getattr(e, "errors", None) or ():
+        if isinstance(err, dict) and err.get("reason"):
+            return str(err["reason"])
+    return ""
+
+
+def _classify_bq_error(e: Exception, op: str, resource_id: str | None = None) -> APIError:
+    """Map a BigQuery exception to the right side of the 4xx/5xx line.
+
+    Caller mistakes become `ValidationError`; everything else stays
+    `ServerError`. Either way the upstream text - engine name, region,
+    job id - rides in `detail`, which is logged and never serialised.
+    """
+    where = f" for resource {resource_id!r}" if resource_id else ""
+    detail = f"BigQuery {op} failed{where}: {e}"
+    if _bq_error_reason(e) in _CLIENT_ERROR_REASONS:
+        return ValidationError(_CLIENT_ERROR_MESSAGE, detail=detail)
+    return ServerError("internal error", detail=detail)
+
 
 _HEALTHCHECK_TTL_SECONDS = 15.0
 _HEALTHCHECK_TIMEOUT_SECONDS = 5.0
@@ -134,7 +174,8 @@ class BigQueryBackend(DatastoreBackend):
             return None
         except Exception as e:
             raise ServerError(
-                f"BigQuery tables.get failed for resource {resource_id!r}: {e}"
+                "internal error",
+                detail=f"BigQuery tables.get failed for resource {resource_id!r}: {e}",
             ) from e
         return table_to_schema(table)
 
@@ -194,7 +235,10 @@ class BigQueryBackend(DatastoreBackend):
             job.result()
             return job
         except Exception as e:
-            raise ServerError(f"BigQuery {op} failed for resource {resource_id!r}: {e}") from e
+            raise ServerError(
+                "internal error",
+                detail=f"BigQuery {op} failed for resource {resource_id!r}: {e}",
+            ) from e
 
     # ----- create helpers (DDL + records + branch orchestration) --------
     def _create_table_sql(self, resource_id: str, schema: dict) -> str | None:
@@ -611,7 +655,7 @@ class BigQueryBackend(DatastoreBackend):
             search_job = self.client.query(sql, job_config=job_config)
             row_iter = search_job.result()
         except Exception as e:
-            raise ServerError(f"BigQuery search failed for resource {resource_id!r}: {e}") from e
+            raise _classify_bq_error(e, "search", resource_id) from e
 
         total: int | None = None
         if include_total:
@@ -622,9 +666,7 @@ class BigQueryBackend(DatastoreBackend):
                 try:
                     rows = list(count_job.result())
                 except Exception as e:
-                    raise ServerError(
-                        f"BigQuery search COUNT failed for resource {resource_id!r}: {e}"
-                    ) from e
+                    raise _classify_bq_error(e, "search COUNT", resource_id) from e
                 total = int(rows[0]["n"]) if rows else 0
 
         return SearchResult(
@@ -674,7 +716,10 @@ class BigQueryBackend(DatastoreBackend):
                 dataset=self.config.BIGQUERY_DATASET,
             )
         except Exception as e:
-            raise ServerError(f"failed to qualify table references in SQL: {e}") from e
+            raise ServerError(
+                "the SQL could not be prepared for execution",
+                detail=f"failed to qualify table references in SQL: {e}",
+            ) from e
 
         count_sql, count_params = self._search_sql_count_query(qualified_sql)
 
@@ -699,7 +744,7 @@ class BigQueryBackend(DatastoreBackend):
             )
             row_iter = data_job.result()
         except Exception as e:
-            raise ServerError(f"BigQuery search_sql failed: {e}") from e
+            raise _classify_bq_error(e, "search_sql") from e
 
         total: int | None = None
         if count_job is not None:

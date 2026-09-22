@@ -46,6 +46,20 @@ from datastore.infrastructure.engines.bigquery.lib import (
 
 log = logging.getLogger(__name__)
 
+
+def _dry_run_error(e: Exception) -> ValidationError:
+    """Wrap a dry-run failure for the caller.
+
+    The SQL is the caller's, so this is a 400 - but BigQuery's text names
+    the engine, the region and a job id, so only the generic line goes in
+    `message`.
+    """
+    return ValidationError(
+        "the SQL is not valid for this datastore; check column names, "
+        "table names and syntax",
+        detail=f"sql failed BigQuery validation: {e}",
+    )
+
 # Per-format file extension + BigQuery EXPORT DATA `format` value.
 _FMT: dict[str, dict[str, str]] = {
     "csv": {"ext": "csv", "bq": "CSV"},
@@ -173,7 +187,10 @@ async def dump_sql(
             dataset=backend.config.BIGQUERY_DATASET,
         )
     except Exception as e:
-        raise ServerError(f"failed to qualify table references in SQL: {e}") from e
+        raise ServerError(
+            "the SQL could not be prepared for execution",
+            detail=f"failed to qualify table references in SQL: {e}",
+        ) from e
 
     tables = {rid: await _get_table(backend, rid) for rid in resource_ids}
 
@@ -201,7 +218,7 @@ async def dump_sql(
                 job_config=dry_cfg,
             )
         except Exception as e:
-            raise ValidationError(f"sql failed BigQuery validation: {e}") from e
+            raise _dry_run_error(e) from e
         export_sql = _export_data_sql(
             uri,
             fmt,
@@ -273,7 +290,10 @@ async def _prepare_download(
         log.info("BigQuery export cache MISS: %s attempt=%s", what, attempt)
         blobs = await _list_files_sorted(rw_gcs, attempt)
         if not blobs:
-            raise ServerError(f"BigQuery EXPORT DATA wrote no shards for {what}; check job logs.")
+            raise ServerError(
+            "the export produced no output",
+            detail=f"BigQuery EXPORT DATA wrote no shards for {what}; check job logs.",
+        )
 
         blobs = await _compose_single_file(backend, rw_gcs, attempt, fmt, blobs, header_bytes)
 
@@ -381,7 +401,10 @@ async def _run_export_job(
                 f"Try {_FORMAT_HINT} for sharded multi-file downloads "
                 "instead."
             ) from e
-        raise ServerError(f"BigQuery EXPORT DATA failed for {what}: {e}") from e
+        raise ServerError(
+            "the export failed",
+            detail=f"BigQuery EXPORT DATA failed for {what}: {e}",
+        ) from e
 
     log.debug(
         "BigQuery export: %s in %.2fs",
@@ -673,4 +696,7 @@ async def _get_table(backend: Any, resource_id: str) -> Any:
     except NotFound as e:
         raise NotFoundError(f"resource {resource_id!r} is not declared; nothing to dump") from e
     except Exception as e:
-        raise ServerError(f"BigQuery get_table failed for resource {resource_id!r}: {e}") from e
+        raise ServerError(
+            "internal error",
+            detail=f"BigQuery get_table failed for resource {resource_id!r}: {e}",
+        ) from e
