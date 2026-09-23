@@ -518,7 +518,13 @@ def test_merge_sql_renders_typed_extractors_on_match_update_no_match_insert() ->
     assert "JSON_VALUE(r, '$.label') AS `label`" in sql
     assert "PARSE_JSON(JSON_QUERY(r, '$.meta')) AS `meta`" in sql
     # USING attaches ROW_NUMBER() as _rn for auto-`_id` on NOT MATCHED.
-    assert "ROW_NUMBER() OVER () AS _rn" in sql
+    # It's numbered per match-status partition (via a self-join probe
+    # against the target on the PK) so unmatched rows are numbered
+    # 1..k among themselves, not by position in the whole batch — a
+    # batch of unmatched rows preceded by matched ones doesn't leave
+    # gaps in the `_id` sequence.
+    assert "LEFT JOIN `p.d.r` AS X ON S0.`id` = X.`id`" in sql
+    assert "ROW_NUMBER() OVER (PARTITION BY X.`id` IS NULL) AS _rn" in sql
     assert "ON T.`id` = S.`id`" in sql
     # WHEN MATCHED only fires when some non-PK column actually differs
     # — `_updated_at` advances on real changes, not on no-op upserts.
@@ -556,6 +562,37 @@ def test_update_sql_renders_dml_update_keyed_on_primary_key() -> None:
     assert "T.`_updated_at` = CURRENT_TIMESTAMP()" in sql
     assert "WHERE T.`id` = S.`id`" in sql
     assert "MERGE" not in sql  # plain DML, not MERGE
+
+
+def test_merge_sql_numbers_unmatched_rows_within_their_own_partition() -> None:
+    """Regression test: `_rn` must be independent per match-status
+    partition so `_id = MAX(_id) + _rn` stays gap-free for unmatched
+    rows even when a batch mixes them with already-present rows.
+
+    Before this fix, `_rn` was a single `ROW_NUMBER() OVER ()` over
+    the whole batch, so unmatched rows inherited their position among
+    *all* incoming rows (matched no-ops included) rather than their
+    position among just the unmatched ones — leaving permanent gaps
+    in `_id` whenever a batch mixed unchanged rows with new ones.
+    """
+    sql = merge_sql(
+        "`p.d.r`",
+        {
+            "fields": [
+                {"name": "id", "type": "integer"},
+                {"name": "label", "type": "string"},
+            ],
+            "primaryKey": ["id"],
+        },
+    )
+    # _rn comes from a window partitioned on whether the row's PK was
+    # found in a self-join against the target table — not a bare
+    # ROW_NUMBER() OVER () spanning the whole incoming batch.
+    assert "ROW_NUMBER() OVER () AS _rn" not in sql
+    assert "PARTITION BY X.`id` IS NULL) AS _rn" in sql
+    assert "LEFT JOIN `p.d.r` AS X ON S0.`id` = X.`id`" in sql
+    # `_id` assignment for NOT MATCHED rows is unchanged: MAX + _rn.
+    assert "(SELECT IFNULL(MAX(`_id`), 0) FROM `p.d.r`) + S._rn" in sql
 
 
 def test_merge_and_update_sql_reject_missing_primary_key() -> None:
