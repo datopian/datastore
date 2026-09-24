@@ -291,7 +291,11 @@ def merge_sql(table_ref: str, schema: dict, *, include_updated_at: bool = True) 
 
     Matched rows update only when a non-PK column differs (so
     `_updated_at` advances only on real changes). Unmatched rows
-    insert with `_id` continuing from `MAX(_id) + _rn`.
+    insert with `_id` continuing from `MAX(_id) + _rn`, where `_rn`
+    is numbered only among the unmatched rows (via a self-join
+    against the target on the primary key, partitioned on match
+    status) so already-present rows in the batch don't consume `_id`
+    values and leave gaps in the sequence for the rows that do insert.
     """
     fields = _user_fields(schema)
     pk = normalize_pk(schema)
@@ -306,10 +310,14 @@ def merge_sql(table_ref: str, schema: dict, *, include_updated_at: bool = True) 
     insert_cols = ", ".join(f"`{f['name']}`" for f in fields)
     insert_vals = ", ".join(f"S.`{f['name']}`" for f in fields)
 
+    pk_probe_on = " AND ".join(f"S0.`{n}` = X.`{n}`" for n in pk)
     parts = [
         f"MERGE {table_ref} T",
-        f"USING (SELECT {using_cols}, ROW_NUMBER() OVER () AS _rn "
-        f"FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r) S",
+        f"USING (SELECT S0.*, "
+        f"ROW_NUMBER() OVER (PARTITION BY X.`{pk[0]}` IS NULL) AS _rn "
+        f"FROM (SELECT {using_cols} "
+        f"FROM UNNEST(JSON_QUERY_ARRAY(@rows)) AS r) AS S0 "
+        f"LEFT JOIN {table_ref} AS X ON {pk_probe_on}) S",
         f"ON {on_clause}",
     ]
     if non_pk:
