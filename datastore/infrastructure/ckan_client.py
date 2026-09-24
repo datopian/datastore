@@ -27,6 +27,15 @@ _CKAN_TYPE_TO_ERROR: dict[str, type[APIError]] = {
 }
 
 
+def _ckan_transport_error(exc: Exception) -> ServerError:
+    """Wrap a CKAN transport failure.
+
+    The httpx message embeds the upstream URL, which is an internal
+    cluster address; keep it in `detail` for the log.
+    """
+    return ServerError("upstream request failed", detail=f"CKAN request failed: {exc}")
+
+
 class CKANClient:
     """Thin async wrapper around the CKAN action API.
 
@@ -88,7 +97,7 @@ class CKANClient:
         try:
             response = await self._http.post(url, json=body, headers=headers)
         except httpx.HTTPError as exc:
-            raise ServerError(f"CKAN request failed: {exc}") from exc
+            raise _ckan_transport_error(exc) from exc
 
         self._raise_for_status(action, response)
         return self._unwrap(action, response)

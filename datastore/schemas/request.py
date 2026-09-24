@@ -15,6 +15,8 @@ from pydantic import (
 from datastore.core.constants import DumpFormat
 from datastore.schemas.validators import (
     FieldSpec,
+    OptionalResourceId,
+    ResourceId,
     StringOrList,
     fields_to_frictionless_schema,
     parse_sql_pagination,
@@ -66,7 +68,7 @@ class DatastoreCreateRequest(BaseModel):
         },
     )
 
-    resource_id: str | None = Field(
+    resource_id: OptionalResourceId = Field(
         default=None,
         description="Target table name. Provide this **or** `resource`, not both.",
     )
@@ -188,7 +190,7 @@ class DatastoreUpsertRequest(BaseModel):
         },
     )
 
-    resource_id: str = Field(
+    resource_id: ResourceId = Field(
         description="Target table — must already exist (call `datastore_create` first)."
     )
     records: list[dict[str, Any]] | None = Field(default=None, description="Rows to write.")
@@ -231,7 +233,7 @@ class DatastoreSearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    resource_id: str = Field(description="Resource (table) to search.")
+    resource_id: ResourceId = Field(description="Resource (table) to search.")
     filters: str | None = Field(
         default=None,
         description=(
@@ -456,8 +458,10 @@ class DatastoreInfoRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    resource_id: str | None = Field(default=None, description="Resource (table) to describe.")
-    id: str | None = Field(
+    resource_id: OptionalResourceId = Field(
+        default=None, description="Resource (table) to describe."
+    )
+    id: OptionalResourceId = Field(
         default=None, description="CKAN alias for `resource_id`. Send exactly one."
     )
 
@@ -492,7 +496,7 @@ class DatastoreDeleteRequest(BaseModel):
         },
     )
 
-    resource_id: str | None = Field(
+    resource_id: OptionalResourceId = Field(
         default=None, description="Resource (table) to delete from / drop."
     )
     id: str | None = Field(

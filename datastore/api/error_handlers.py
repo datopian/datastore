@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
 from datastore.api.responses import ORJSONResponse, _error_response
@@ -42,13 +43,21 @@ def _group_errors(errors: list[dict[str, Any]]) -> dict[str, list[str]]:
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(APIError)
     async def _api_error(request: Request, exc: APIError) -> ORJSONResponse:
-        log.debug(
-            "APIError: %s -> %d (%s) at %s %s",
+        # 5xx means we are broken: log at ERROR with the operator-only
+        # `detail` and the original traceback. 4xx is the caller's doing
+        # and stays at DEBUG. `exc.message` is the only text that is ever
+        # serialised into the envelope.
+        is_server_fault = exc.status_code >= 500
+        log.log(
+            logging.ERROR if is_server_fault else logging.DEBUG,
+            "APIError: %s -> %d (%s) at %s %s: %s",
             type(exc).__name__,
             exc.status_code,
             exc.type_label,
             request.method,
             request.url.path,
+            exc.detail or exc.message,
+            exc_info=exc.__cause__ if is_server_fault else None,
         )
         return _error_response(
             request,
@@ -79,6 +88,12 @@ def register_exception_handlers(app: FastAPI) -> None:
             fields=fields,
         )
 
+    # Starlette's router raises *its* HTTPException for an unmatched route
+    # (404) or a wrong method (405). `fastapi.HTTPException` subclasses it,
+    # so registering the subclass alone left those two falling through to
+    # the default `{"detail": ...}` body - not the envelope every other
+    # error uses. Registering the base class covers both.
+    @app.exception_handler(StarletteHTTPException)
     @app.exception_handler(HTTPException)
     async def _http(request: Request, exc: HTTPException) -> ORJSONResponse:
         label = HTTP_STATUS_TO_TYPE_LABEL.get(exc.status_code, "Internal Error")

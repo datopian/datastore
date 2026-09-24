@@ -21,6 +21,7 @@ from datastore.core.constants import DUMP_EXTENSIONS, DUMP_MEDIA_TYPES, DumpForm
 from datastore.core.exceptions import ServerError
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.request import DatastoreDumpSQLRequest
+from datastore.schemas.validators import ResourceId
 from datastore.services.read import dump_sql_datastore
 from datastore.services.streaming import zip_archive_writer
 
@@ -134,7 +135,7 @@ async def dump_sql(
 async def dump(
     request: Request,
     context: Context,
-    resource_id: str,
+    resource_id: ResourceId,
     fmt: Annotated[DumpFormat, Query(alias="format")] = "csv",
 ):
     """Download an entire resource; pick the format with `?format=`."""

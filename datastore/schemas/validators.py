@@ -31,6 +31,28 @@ def check_field_name(name: str) -> str:
     return name
 
 
+# Resource (table) identifiers. CKAN hands out UUIDs; `datastore_create`
+# also accepts table-style names, and the docs' own examples use them
+# (`balancing_auction_results_2025`). Allow-list both shapes and reject
+# everything else *before* the id reaches CKAN or BigQuery - a block-list
+# of one control character, then the next, never finishes.
+_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
+
+
+def check_resource_id(value: Any) -> Any:
+    """Validate a resource id. Pass `None` through - the field's own
+    `| None` type decides whether absence is allowed."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("resource_id must be a string")
+    if not _RESOURCE_ID_RE.match(value):
+        raise ValueError(
+            "resource_id must be valid"
+            )
+    return value
+
+
 def to_list(value: Any) -> list[str] | None:
     """Coerce `None | str | list[str]` to `list[str] | None`.
     Equivalent to CKAN's `list_of_strings_or_string`.
@@ -415,6 +437,10 @@ def rewrite_sql_offset(
 # `to_csv_list`) are invoked directly at the service boundary; they don't
 # need an Annotated wrapper because FastAPI's `Annotated[Model, Query()]`
 # only accepts scalar fields on the model — see DatastoreSearchRequest.
+#: A validated resource (table) identifier. Use this instead of a bare
+#: `str` on every field and path param that names a resource.
+ResourceId = Annotated[str, BeforeValidator(check_resource_id)]
+OptionalResourceId = Annotated[str | None, BeforeValidator(check_resource_id)]
 StringOrList = Annotated[list[str] | None, BeforeValidator(to_list)]
 PostgresType = Annotated[str | None, BeforeValidator(check_postgres_type)]
 
