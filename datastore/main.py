@@ -34,7 +34,7 @@ from datastore.infrastructure.engines.registry import (
 )
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=get_config().LOG_LEVEL,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
