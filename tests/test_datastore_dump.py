@@ -191,8 +191,18 @@ def test_build_export_select_iso_casts_timestamp_and_datetime() -> None:
 
 
 def test_build_export_select_parquet_returns_star() -> None:
-    schema = [_bq_field("delivery_start", "TIMESTAMP")]
+    """Nothing to cast → `*`, no column list."""
+    schema = [_bq_field("id", "INT64"), _bq_field("name", "STRING")]
     assert _export_select_list(schema, fmt="parquet") == "*"
+
+
+def test_build_export_select_parquet_casts_timestamp_like_csv() -> None:
+    """Parquet renders TIMESTAMP the same way csv/ndjson do, so a row
+    reads back identically whichever format was picked."""
+    schema = [_bq_field("delivery_start", "TIMESTAMP")]
+    assert _export_select_list(schema, fmt="parquet") == (
+        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `delivery_start`, 'UTC') AS `delivery_start`"
+    )
 
 
 def test_build_export_select_parquet_casts_json_columns() -> None:
@@ -202,7 +212,8 @@ def test_build_export_select_parquet_casts_json_columns() -> None:
         _bq_field("delivery_start", "TIMESTAMP"),
     ]
     assert _export_select_list(schema, fmt="parquet") == (
-        "`id`, TO_JSON_STRING(`bidder_metadata`) AS `bidder_metadata`, `delivery_start`"
+        "`id`, TO_JSON_STRING(`bidder_metadata`) AS `bidder_metadata`, "
+        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `delivery_start`, 'UTC') AS `delivery_start`"
     )
 
 

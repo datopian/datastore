@@ -55,10 +55,10 @@ def _dry_run_error(e: Exception) -> ValidationError:
     `message`.
     """
     return ValidationError(
-        "the SQL is not valid for this datastore; check column names, "
-        "table names and syntax",
+        "the SQL is not valid for this datastore; check column names, table names and syntax",
         detail=f"sql failed BigQuery validation: {e}",
     )
+
 
 # Per-format file extension + BigQuery EXPORT DATA `format` value.
 _FMT: dict[str, dict[str, str]] = {
@@ -548,9 +548,7 @@ async def _signed_urls(
     """
     expiry = _url_expiry(backend)
     bucket_name = _bucket_of(blobs[0]) if blobs else None
-    ro_bucket = (
-        backend._build_storage_client("ro").bucket(bucket_name) if bucket_name else None
-    )
+    ro_bucket = backend._build_storage_client("ro").bucket(bucket_name) if bucket_name else None
 
     def sign_all() -> list[str]:
         out: list[str] = []
@@ -630,8 +628,7 @@ def _export_select_list(schema: Any, fmt: str) -> str:
     fields = list(schema)
     if fmt == "parquet":
         if not any(
-            (f.field_type or "").upper() in ("JSON", "TIMESTAMP", "DATETIME")
-            for f in fields
+            (f.field_type or "").upper() in ("JSON", "TIMESTAMP", "DATETIME") for f in fields
         ):
             return "*"
         return ", ".join(

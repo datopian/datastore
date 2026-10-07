@@ -47,9 +47,7 @@ def check_resource_id(value: Any) -> Any:
     if not isinstance(value, str):
         raise ValueError("resource_id must be a string")
     if not _RESOURCE_ID_RE.match(value):
-        raise ValueError(
-            "resource_id must be valid"
-            )
+        raise ValueError("resource_id must be valid")
     return value
 
 

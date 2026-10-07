@@ -319,9 +319,14 @@ def test_subject_is_none_when_ckan_names_no_user() -> None:
     ckan = FakeCKAN(result={"package": {"id": "pkg-1"}, "resource": {"id": "res-1"}})
     provider = _provider(ckan=ckan)
 
-    decision = asyncio.run(provider.authorize(
-        credential="tok", resource_id="res-1", package_id=None, permission="read",
-    ))
+    decision = asyncio.run(
+        provider.authorize(
+            credential="tok",
+            resource_id="res-1",
+            package_id=None,
+            permission="read",
+        )
+    )
 
     assert decision.subject is None
 

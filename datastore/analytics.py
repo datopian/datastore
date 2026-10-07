@@ -64,7 +64,7 @@ def action_name(path: str) -> str | None:
     if path.startswith(DUMP_PATH_PREFIX):
         return "datastore_dump"
     if path.startswith(ACTION_PREFIX):
-        name = path[len(ACTION_PREFIX):].strip("/").split("/", 1)[0]
+        name = path[len(ACTION_PREFIX) :].strip("/").split("/", 1)[0]
         if not name or name in DOCS_PATHS:
             return None
         return name
@@ -254,7 +254,7 @@ class AnalyticsMiddleware:
         """
         path: str = scope["path"]
         if path.startswith(DUMP_PATH_PREFIX):
-            ref = path[len(DUMP_PATH_PREFIX):].split("/", 1)[0]
+            ref = path[len(DUMP_PATH_PREFIX) :].split("/", 1)[0]
             return ref if ref and ref != "query" else None
 
         query: bytes = scope.get("query_string", b"")

@@ -88,18 +88,14 @@ def test_the_resource_is_resolved_through_the_auth_decision(
     assert event["dataset"] == "balancing-2025"
 
 
-def test_the_caller_is_recorded_by_username(
-    client: TestClient, recorded: list[dict]
-) -> None:
+def test_the_caller_is_recorded_by_username(client: TestClient, recorded: list[dict]) -> None:
     """CKAN's datastore_authorize names the acting user; the event keeps it."""
     client.get(SEARCH_URL, params={"resource_id": RESOURCE})
 
     assert recorded[0]["user"] == "jhon"
 
 
-def test_a_post_carries_its_resource_in_the_body(
-    client: TestClient, recorded: list[dict]
-) -> None:
+def test_a_post_carries_its_resource_in_the_body(client: TestClient, recorded: list[dict]) -> None:
     """nginx cannot see a POST body; this is why the service records itself."""
     client.post(
         f"{API_PREFIX}/datastore_upsert",
@@ -112,9 +108,7 @@ def test_a_post_carries_its_resource_in_the_body(
     assert event["resource"] == "balancing-auction-results-2025"
 
 
-def test_a_dump_is_recorded_as_a_download(
-    client: TestClient, recorded: list[dict]
-) -> None:
+def test_a_dump_is_recorded_as_a_download(client: TestClient, recorded: list[dict]) -> None:
     url = "https://storage.googleapis.com/bucket/dumps/x/abc.csv?Sig=abc"
 
     async def fake_dump(self: BigQueryBackend, resource_id: str, fmt: str) -> list[str]:
@@ -239,7 +233,9 @@ def _client_with_ignore_config(
     app = create_app()
     app.dependency_overrides[get_ckan_client] = lambda: fake_ckan
     app.dependency_overrides[get_auth_provider] = lambda: CKANAuthProvider(
-        ckan=fake_ckan, cache=cache, cache_ttl=60,
+        ckan=fake_ckan,
+        cache=cache,
+        cache_ttl=60,
     )
     c = TestClient(app)
     c.headers["Authorization"] = "test-token"
@@ -325,9 +321,7 @@ def test_a_request_from_an_ignored_ip_is_not_recorded(
     recorded: list[dict],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    c = _client_with_ignore_config(
-        monkeypatch, fake_ckan, cache, ips="54.247.74.82,63.32.18.228"
-    )
+    c = _client_with_ignore_config(monkeypatch, fake_ckan, cache, ips="54.247.74.82,63.32.18.228")
     with c:
         response = c.get(
             SEARCH_URL,
@@ -345,9 +339,7 @@ def test_a_request_from_a_different_ip_is_still_recorded(
     recorded: list[dict],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    c = _client_with_ignore_config(
-        monkeypatch, fake_ckan, cache, ips="54.247.74.82,63.32.18.228"
-    )
+    c = _client_with_ignore_config(monkeypatch, fake_ckan, cache, ips="54.247.74.82,63.32.18.228")
     with c:
         c.get(
             SEARCH_URL,
@@ -457,9 +449,7 @@ def test_the_ignore_check_is_disabled_when_unconfigured(
 # --- what does not get recorded, and what cannot break ------------------------
 
 
-def test_health_and_pages_are_not_recorded(
-    client: TestClient, recorded: list[dict]
-) -> None:
+def test_health_and_pages_are_not_recorded(client: TestClient, recorded: list[dict]) -> None:
     client.get("/")
     client.get("/datastore/api/health")
 
@@ -493,7 +483,9 @@ def test_analytics_can_be_disabled_by_env(
     app = create_app()
     app.dependency_overrides[get_ckan_client] = lambda: fake_ckan
     app.dependency_overrides[get_auth_provider] = lambda: CKANAuthProvider(
-        ckan=fake_ckan, cache=cache, cache_ttl=60,
+        ckan=fake_ckan,
+        cache=cache,
+        cache_ttl=60,
     )
     with TestClient(app) as c:
         c.headers["Authorization"] = "test-token"
@@ -551,9 +543,7 @@ def test_the_emitted_line_is_bare_json(caplog: pytest.LogCaptureFixture) -> None
 # --- the docs surface is not an action --------------------------------------
 
 
-@pytest.mark.parametrize(
-    "suffix", ["docs", "redoc", "openapi.json", "static/theme/theme.css"]
-)
+@pytest.mark.parametrize("suffix", ["docs", "redoc", "openapi.json", "static/theme/theme.css"])
 def test_the_docs_surface_is_not_recorded(suffix: str) -> None:
     """Docs live *inside* the versioned prefix, so they match the action path
     pattern. They are not API calls and must stay out of analytics."""

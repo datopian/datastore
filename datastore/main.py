@@ -40,6 +40,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Per-process startup/shutdown.

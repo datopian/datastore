@@ -288,8 +288,6 @@ OPENAPI_TAGS = [
     },
     {
         "name": "Datastore Downloads",
-        "description": (
-            "File downloads — a `302` to a signed URL, not the JSON envelope."
-        ),
+        "description": ("File downloads — a `302` to a signed URL, not the JSON envelope."),
     },
 ]
