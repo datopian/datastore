@@ -89,7 +89,8 @@ async def _sync_resource_to_ckan(
     resource_id: str,
     *,
     schema: dict[str, Any] | None = None,
-    clear_schema: bool = False,
+    table_dropped: bool = False,
+    url_type: str | None = None,
     dump_url: str | None = None,
 ) -> None:
     """Keep the CKAN resource metadata in sync with the datastore table.
@@ -101,8 +102,10 @@ async def _sync_resource_to_ckan(
     - `schema=<dict>` — an op that (re)defines columns (`datastore_create`,
       or a `datastore_delete` column drop): mirror it so CKAN matches the
       BigQuery table.
-    - `clear_schema=True` — a whole-table drop: the table (and its schema)
-      is gone, so drop the schema from the resource (`schema=null`).
+    - `table_dropped=True` — a whole-table drop: mark the resource
+      `datastore_active=False`, as CKAN's own datastore does. Unless the
+      resource is an upload (`url_type="upload"`, whose file outlives the
+      table), also clear `schema` and `url` — both described the table.
     - neither (default) — a data-only op (upsert, row delete): leave the
       already-consistent schema untouched, timestamp + activity only.
 
@@ -112,8 +115,11 @@ async def _sync_resource_to_ckan(
     if context.ckan is None or not resource_id:
         return
     patch: dict[str, Any] = {"last_modified": _utc_now_iso()}
-    if clear_schema:
-        patch["schema"] = None
+    if table_dropped:
+        patch["datastore_active"] = False
+        if url_type != "upload":
+            patch["schema"] = None
+            patch["url"] = None
     elif schema is not None:
         patch["schema"] = schema
     if dump_url is not None:
@@ -240,7 +246,13 @@ async def delete_datastore(
     if fields is not None:
         await _sync_resource_to_ckan(context, resource_id, schema=result.schema)
     elif filters is None:
-        await _sync_resource_to_ckan(context, resource_id, clear_schema=True)
+        resource = data_dict.get("resource") or {}
+        await _sync_resource_to_ckan(
+            context,
+            resource_id,
+            table_dropped=True,
+            url_type=resource.get("url_type"),
+        )
     else:
         await _sync_resource_to_ckan(context, resource_id)
 

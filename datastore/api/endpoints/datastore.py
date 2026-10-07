@@ -255,5 +255,7 @@ async def datastore_delete(
         force=payload.force,
         auth_type=context.config.AUTH_TYPE,
     )
-    result = await delete_datastore(context, payload.model_dump())
+    result = await delete_datastore(
+        context, {**payload.model_dump(), "resource": data_dict["resource"]}
+    )
     return _success_response(request, result)
