@@ -127,16 +127,18 @@ async def dump(backend: Any, resource_id: str, fmt: str) -> list[str]:
     prefix = f"{_EXPORT_ROOT}/{resource_id}/{fmt}/{rev}/"
     source = f"`{backend.config.BIGQUERY_PROJECT}.{backend.config.BIGQUERY_DATASET}.{resource_id}`"
 
+    columns = _dump_column_order(table.schema)
+
     async def build_export_sql(uri: str) -> tuple[str, bytes | None]:
         # Schema is already known from get_table — no dry run needed.
         sql = _export_data_sql(
             uri,
             fmt,
-            _export_select_list(table.schema, fmt),
+            _export_select_list(columns, fmt),
             source=source,
             suffix=" ORDER BY `_id`",
         )
-        header = _csv_header_bytes(table.schema, fmt) if fmt in ("csv", "gzip") else None
+        header = _csv_header_bytes(columns, fmt) if fmt in ("csv", "gzip") else None
         return sql, header
 
     return await _prepare_download(
@@ -609,6 +611,19 @@ def _export_data_sql(
         ") AS "
         f"SELECT {select_list} FROM {source}{suffix}"
     )
+
+
+def _dump_column_order(schema: Any) -> list[Any]:
+    """Table columns in download order: `_updated_at` moved last.
+
+    BigQuery stores the system columns first (`_id`, `_updated_at`,
+    then user fields), but `datastore_search` projects `_updated_at`
+    after the user columns; a whole-table dump follows the same order.
+    """
+    fields = list(schema)
+    return [f for f in fields if f.name != "_updated_at"] + [
+        f for f in fields if f.name == "_updated_at"
+    ]
 
 
 def _export_select_list(schema: Any, fmt: str) -> str:
