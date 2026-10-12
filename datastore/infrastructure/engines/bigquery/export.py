@@ -39,6 +39,7 @@ from datastore.core.exceptions import (
     ServerError,
     ValidationError,
 )
+from datastore.core.helper import content_disposition
 from datastore.infrastructure.engines.bigquery.lib import (
     format_select_column,
     qualify_table_refs,
@@ -111,9 +112,12 @@ _FORMAT_HINT = "`format=csv` or `format=ndjson`"
 # ============================================================================
 
 
-async def dump(backend: Any, resource_id: str, fmt: str) -> list[str]:
+async def dump(
+    backend: Any, resource_id: str, fmt: str, *, filename_base: str | None = None
+) -> list[str]:
     """Whole-table download → signed URLs. Cache key
-    `dumps/<rid>/<fmt>/<rev>/` with `rev` = `table.modified`."""
+    `dumps/<rid>/<fmt>/<rev>/` with `rev` = `table.modified`. The name
+    only lives in the signed URL, so it doesn't affect the cache."""
     if backend.client is None:
         return []
 
@@ -147,7 +151,7 @@ async def dump(backend: Any, resource_id: str, fmt: str) -> list[str]:
         cacheable=cacheable,
         build_export_sql=build_export_sql,
         sweep_prefix=f"{_EXPORT_ROOT}/{resource_id}/{fmt}/",
-        filename_base=resource_id,
+        filename_base=filename_base or resource_id,
         what=f"resource {resource_id!r}",
     )
 
@@ -159,8 +163,11 @@ async def dump_sql(
     *,
     resource_ids: list[str],
     function_names: list[str],
+    filename_prefix: str | None = None,
 ) -> list[str]:
-    """SQL-result download → signed URLs.
+    """SQL-result download → signed URLs, named
+    `<filename_prefix>_<qhash>` (prefix default `query`). The name only
+    lives in the signed URL, so it doesn't affect the cache.
 
     Cache key `dumps/<qhash>/<fmt>/<rev>/`: `qhash` = hash of the
     qualified SQL, `rev` = hash of every referenced table's `modified`.
@@ -237,7 +244,7 @@ async def dump_sql(
         cacheable=cacheable,
         build_export_sql=build_export_sql,
         sweep_prefix=f"{_EXPORT_ROOT}/{qhash}/{fmt}/",
-        filename_base=f"query_{qhash[:8]}",
+        filename_base=f"{filename_prefix or 'query'}_{qhash[:8]}",
         what=f"sql query {qhash[:8]}",
     )
 
@@ -566,7 +573,7 @@ async def _signed_urls(
                     version="v4",
                     expiration=expiry,
                     method="GET",
-                    response_disposition=f'attachment; filename="{filename}"',
+                    response_disposition=content_disposition(filename),
                 )
             )
         return out

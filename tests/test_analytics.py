@@ -111,7 +111,7 @@ def test_a_post_carries_its_resource_in_the_body(client: TestClient, recorded: l
 def test_a_dump_is_recorded_as_a_download(client: TestClient, recorded: list[dict]) -> None:
     url = "https://storage.googleapis.com/bucket/dumps/x/abc.csv?Sig=abc"
 
-    async def fake_dump(self: BigQueryBackend, resource_id: str, fmt: str) -> list[str]:
+    async def fake_dump(self: BigQueryBackend, resource_id: str, fmt: str, **_: Any) -> list[str]:
         return [url]
 
     with patch.object(BigQueryBackend, "dump", fake_dump):
@@ -394,7 +394,7 @@ def test_a_dump_link_with_the_ignore_query_param_is_not_recorded(
     )
     url = "https://storage.googleapis.com/bucket/dumps/x/abc.csv?Sig=abc"
 
-    async def fake_dump(self: BigQueryBackend, resource_id: str, fmt: str) -> list[str]:
+    async def fake_dump(self: BigQueryBackend, resource_id: str, fmt: str, **_: Any) -> list[str]:
         return [url]
 
     with c, patch.object(BigQueryBackend, "dump", fake_dump):
@@ -422,7 +422,7 @@ def test_a_dump_link_without_the_ignore_query_param_is_still_recorded(
     )
     url = "https://storage.googleapis.com/bucket/dumps/x/abc.csv?Sig=abc"
 
-    async def fake_dump(self: BigQueryBackend, resource_id: str, fmt: str) -> list[str]:
+    async def fake_dump(self: BigQueryBackend, resource_id: str, fmt: str, **_: Any) -> list[str]:
         return [url]
 
     with c, patch.object(BigQueryBackend, "dump", fake_dump):

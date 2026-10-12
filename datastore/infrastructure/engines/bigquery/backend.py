@@ -974,9 +974,11 @@ class BigQueryBackend(DatastoreBackend):
 
     # ----- downloads (pipeline lives in bigquery/export.py) ---------------
 
-    async def dump(self, resource_id: str, fmt: str) -> list[str]:
+    async def dump(
+        self, resource_id: str, fmt: str, *, filename_base: str | None = None
+    ) -> list[str]:
         """Whole-table download → signed URL(s). See `export.py`."""
-        return await bq_export.dump(self, resource_id, fmt)
+        return await bq_export.dump(self, resource_id, fmt, filename_base=filename_base)
 
     async def dump_sql(
         self,
@@ -985,6 +987,7 @@ class BigQueryBackend(DatastoreBackend):
         *,
         resource_ids: list[str],
         function_names: list[str],
+        filename_prefix: str | None = None,
     ) -> list[str]:
         """SQL-result download → signed URL(s). See `export.py`."""
         return await bq_export.dump_sql(
@@ -993,6 +996,7 @@ class BigQueryBackend(DatastoreBackend):
             fmt,
             resource_ids=resource_ids,
             function_names=function_names,
+            filename_prefix=filename_prefix,
         )
 
     def _build_bq_client(self, mode: str) -> Any:

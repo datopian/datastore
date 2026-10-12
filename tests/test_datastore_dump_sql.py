@@ -127,6 +127,36 @@ def test_cache_hit_skips_dry_run_and_export() -> None:
     assert backend.client.query.call_count == 0
 
 
+@pytest.mark.parametrize(
+    ("filename_prefix", "name"),
+    [(None, "query"), ("Auction Results_filtered", "Auction Results_filtered")],
+)
+def test_signed_url_name_uses_prefix_without_touching_the_cache(
+    filename_prefix: str | None, name: str
+) -> None:
+    """The prefix only renames the download: the same cached attempt is
+    served (no BigQuery job) and listed under the same cache prefix."""
+    sql = "SELECT * FROM res1"
+    cached = _attempt("dumps/h/csv/rev/", "data.csv")
+    backend, storage_client = _engine_with_storage(cached)
+
+    async def go() -> None:
+        await backend.dump_sql(
+            sql, "csv", resource_ids=["res1"], function_names=[], filename_prefix=filename_prefix
+        )
+
+    asyncio.run(go())
+
+    qhash = _expected_prefix(sql).split("/")[1]
+    sign = cached[0].generate_signed_url
+    assert sign.call_args.kwargs["response_disposition"] == (
+        f'attachment; filename="{name}_{qhash[:8]}.csv"'
+    )
+    assert backend.client.query.call_count == 0
+    listed = storage_client.bucket.return_value.list_blobs.call_args.kwargs.get("prefix")
+    assert listed == _expected_prefix(sql)
+
+
 def test_cache_miss_dry_runs_then_exports() -> None:
     new_blob = _blob("dumps/h/csv/rev_000.csv", "https://fresh")
     backend, storage_client = _engine_with_storage([])
@@ -919,6 +949,7 @@ def _patch_dump_sql(urls_or_exc: list[str] | Exception):
         *,
         resource_ids: list[str],
         function_names: list[str],
+        filename_prefix: str | None = None,
     ) -> list[str]:
         calls.append(
             {
@@ -926,6 +957,7 @@ def _patch_dump_sql(urls_or_exc: list[str] | Exception):
                 "fmt": fmt,
                 "resource_ids": resource_ids,
                 "function_names": function_names,
+                "filename_prefix": filename_prefix,
             }
         )
         if isinstance(urls_or_exc, Exception):
@@ -956,6 +988,7 @@ def test_forwards_sql_and_names_verbatim(
             "fmt": "ndjson",
             "resource_ids": ["balancing_auction_results_2025"],
             "function_names": ["count"],
+            "filename_prefix": None,
         }
     ]
 
@@ -1169,3 +1202,69 @@ def test_unconfigured_engine_returns_500(client: TestClient) -> None:
     )
     assert response.status_code == 500
     assert "not configured" in response.json()["error"]["message"]
+
+
+# --- download filename ----------------------------------------------------
+
+SINGLE_RESOURCE_SQL = 'SELECT * FROM "balancing_auction_results_2025" LIMIT 5'
+
+
+def test_single_resource_query_is_named_after_download_filename(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    fake_ckan.resources["balancing_auction_results_2025"]["download_filename"] = "Auction Results"
+    patcher, calls = _patch_dump_sql(["https://x/1.csv"])
+    with patcher:
+        client.get(DUMP_SQL_URL, params={"sql": SINGLE_RESOURCE_SQL}, follow_redirects=False)
+    assert calls[0]["filename_prefix"] == "Auction Results_filtered"
+
+
+def test_query_without_download_filename_keeps_default_name(client: TestClient) -> None:
+    patcher, calls = _patch_dump_sql(["https://x/1.csv"])
+    with patcher:
+        client.get(DUMP_SQL_URL, params={"sql": SINGLE_RESOURCE_SQL}, follow_redirects=False)
+    assert calls[0]["filename_prefix"] is None
+
+
+def test_multi_resource_query_keeps_default_name(client: TestClient, fake_ckan: FakeCKAN) -> None:
+    fake_ckan.resources["balancing_auction_results_2025"]["download_filename"] = "Auction Results"
+    fake_ckan.add_resource(
+        "other_table", package_id="pkg-balancing-2025", download_filename="Other"
+    )
+    patcher, calls = _patch_dump_sql(["https://x/1.csv"])
+    with patcher:
+        client.get(
+            DUMP_SQL_URL,
+            params={
+                "sql": (
+                    'SELECT a.* FROM "balancing_auction_results_2025" a '
+                    'JOIN "other_table" b ON a.id = b.id LIMIT 10'
+                )
+            },
+            follow_redirects=False,
+        )
+    assert calls[0]["filename_prefix"] is None
+
+
+def test_sharded_query_zip_is_named_after_download_filename(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    fake_ckan.resources["balancing_auction_results_2025"]["download_filename"] = "Auction Results"
+    parts = {"https://signed/p0.parquet": b"PAR1-a", "https://signed/p1.parquet": b"PAR1-b"}
+    stub_signed_urls(client, parts)
+
+    patcher, _ = _patch_dump_sql(list(parts))
+    with patcher:
+        response = client.get(
+            DUMP_SQL_URL, params={"sql": SINGLE_RESOURCE_SQL, "format": "parquet"}
+        )
+
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="Auction Results_filtered.zip"'
+    )
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert archive.namelist() == [
+        "Auction Results_filtered_01.parquet",
+        "Auction Results_filtered_02.parquet",
+    ]

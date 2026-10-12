@@ -19,6 +19,7 @@ from datastore.api.context import Context
 from datastore.api.responses import ERROR_RESPONSES
 from datastore.core.constants import DUMP_EXTENSIONS, DUMP_MEDIA_TYPES, DumpFormat
 from datastore.core.exceptions import ServerError
+from datastore.core.helper import content_disposition, dump_filename_base
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.request import DatastoreDumpSQLRequest
 from datastore.schemas.validators import ResourceId
@@ -92,7 +93,7 @@ def download_response(
         zip_archive_writer(request.app.state.http, members),
         media_type="application/zip",
         headers={
-            "Content-Disposition": (f'attachment; filename="{filename_base}.zip"'),
+            "Content-Disposition": content_disposition(f"{filename_base}.zip"),
         },
     )
 
@@ -109,9 +110,19 @@ async def dump_sql(
     context: Context,
     params: Annotated[DatastoreDumpSQLRequest, Query()],
 ):
-    """Download query result as a file."""
-    for resource_id in params.resource_ids:
-        await context.authorize(resource_id=resource_id, permission="read")
+    """Download query result as a file, named
+    `<download_filename>_filtered_<hash>` when the query reads a single
+    resource that has a download name (see `dump`), else `query_<hash>`."""
+    resources = [
+        (await context.authorize(resource_id=resource_id, permission="read")).get("resource")
+        for resource_id in params.resource_ids
+    ]
+    name = (
+        dump_filename_base(resources[0], DUMP_EXTENSIONS[params.format])
+        if len(resources) == 1
+        else None
+    )
+    filename_prefix = f"{name}_filtered" if name else None
 
     urls = await dump_sql_datastore(
         context,
@@ -120,9 +131,10 @@ async def dump_sql(
             "fmt": params.format,
             "resource_ids": params.resource_ids,
             "function_names": params.function_names,
+            "filename_prefix": filename_prefix,
         },
     )
-    return download_response(request, urls, params.format, "query")
+    return download_response(request, urls, params.format, filename_prefix or "query")
 
 
 @router.get(
@@ -138,9 +150,16 @@ async def dump(
     resource_id: ResourceId,
     fmt: Annotated[DumpFormat, Query(alias="format")] = "csv",
 ):
-    """Download an entire resource; pick the format with `?format=`."""
-    await context.authorize(resource_id=resource_id, permission="read")
+    """Download an entire resource; pick the format with `?format=`.
+
+    The file is named after the uploaded file for `url_type: upload`
+    resources, else the resource's `download_filename`; when neither is
+    available, after the resource id."""
+    authorized = await context.authorize(resource_id=resource_id, permission="read")
+    filename_base = (
+        dump_filename_base(authorized.get("resource"), DUMP_EXTENSIONS[fmt]) or resource_id
+    )
     engine = get_datastore_engine(context, mode="ro")
 
-    urls = await engine.dump(resource_id, fmt)
-    return download_response(request, urls, fmt, resource_id)
+    urls = await engine.dump(resource_id, fmt, filename_base=filename_base)
+    return download_response(request, urls, fmt, filename_base)

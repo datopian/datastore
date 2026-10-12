@@ -198,6 +198,7 @@ async def dump_sql_datastore(context: RequestContext, data_dict: dict[str, Any])
         data_dict["fmt"],
         resource_ids=data_dict["resource_ids"],
         function_names=data_dict["function_names"],
+        filename_prefix=data_dict.get("filename_prefix"),
     )
 
 

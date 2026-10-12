@@ -31,10 +31,15 @@ from tests.conftest import FakeCKAN
 DUMP_URL = f"{DUMP_PREFIX}/balancing_auction_results_2025"
 
 
-def _patch_dump(urls_or_exc: list[str] | Exception):
-    """Patch `BigQueryBackend.dump` to return URLs or raise."""
+def _patch_dump(urls_or_exc: list[str] | Exception, calls: list[dict[str, Any]] | None = None):
+    """Patch `BigQueryBackend.dump` to return URLs or raise; each call's
+    arguments are appended to `calls` when given."""
 
-    async def fake(self: BigQueryBackend, resource_id: str, fmt: str) -> list[str]:
+    async def fake(
+        self: BigQueryBackend, resource_id: str, fmt: str, *, filename_base: str | None = None
+    ) -> list[str]:
+        if calls is not None:
+            calls.append({"resource_id": resource_id, "fmt": fmt, "filename_base": filename_base})
         if isinstance(urls_or_exc, Exception):
             raise urls_or_exc
         return urls_or_exc
@@ -127,6 +132,68 @@ def test_zip_members_are_stored_not_deflated(client: TestClient) -> None:
     for info in archive.infolist():
         assert info.compress_type == zipfile.ZIP_STORED
         assert info.compress_size == len(body)
+
+
+# --- download filename ----------------------------------------------------
+
+
+def test_dump_names_file_after_resource_id_by_default(client: TestClient) -> None:
+    calls: list[dict[str, Any]] = []
+    with _patch_dump(["https://example/a.csv"], calls):
+        client.get(DUMP_URL, follow_redirects=False)
+    assert calls[0]["filename_base"] == "balancing_auction_results_2025"
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_dump_ignores_empty_download_filename(
+    value: str | None, client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    fake_ckan.resources["balancing_auction_results_2025"]["download_filename"] = value
+    calls: list[dict[str, Any]] = []
+    with _patch_dump(["https://example/a.csv"], calls):
+        client.get(DUMP_URL, follow_redirects=False)
+    assert calls[0]["filename_base"] == "balancing_auction_results_2025"
+
+
+def test_dump_uses_download_filename(client: TestClient, fake_ckan: FakeCKAN) -> None:
+    fake_ckan.resources["balancing_auction_results_2025"]["download_filename"] = "Auction Results"
+    calls: list[dict[str, Any]] = []
+    with _patch_dump(["https://example/a.csv"], calls):
+        client.get(DUMP_URL, params={"format": "gzip"}, follow_redirects=False)
+    assert calls[0] == {
+        "resource_id": "balancing_auction_results_2025",
+        "fmt": "gzip",
+        "filename_base": "Auction Results",
+    }
+
+
+def test_dump_of_upload_uses_uploaded_filename(client: TestClient, fake_ckan: FakeCKAN) -> None:
+    fake_ckan.resources["balancing_auction_results_2025"].update(
+        url_type="upload",
+        url="https://ckan/dataset/d/resource/r/download/auction-results.csv",
+        download_filename="Ignored",
+    )
+    calls: list[dict[str, Any]] = []
+    with _patch_dump(["https://example/a.parquet"], calls):
+        client.get(DUMP_URL, params={"format": "parquet"}, follow_redirects=False)
+    assert calls[0]["filename_base"] == "auction-results"
+
+
+def test_sharded_parquet_zip_uses_download_filename(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    fake_ckan.resources["balancing_auction_results_2025"]["download_filename"] = "Résultats"
+    parts = {"https://signed/p0.parquet": b"PAR1-a", "https://signed/p1.parquet": b"PAR1-b"}
+    stub_signed_urls(client, parts)
+
+    with _patch_dump(list(parts)):
+        response = client.get(DUMP_URL, params={"format": "parquet"})
+
+    assert response.headers["content-disposition"] == (
+        "attachment; filename=\"Resultats.zip\"; filename*=UTF-8''R%C3%A9sultats.zip"
+    )
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert archive.namelist() == ["Résultats_01.parquet", "Résultats_02.parquet"]
 
 
 # --- error paths ----------------------------------------------------------
@@ -349,6 +416,35 @@ def test_dump_cache_miss_submits_extract_then_returns_urls() -> None:
     bucket_obj.blob.return_value.compose.assert_called()
     # Exactly one extract submitted on cache miss.
     assert backend.client.query.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("filename_base", "disposition"),
+    [
+        (None, 'attachment; filename="res-1.csv"'),
+        ("Auction Results", 'attachment; filename="Auction Results.csv"'),
+    ],
+)
+def test_dump_signs_url_with_download_filename(filename_base: str | None, disposition: str) -> None:
+    """The signed URL names the file after `filename_base`, falling back
+    to the resource id."""
+    import asyncio
+
+    new_blob = _fake_blob("dumps/res-1/csv/<rev>_000.csv", "https://fresh")
+    backend, storage_client = _engine_with_storage([])
+    bucket_obj = storage_client.bucket.return_value
+    bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
+    backend.client.query.return_value = MagicMock()
+
+    async def go() -> None:
+        await backend.dump("res-1", "csv", filename_base=filename_base)
+        if backend._cleanup_tasks:
+            await asyncio.gather(*list(backend._cleanup_tasks))
+
+    asyncio.run(go())
+
+    sign = bucket_obj.blob.return_value.generate_signed_url
+    assert sign.call_args.kwargs["response_disposition"] == disposition
 
 
 def test_dump_gzip_exports_headerless_and_composes() -> None:

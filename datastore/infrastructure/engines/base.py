@@ -126,8 +126,11 @@ class DatastoreBackend(ABC):
         """Return table metadata: column schema + free-form `meta` dict."""
 
     @abstractmethod
-    async def dump(self, resource_id: str, fmt: str) -> list[str]:
-        """Download a table as CSV/NDJSON/Parquet."""
+    async def dump(
+        self, resource_id: str, fmt: str, *, filename_base: str | None = None
+    ) -> list[str]:
+        """Download a table as CSV/NDJSON/Parquet. The file is named
+        `filename_base` (default: `resource_id`) plus the format's extension."""
 
     @abstractmethod
     async def dump_sql(
@@ -137,6 +140,7 @@ class DatastoreBackend(ABC):
         *,
         resource_ids: list[str],
         function_names: list[str],
+        filename_prefix: str | None = None,
     ) -> list[str]:
         """Export the result of a vetted SELECT as `fmt`; return signed
         URLs — normally one (engines may merge shards into a single

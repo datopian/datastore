@@ -388,12 +388,14 @@ def test_dump_sql_service_forwards_args_and_returns_urls() -> None:
         *,
         resource_ids: list[str],
         function_names: list[str],
+        filename_prefix: str | None = None,
     ) -> list[str]:
         captured.update(
             sql=sql,
             fmt=fmt,
             resource_ids=resource_ids,
             function_names=function_names,
+            filename_prefix=filename_prefix,
         )
         return ["https://signed/1"]
 
@@ -406,6 +408,7 @@ def test_dump_sql_service_forwards_args_and_returns_urls() -> None:
                     "fmt": "ndjson",
                     "resource_ids": ["r1"],
                     "function_names": ["count"],
+                    "filename_prefix": "Flows_filtered",
                 },
             )
         )
@@ -416,6 +419,7 @@ def test_dump_sql_service_forwards_args_and_returns_urls() -> None:
         "fmt": "ndjson",
         "resource_ids": ["r1"],
         "function_names": ["count"],
+        "filename_prefix": "Flows_filtered",
     }
 
 
