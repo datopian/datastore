@@ -21,6 +21,8 @@ import pytest
 from datastore.core.constants import DUMP_PREFIX
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
 from datastore.infrastructure.engines.bigquery.export import (
+    _csv_header_bytes,
+    _dump_column_order,
     _export_select_list,
     _is_export_too_large,
 )
@@ -255,6 +257,28 @@ def test_build_export_select_iso_casts_timestamp_and_datetime() -> None:
     assert "%E*S" not in select
     assert "`auction_id`" in select
     assert "`delivery_day`" in select
+
+
+def test_dump_column_order_moves_updated_at_last() -> None:
+    """Physical order is `_id, _updated_at, <user>`; the dump puts
+    `_updated_at` last, matching `datastore_search`."""
+    schema = [
+        _bq_field("_id", "INT64"),
+        _bq_field("_updated_at", "TIMESTAMP"),
+        _bq_field("auction_id", "INT64"),
+        _bq_field("product_code", "STRING"),
+    ]
+    columns = _dump_column_order(schema)
+    assert [f.name for f in columns] == ["_id", "auction_id", "product_code", "_updated_at"]
+    assert _csv_header_bytes(columns, "csv") == b"_id,auction_id,product_code,_updated_at\n"
+    assert _export_select_list(columns, fmt="csv").endswith(
+        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `_updated_at`, 'UTC') AS `_updated_at`"
+    )
+
+
+def test_dump_column_order_without_updated_at_is_unchanged() -> None:
+    schema = [_bq_field("_id", "INT64"), _bq_field("name", "STRING")]
+    assert [f.name for f in _dump_column_order(schema)] == ["_id", "name"]
 
 
 def test_build_export_select_parquet_returns_star() -> None:
