@@ -446,3 +446,31 @@ def test_create_on_readonly_resource_with_force_succeeds(
 
     assert response.status_code == 200
     assert response.json()["success"] is True
+
+
+def test_forced_create_on_upload_keeps_url_and_last_modified(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    """Updating the data dictionary of an uploaded resource must not rewrite
+    its file `url` or `last_modified` — CKAN reads either as a new upload and
+    ckanext-aircan would re-run the ingestion pipeline."""
+    fake_ckan.add_resource(
+        "ro-res",
+        package_id="pkg-balancing-2025",
+        url_type="upload",
+        url="flows.csv",
+        last_modified="2026-01-01T00:00:00",
+    )
+    payload = {
+        "resource_id": "ro-res",
+        "force": True,
+        "fields": [{"id": "auction_id", "type": "int4", "info": {"title": "Auction"}}],
+    }
+
+    response = client.post(CREATE_URL, json=payload)
+
+    assert response.status_code == 200
+    resource = fake_ckan.resources["ro-res"]
+    assert resource["url"] == "flows.csv"
+    assert resource["last_modified"] == "2026-01-01T00:00:00"
+    assert resource["schema"]["fields"][0]["title"] == "Auction"
