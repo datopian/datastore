@@ -90,6 +90,9 @@ async def datastore_create(
 
     data_dict.update(
         {
+            # Captured before `resource` is overwritten: the CKAN sync only
+            # touches `url` / `last_modified` on datastore-owned resources.
+            "url_type": data_dict["resource"].get("url_type"),
             "resource": payload.resource_id or payload.resource,
             "schema": payload.schema,
             "records": payload.records,

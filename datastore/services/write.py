@@ -95,9 +95,13 @@ async def _sync_resource_to_ckan(
 ) -> None:
     """Keep the CKAN resource metadata in sync with the datastore table.
 
-    Always refreshes `last_modified` — and, because `resource_patch` runs
-    CKAN's `resource_update`, records an entry in the resource's activity
-    log. The schema is touched per the operation:
+    `resource_patch` runs CKAN's `resource_update`, so every sync records
+    an entry in the resource's activity log. `last_modified` and `url` are
+    only written when the datastore owns the resource
+    (`url_type="datastore"`). On an upload or link they describe the
+    source file, and CKAN flags a change to either as `url_changed`, which
+    makes ckanext-aircan re-submit the resource to the ingestion pipeline.
+    The schema is touched per the operation:
 
     - `schema=<dict>` — an op that (re)defines columns (`datastore_create`,
       or a `datastore_delete` column drop): mirror it so CKAN matches the
@@ -114,7 +118,10 @@ async def _sync_resource_to_ckan(
     """
     if context.ckan is None or not resource_id:
         return
-    patch: dict[str, Any] = {"last_modified": _utc_now_iso()}
+    owned = url_type == "datastore"
+    patch: dict[str, Any] = {}
+    if owned:
+        patch["last_modified"] = _utc_now_iso()
     if table_dropped:
         patch["datastore_active"] = False
         if url_type != "upload":
@@ -122,9 +129,10 @@ async def _sync_resource_to_ckan(
             patch["url"] = None
     elif schema is not None:
         patch["schema"] = schema
-    if dump_url is not None:
+    if dump_url is not None and owned:
         patch["url"] = dump_url
-    await context.ckan.resource_patch(resource_id=resource_id, patch=patch)
+    if patch:
+        await context.ckan.resource_patch(resource_id=resource_id, patch=patch)
 
 
 async def create_datastore(
@@ -157,8 +165,10 @@ async def create_datastore(
             }
         )
         resource_id = resource["id"]
+        url_type = "datastore"
     else:
         resource_id = resource
+        url_type = data_dict.get("url_type")
 
     engine = get_datastore_engine(context, mode="rw")
     # Off the event loop — BigQuery's sync client would otherwise block
@@ -175,6 +185,7 @@ async def create_datastore(
         context,
         resource_id,
         schema=schema,
+        url_type=url_type,
         dump_url=_dump_url(context.config, resource_id),
     )
 
@@ -211,7 +222,8 @@ async def upsert_datastore(
         include_total=include_total,
     )
 
-    await _sync_resource_to_ckan(context, resource_id)
+    resource = data_dict.get("resource") or {}
+    await _sync_resource_to_ckan(context, resource_id, url_type=resource.get("url_type"))
 
     return DatastoreUpsertResponse.Result(
         resource_id=resource_id,
@@ -242,19 +254,14 @@ async def delete_datastore(
     # Sync CKAN per the delete variant (mirrors the engine's branching):
     #   column drop  → mirror the reduced schema
     #   whole-table drop (no filters, no fields) → drop the schema too
-    #   row delete   → data only (timestamp + activity)
+    #   row delete   → data only (timestamp + activity, if owned)
+    url_type = (data_dict.get("resource") or {}).get("url_type")
     if fields is not None:
-        await _sync_resource_to_ckan(context, resource_id, schema=result.schema)
+        await _sync_resource_to_ckan(context, resource_id, schema=result.schema, url_type=url_type)
     elif filters is None:
-        resource = data_dict.get("resource") or {}
-        await _sync_resource_to_ckan(
-            context,
-            resource_id,
-            table_dropped=True,
-            url_type=resource.get("url_type"),
-        )
+        await _sync_resource_to_ckan(context, resource_id, table_dropped=True, url_type=url_type)
     else:
-        await _sync_resource_to_ckan(context, resource_id)
+        await _sync_resource_to_ckan(context, resource_id, url_type=url_type)
 
     return DatastoreDeleteResponse.Result(
         resource_id=resource_id,

@@ -126,6 +126,7 @@ def test_create_syncs_schema_to_ckan_resource() -> None:
     data_dict = {
         "package": {"id": "pkg-1"},
         "resource": "res-1",
+        "url_type": "datastore",
         "schema": schema,
         "records": [],
     }
@@ -137,6 +138,29 @@ def test_create_syncs_schema_to_ckan_resource() -> None:
     assert rid == "res-1"
     assert patch["schema"] == schema
     assert isinstance(patch["last_modified"], str) and patch["last_modified"]
+    assert patch["url"].endswith("/res-1")
+
+
+@pytest.mark.parametrize("url_type", ["upload", "", None])
+def test_create_on_non_datastore_resource_syncs_schema_only(url_type: str | None) -> None:
+    """A forced create on an upload / link resource must not touch `url` or
+    `last_modified`: they describe the source file, and CKAN treats a change
+    to either as a new upload, which re-runs the ingestion pipeline."""
+    ctx = _ctx()
+    schema = _schema(primary_key=["a"])
+    data_dict = {
+        "package": {"id": "pkg-1"},
+        "resource": "res-1",
+        "url_type": url_type,
+        "schema": schema,
+        "records": [],
+    }
+
+    asyncio.run(create_datastore(ctx, data_dict))
+
+    rid, patch = ctx.ckan.patched[0]
+    assert rid == "res-1"
+    assert patch == {"schema": schema}
 
 
 def test_create_new_resource_also_syncs_schema() -> None:
@@ -156,6 +180,8 @@ def test_create_new_resource_also_syncs_schema() -> None:
     rid, patch = ctx.ckan.patched[0]
     assert rid == "new-res-id"  # id returned by resource_create
     assert patch["schema"] == schema
+    assert patch["last_modified"]  # the datastore owns a resource it created
+    assert patch["url"].endswith("/new-res-id")
 
 
 def test_create_without_ckan_skips_schema_sync() -> None:
@@ -178,7 +204,12 @@ def test_upsert_syncs_timestamp_to_ckan() -> None:
     """Upsert changes data, not columns — it refreshes the resource
     timestamp (and activity log) but must NOT touch the schema."""
     ctx = _ctx()
-    data_dict = {"resource_id": "res-1", "records": [{"a": 1}], "method": "upsert"}
+    data_dict = {
+        "resource_id": "res-1",
+        "resource": {"url_type": "datastore"},
+        "records": [{"a": 1}],
+        "method": "upsert",
+    }
 
     asyncio.run(upsert_datastore(ctx, data_dict))
 
@@ -190,11 +221,31 @@ def test_upsert_syncs_timestamp_to_ckan() -> None:
     assert "url_type" not in patch
 
 
+def test_upsert_on_non_datastore_resource_skips_ckan_sync() -> None:
+    """A forced upsert into an upload has nothing safe to sync: the schema
+    is unchanged and `last_modified` would re-trigger ingestion."""
+    ctx = _ctx()
+    data_dict = {
+        "resource_id": "res-1",
+        "resource": {"url_type": "upload"},
+        "records": [{"a": 1}],
+        "method": "upsert",
+    }
+
+    asyncio.run(upsert_datastore(ctx, data_dict))
+
+    assert ctx.ckan.patched == []
+
+
 def test_delete_rows_syncs_timestamp_only() -> None:
     """Row delete (placeholder yields no schema) → timestamp + activity,
     no schema patch."""
     ctx = _ctx()
-    data_dict = {"resource_id": "res-1", "filters": {"a": 1}}
+    data_dict = {
+        "resource_id": "res-1",
+        "resource": {"url_type": "datastore"},
+        "filters": {"a": 1},
+    }
 
     asyncio.run(delete_datastore(ctx, data_dict))
 
@@ -219,7 +270,11 @@ def test_delete_columns_syncs_new_schema_to_ckan(
     monkeypatch.setattr(BigQueryBackend, "delete", fake_delete)
 
     ctx = _ctx()
-    data_dict = {"resource_id": "res-1", "fields": ["b"]}
+    data_dict = {
+        "resource_id": "res-1",
+        "resource": {"url_type": "datastore"},
+        "fields": ["b"],
+    }
 
     asyncio.run(delete_datastore(ctx, data_dict))
 
@@ -234,7 +289,8 @@ def test_delete_whole_table_clears_schema_on_ckan() -> None:
     BigQuery table — so the resource's schema is dropped too, keeping the
     two consistent."""
     ctx = _ctx()
-    data_dict = {"resource_id": "res-1"}  # no filters, no fields → drop table
+    # no filters, no fields → drop table
+    data_dict = {"resource_id": "res-1", "resource": {"url_type": "datastore"}}
 
     asyncio.run(delete_datastore(ctx, data_dict))
 
