@@ -27,6 +27,9 @@ API_BASE_PREFIX = f"{SERVICE_PREFIX}/api"
 API_VERSION = "v2"
 API_PREFIX = f"{API_BASE_PREFIX}/{API_VERSION}"
 DUMP_PREFIX = f"{API_PREFIX}/dump"
+# Note: legacy CKAN URL prefixes + their format tables live in
+# `datastore/legacy/constants.py`, kept out of this file so the whole
+# backwards-compat surface is one `rm -rf datastore/legacy/` away.
 # Download formats served by the export pipeline (`<DUMP_PREFIX>/…` and
 # `datastore_search_sql?download=…`). Lives here — not in `api/` — because
 # both the request schemas (pydantic layer) and the endpoints (starlette
