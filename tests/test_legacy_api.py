@@ -128,7 +128,11 @@ def test_legacy_search_fields_shape_matches_ckan(
 ) -> None:
     """`_updated_at` stripped; `_id` passes through. `_full_text` is
     NOT emitted on `datastore_search` — CKAN only surfaces it via
-    `datastore_search_sql`'s `SELECT *` path."""
+    `datastore_search_sql`'s `SELECT *` path. Each field entry carries
+    `id` + `type`, and (when the resource schema set one) `info` — the
+    same per-column metadata `datastore_info` returns, so clients don't
+    need a second round-trip to learn a column's title / unit / etc.
+    """
     _install_mock_search(monkeypatch)
     response = client.get(SEARCH_URL, params={"resource_id": _RESOURCE_ID})
     assert response.status_code == 200
@@ -144,7 +148,42 @@ def test_legacy_search_fields_shape_matches_ckan(
         "clearing_price_gbp_per_mwh",
     ]
     for f in result["fields"]:
-        assert set(f.keys()) == {"id", "type"}, "legacy fields entries only carry id+type"
+        assert set(f.keys()).issubset({"id", "type", "info"}), (
+            "legacy fields entries carry id, type, and optional info only"
+        )
+        assert "id" in f and "type" in f
+
+
+def test_legacy_search_fields_carry_info_metadata(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`info` set at `datastore_create` time rides on each field in the
+    search response — same shape `datastore_info` returns, no second
+    round-trip needed.
+    """
+    schema = {
+        "fields": [
+            {"name": "_id", "type": "integer"},
+            {
+                "name": "clearing_price_gbp_per_mwh",
+                "type": "number",
+                "title": "Clearing Price",
+                "unit": "GBP/MWh",
+                "description": "Pay-as-cleared price.",
+            },
+        ]
+    }
+    rows: list[tuple[Any, ...]] = [(1, 47.82)]
+    _install_mock_search(monkeypatch, schema=schema, rows=rows)
+    response = client.get(SEARCH_URL, params={"resource_id": _RESOURCE_ID})
+    assert response.status_code == 200
+
+    fields = response.json()["result"]["fields"]
+    priced = next(f for f in fields if f["id"] == "clearing_price_gbp_per_mwh")
+    assert "info" in priced
+    assert priced["info"]["title"] == "Clearing Price"
+    assert priced["info"]["unit"] == "GBP/MWh"
+    assert priced["info"]["description"] == "Pay-as-cleared price."
 
 
 def test_legacy_search_records_strip_updated_at_keep_id(
@@ -327,7 +366,7 @@ def test_legacy_search_sql_full_text_is_tsvector_shape(
 def test_legacy_full_text_matches_postgres_tsvector_byte_for_byte(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Round-trip the actual CKAN sample from `api.neso.energy` to
+    """Round-trip an actual CKAN sample from the legacy CKAN API to
     prove our tsvector output is byte-identical to Postgres's."""
     schema: dict[str, Any] = {
         "fields": [
@@ -350,7 +389,7 @@ def test_legacy_full_text_matches_postgres_tsvector_byte_for_byte(
         params={"sql": f'SELECT * FROM "{_RESOURCE_ID}" LIMIT 1'},
     )
     row = response.json()["result"]["records"][0]
-    # Verbatim from https://api.neso.energy/api/3/action/datastore_search_sql
+    # Verbatim from the legacy CKAN API's `datastore_search_sql`.
     assert row["_full_text"] == (
         "'-09':2 '-24':3 '00':7,10 '1':5 '1029':12 '2024':1 "
         "'22':6 '23':9 '999':11 'dayahead':4 'restrict':14"
@@ -445,22 +484,27 @@ def test_legacy_info_id_alias(
     assert response.json()["result"]["resource_id"] == _RESOURCE_ID
 
 
-# --- auth / errors (CKAN parity: logical errors return HTTP 200) ----------
+# --- auth / errors (legacy CKAN API status-code parity) -------------------
 #
-# Real CKAN's action API returns `200 OK` with `success:false` for every
-# logical error (ValidationError / NotAuthorized / ObjectNotFound). A
-# legacy client doing `if response.status_code == 200: body = r.json()`
-# must keep working, so these tests pin the status + envelope shape.
+# The legacy CKAN API promotes logical errors from the classic CKAN
+# "all 200" convention back to real HTTP codes:
+#
+#   - Not Found Error     → 404
+#   - Validation Error    → 409
+#   - Authorization Error → 403
+#
+# Pinned here so a regression that masks everything as 200 (or picks a
+# different code per type) fails loudly.
 
 
-def test_legacy_search_unknown_resource_returns_200_with_error_envelope(
+def test_legacy_search_unknown_resource_returns_404_with_error_envelope(
     client: TestClient,
 ) -> None:
     """No-field-context error: `message` + `__type` under `error`.
     No `fields` sub-dict (CKAN flattens field details onto `error` itself).
     """
     response = client.get(SEARCH_URL, params={"resource_id": "does-not-exist"})
-    assert response.status_code == 200
+    assert response.status_code == 404
     body = response.json()
     assert body["success"] is False
     assert body["error"]["__type"] == "Not Found Error"
@@ -469,18 +513,18 @@ def test_legacy_search_unknown_resource_returns_200_with_error_envelope(
     assert "help" in body
 
 
-def test_legacy_search_denied_key_returns_200_with_error_envelope(
+def test_legacy_search_denied_key_returns_403_with_error_envelope(
     client: TestClient, fake_ckan: FakeCKAN
 ) -> None:
     fake_ckan.deny("test-token")
     response = client.get(SEARCH_URL, params={"resource_id": _RESOURCE_ID})
-    assert response.status_code == 200
+    assert response.status_code == 403
     body = response.json()
     assert body["success"] is False
     assert body["error"]["__type"] == "Authorization Error"
 
 
-def test_legacy_search_bad_query_param_returns_200_validation_error(
+def test_legacy_search_bad_query_param_returns_409_validation_error(
     client: TestClient,
 ) -> None:
     """CKAN-shape validation error: per-field details are AT THE ROOT
@@ -488,7 +532,7 @@ def test_legacy_search_bad_query_param_returns_200_validation_error(
     CKAN's `{"error": {"<field>": ["msg"], "__type": "Validation Error"}}`.
     """
     response = client.get(SEARCH_URL, params={"resource_id": _RESOURCE_ID, "limit": "notanint"})
-    assert response.status_code == 200
+    assert response.status_code == 409
     body = response.json()
     assert body["success"] is False
     error = body["error"]
@@ -500,16 +544,16 @@ def test_legacy_search_bad_query_param_returns_200_validation_error(
     assert "fields" not in error
 
 
-def test_legacy_search_sql_bad_sql_returns_200(
+def test_legacy_search_sql_bad_sql_returns_409(
     client: TestClient,
 ) -> None:
-    """A disallowed statement is a validation error — 200 under CKAN.
+    """A disallowed statement is a validation error — 409 under prod.
 
     Per CKAN parity: field-context errors land as top-level keys on
     the error dict (`error["sql"]` here), not under `error["fields"]`.
     """
     response = client.get(SEARCH_SQL_URL, params={"sql": "DELETE FROM foo"})
-    assert response.status_code == 200
+    assert response.status_code == 409
     body = response.json()
     assert body["success"] is False
     error = body["error"]
@@ -519,22 +563,22 @@ def test_legacy_search_sql_bad_sql_returns_200(
     assert "fields" not in error
 
 
-def test_legacy_info_unknown_resource_returns_200(
+def test_legacy_info_unknown_resource_returns_404(
     client: TestClient,
 ) -> None:
     response = client.get(INFO_URL, params={"resource_id": "does-not-exist"})
-    assert response.status_code == 200
+    assert response.status_code == 404
     body = response.json()
     assert body["success"] is False
     assert body["error"]["__type"] == "Not Found Error"
 
 
-def test_legacy_search_post_error_returns_200(
+def test_legacy_search_post_error_returns_404(
     client: TestClient,
 ) -> None:
-    """POST errors must get the same 200 treatment as GET errors."""
+    """POST errors get the same status-code treatment as GET errors."""
     response = client.post(SEARCH_URL, json={"resource_id": "does-not-exist"})
-    assert response.status_code == 200
+    assert response.status_code == 404
     assert response.json()["error"]["__type"] == "Not Found Error"
 
 

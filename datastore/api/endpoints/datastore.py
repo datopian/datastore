@@ -184,13 +184,22 @@ async def datastore_search_sql(
     Accepts a single `sql` query parameter. To export the result as a
     file instead, use `GET <DUMP_PREFIX>/query`.
     """
+    # Collect each referenced resource's authorize payload — under
+    # AUTH_TYPE=ckan it carries the resource record (with its synced
+    # schema), which the service merges into the response so the output
+    # columns inherit CKAN-side data-dictionary edits by name.
+    resources: list[dict] = []
     for resource_id in params.resource_ids:
-        await context.authorize(resource_id=resource_id, permission="read")
+        auth_result = await context.authorize(resource_id=resource_id, permission="read")
+        resource = (auth_result or {}).get("resource")
+        if isinstance(resource, dict):
+            resources.append(resource)
 
     data_dict = params.model_dump() | {
         "function_names": params.function_names,
         "limit": params.limit,
         "offset": params.offset,
+        "resources": resources,
     }
 
     body_iter = await search_sql_datastore(

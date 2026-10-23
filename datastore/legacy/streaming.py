@@ -18,8 +18,11 @@ Deltas vs `datastore/services/streaming.py`:
     three but all customer scripts hit the default; a legacy caller
     who turns up with `records_format=lists` falls through to objects.
   - No `warnings` envelope — legacy clients never read it.
-  - `fields` entries are the minimal `{"type", "id"}` shape (no
-    `info` dict). The system columns are filtered out by id.
+  - `fields` entries carry `{"type", "id", "info"?}` — `info` is
+    passed through when the resource schema set one, so `datastore_search`
+    and `datastore_search_sql` surface the same per-column metadata
+    (title, description, unit, example, …) that `datastore_info`
+    returns. The system columns are filtered out by id.
   - Each row tuple is projected to the kept-column indices before
     serialisation so `_id` / `_updated_at` never land in `records`.
 
@@ -384,13 +387,20 @@ def _project_fields(
     *,
     hidden: frozenset[str] = LEGACY_HIDDEN_COLUMNS,
 ) -> tuple[list[dict[str, Any]], list[int]]:
-    """Reduce v2 `fields` to the CKAN-legacy minimal shape, remembering
-    which positions survived so row tuples can be sliced to match.
+    """Reduce v2 `fields` to the CKAN-legacy shape, remembering which
+    positions survived so row tuples can be sliced to match.
 
     Returns `(kept_fields, keep_indices)`. `kept_fields` entries carry
-    only `type` + `id` (same key order real CKAN uses); the `info`
-    block and any other v2 extras are dropped. `keep_indices` is the
-    list of original tuple positions to retain, in order.
+    `type`, `id`, and (when present) `info` — same key order the
+    legacy CKAN API emits. Any other v2 extras are dropped.
+    `keep_indices` is the list of original tuple positions to retain,
+    in order.
+
+    `info` is passed through so clients hitting `datastore_search` and
+    `datastore_search_sql` see the same per-column metadata (title,
+    description, unit, example, …) that `datastore_info` already
+    returns. One schema update at the datastore_create / datastore_info
+    layer now reaches every read endpoint without a second round-trip.
 
     `hidden` picks the column set to drop. Default
     `LEGACY_HIDDEN_COLUMNS` is the action-API set (just `_updated_at`);
@@ -408,6 +418,9 @@ def _project_fields(
             entry["type"] = f["type"]
         if fid is not None:
             entry["id"] = fid
+        info = f.get("info")
+        if isinstance(info, dict) and info:
+            entry["info"] = info
         kept_fields.append(entry)
         keep_indices.append(i)
     return kept_fields, keep_indices

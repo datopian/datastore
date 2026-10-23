@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-# Legacy CKAN URL prefixes. Mounted so scripts hitting the public CKAN
-# datastore (`api.neso.energy/api/3/action/...` and `.../datastore/dump/...`)
-# keep working byte-for-byte while callers migrate to v2.
+# Legacy CKAN URL prefixes. Mounted so scripts hitting the legacy CKAN
+# datastore (`/api/3/action/...` and `/datastore/dump/...`) keep working
+# byte-for-byte while callers migrate to v2.
 LEGACY_API_PREFIX = "/api/3/action"
 LEGACY_DUMP_PREFIX = "/datastore/dump"
 

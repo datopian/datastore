@@ -36,6 +36,7 @@ from datastore.core.exceptions import APIError, ValidationError
 from datastore.core.helper import content_disposition, dump_filename_base
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.infrastructure.engines.registry import get_allowed_sql_functions
+from datastore.services.read import overlay_resource_info
 from datastore.legacy.constants import (
     LEGACY_DUMP_EXTENSIONS,
     LEGACY_DUMP_MEDIA_TYPES,
@@ -71,25 +72,48 @@ _LEGACY_DUMP_UNBOUNDED = 2**31 - 1
 _log = logging.getLogger(__name__)
 
 
+# HTTP status code the legacy surface should emit for each logical error
+# type. These match what the legacy CKAN API returns on the same shapes
+# (verified end-to-end):
+#
+#     - unknown resource via datastore_search       → 404
+#     - unknown resource via datastore_search_sql   → 409
+#     - validation error on action args / SQL       → 409
+#     - validation on datastore_search bad body     → 409
+#
+# so a client script doing
+#
+#     if 200 <= status < 300:  ...   # success
+#     elif status == 404:      ...   # resource gone
+#     elif status == 409:      ...   # validation / query error
+#
+# behaves identically against our service and the legacy CKAN. Previously
+# we masked everything as 200 (classic upstream CKAN parity), which broke
+# clients that mirror the legacy CKAN's status-code taxonomy.
+_LEGACY_STATUS_BY_TYPE: dict[str, int] = {
+    "Validation Error": 409,
+    "Conflict Error": 409,
+    "Not Found Error": 404,
+    "Authorization Error": 403,
+    "Internal Error": 500,
+}
+
+
 class _CKANCompatRoute(APIRoute):
-    """FastAPI route that mimics CKAN action-API error behaviour.
+    """FastAPI route that mimics the legacy CKAN API's action-API error
+    status codes exactly.
 
-    Real CKAN's action API returns **HTTP 200** with `success:false` for
-    every logical error (ValidationError, NotAuthorized, ObjectNotFound,
-    …) — the HTTP status code is used only for infrastructure-level
-    problems. A legacy client doing
+    Historical note: upstream CKAN's action API returns **HTTP 200** with
+    `success:false` for every logical error. The legacy CKAN API we're
+    replacing sits behind a gateway that promotes those back to real HTTP
+    codes — 409 for Validation / Conflict, 404 for Not Found, 403 for
+    Auth. We match the legacy shape rather than the classic CKAN one, so
+    scripts tested against the legacy API behave identically against us.
 
-        if response.status_code == 200:
-            body = response.json()
-            if not body["success"]: ...
-
-    breaks against the v2-style 4xx we emit by default. This route class
-    catches the two exception types that are logical errors (our own
-    `APIError` with `status<500`, plus FastAPI's `RequestValidationError`
-    for malformed queries / bodies) and re-emits them as 200. 5xx is
-    left alone — the CKAN docs explicitly allow 500 for "major
-    formatting problems", and masking a server fault as 200 would hide
-    real breakage from monitoring.
+    Body shape stays the one real CKAN emits — `{help, success:false,
+    error: {<fields>, __type}}` with per-field details spread directly
+    on `error` (not nested under `error.fields`). Only the HTTP status
+    moves.
 
     Applied via `APIRouter(route_class=_CKANCompatRoute)` on the legacy
     action router only. The dump router keeps standard HTTP semantics
@@ -108,17 +132,20 @@ class _CKANCompatRoute(APIRoute):
                     # and emit a 5xx so monitoring stays honest. CKAN
                     # itself does the same.
                     raise
+                status = _LEGACY_STATUS_BY_TYPE.get(exc.type_label, 409)
                 _log.debug(
-                    "legacy APIError masked to 200: %s %s -> %s",
+                    "legacy APIError %s %s -> %s (HTTP %d)",
                     request.method,
                     request.url.path,
                     exc.type_label,
+                    status,
                 )
                 return _legacy_error_envelope(
                     request,
                     type_label=exc.type_label,
                     message=exc.message,
                     fields=exc.fields,
+                    status_code=status,
                 )
             except RequestValidationError as exc:
                 errors = list(exc.errors())
@@ -126,7 +153,7 @@ class _CKANCompatRoute(APIRoute):
                 first = errors[0] if errors else {"msg": "invalid request"}
                 message = f"{_format_loc(tuple(first.get('loc', ())))}: {first.get('msg')}"
                 _log.debug(
-                    "legacy RequestValidationError masked to 200: %s %s",
+                    "legacy RequestValidationError %s %s -> HTTP 409",
                     request.method,
                     request.url.path,
                 )
@@ -135,6 +162,7 @@ class _CKANCompatRoute(APIRoute):
                     type_label="Validation Error",
                     message=message,
                     fields=fields,
+                    status_code=_LEGACY_STATUS_BY_TYPE["Validation Error"],
                 )
 
         return ckan_handler
@@ -146,11 +174,13 @@ def _legacy_error_envelope(
     type_label: str,
     message: str,
     fields: dict[str, list[str]] | None = None,
+    status_code: int = 409,
 ) -> ORJSONResponse:
-    """CKAN-shaped error envelope at HTTP 200.
+    """CKAN-shaped error envelope at the HTTP status the legacy CKAN API
+    emits.
 
-    Matches the exact shape real CKAN emits, verified against
-    api.neso.energy's responses:
+    Matches the exact body shape the legacy CKAN API returns, verified
+    end-to-end:
 
         {
           "help": "...",
@@ -176,6 +206,10 @@ def _legacy_error_envelope(
     `help` echoes the request URL — same thing the success envelope
     does, so a legacy caller can't tell the two envelopes apart by
     looking at the help key.
+
+    `status_code` defaults to 409 (what prod emits for Validation /
+    Conflict). `_CKANCompatRoute` picks the right code per error type;
+    callers that build an envelope directly can override as needed.
     """
     error: dict[str, Any] = {}
     if fields:
@@ -193,7 +227,7 @@ def _legacy_error_envelope(
 
     return ORJSONResponse(
         {"help": str(request.url), "success": False, "error": error},
-        status_code=200,
+        status_code=status_code,
     )
 
 
@@ -253,7 +287,7 @@ async def _legacy_search_impl(
     `Config.SEARCH_RESULT_ROWS_MAX`, so a legacy caller trying to pull a
     million rows at once gets the same 400 as a v2 caller.
     """
-    await context.authorize(resource_id=params.resource_id, permission="read")
+    auth_result = await context.authorize(resource_id=params.resource_id, permission="read")
 
     max_limit = context.config.SEARCH_RESULT_ROWS_MAX
     if params.limit > max_limit:
@@ -279,7 +313,14 @@ async def _legacy_search_impl(
         include_total=params.include_total,
     )
 
-    fields, _ = frictionless_schema_to_fields(result.schema)
+    # Prefer the CKAN resource's synced schema under AUTH_TYPE=ckan — same
+    # policy v2 `datastore_search` follows, so data-dictionary edits made
+    # CKAN-side (title / description / unit) ride through on legacy's
+    # `fields` list too without a second `datastore_info` round-trip.
+    schema = result.schema
+    if context.config.AUTH_TYPE == "ckan":
+        schema = (auth_result or {}).get("resource", {}).get("schema") or result.schema
+    fields, _ = frictionless_schema_to_fields(schema)
     body_iter = stream_legacy_search(
         help_url=str(request.url),
         resource_id=params.resource_id,
@@ -336,8 +377,16 @@ async def _legacy_search_sql_impl(
     not apply here. The engine streams row-by-row so peak memory is
     bounded regardless of result size.
     """
+    # Collect each referenced resource's authorize payload — under
+    # AUTH_TYPE=ckan it carries the resource record (with its synced
+    # schema), merged into the output below so computed-but-same-named
+    # columns inherit CKAN-side data-dictionary edits.
+    resources: list[dict[str, Any]] = []
     for resource_id in params.resource_ids:
-        await context.authorize(resource_id=resource_id, permission="read")
+        auth_result = await context.authorize(resource_id=resource_id, permission="read")
+        resource = (auth_result or {}).get("resource")
+        if isinstance(resource, dict):
+            resources.append(resource)
 
     allowed = get_allowed_sql_functions(
         context.config.DATASTORE_ENGINE,
@@ -361,7 +410,15 @@ async def _legacy_search_sql_impl(
         sql=params.sql,
         limit=effective_limit,
     )
-    fields, _ = frictionless_schema_to_fields(result.schema)
+    # Overlay per-column metadata from the referenced CKAN resource(s)
+    # onto the engine's output schema — same policy v2's service applies.
+    # `type`/`format` stay the engine's (BigQuery is the truth about what
+    # the SELECT projected); everything else (title, description, unit,
+    # example, custom extras) comes from the resource schema.
+    schema = result.schema
+    if context.config.AUTH_TYPE == "ckan":
+        schema = overlay_resource_info(result.schema, resources)
+    fields, _ = frictionless_schema_to_fields(schema)
     body_iter = stream_legacy_search_sql(
         help_url=str(request.url),
         sql=params.sql,
