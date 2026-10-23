@@ -127,22 +127,28 @@ def test_search_with_distinct(client: TestClient) -> None:
 # 3. Pagination + include_total --------------------------------------------
 
 
-def test_include_total_returns_total(client: TestClient) -> None:
+def test_include_total_returns_total_records(client: TestClient) -> None:
+    """`include_total=true` surfaces the row count under the `total_records`
+    wire key (renamed from legacy `total` on v2 to disambiguate from
+    pagination's `total_pages`)."""
     response = client.get(SEARCH_URL, params=_params(include_total=True))
 
     assert response.status_code == 200
     result = response.json()["result"]
-    assert "total" in result
+    assert "total_records" in result
+    assert "total" not in result   # old key must not sneak back in
     # Placeholder engine returns 0 when include_total=True.
-    assert result["total"] == 0
+    assert result["total_records"] == 0
 
 
-def test_include_total_false_omits_total(client: TestClient) -> None:
-    """exclude_none keeps `total` off the wire when the engine returns None."""
+def test_include_total_false_omits_total_records(client: TestClient) -> None:
+    """exclude_none keeps `total_records` off the wire when the engine
+    returns None."""
     response = client.get(SEARCH_URL, params=_params(include_total=False))
 
     assert response.status_code == 200
     result = response.json()["result"]
+    assert "total_records" not in result
     assert "total" not in result
 
 
@@ -405,7 +411,7 @@ def test_objects_format_streams_rows(client: TestClient, monkeypatch: pytest.Mon
         {"auction_id": 145, "product_code": "DCH", "clearing_price_gbp_per_mwh": 51.1},
         {"auction_id": 146, "product_code": "FFR", "clearing_price_gbp_per_mwh": 32.4},
     ]
-    assert body["result"]["total"] == 3
+    assert body["result"]["total_records"] == 3
     # Every row was pulled from the lazy generator — the writer didn't bypass it.
     assert consumed == _FAKE_ROWS
 

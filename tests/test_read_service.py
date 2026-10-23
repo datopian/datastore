@@ -103,14 +103,18 @@ def test_limit_and_offset_round_trip() -> None:
     assert body["result"]["offset"] == 20
 
 
-def test_include_total_true_emits_total() -> None:
+def test_include_total_true_emits_total_records() -> None:
+    """`include_total=True` surfaces the row count under the `total_records`
+    wire key (v2 rename from legacy `total`)."""
     body = _call(data_dict_overrides={"include_total": True})
     # Placeholder engine yields total=0 when include_total=True.
-    assert body["result"]["total"] == 0
+    assert body["result"]["total_records"] == 0
+    assert "total" not in body["result"]   # old key must not leak back in
 
 
-def test_include_total_false_omits_total() -> None:
+def test_include_total_false_omits_total_records() -> None:
     body = _call(data_dict_overrides={"include_total": False})
+    assert "total_records" not in body["result"]
     assert "total" not in body["result"]
 
 
