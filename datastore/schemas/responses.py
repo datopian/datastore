@@ -105,7 +105,7 @@ class DatastoreCreateResponse(ResponseModel):
         # Echoed input rows when the request set `include_records=True`.
         records: list[dict[str, Any]] | None = None
         # Total row count after the write — set only when `include_total=True`.
-        total: int | None = None
+        total_records: int | None = None
 
     result: Result
 
@@ -117,7 +117,7 @@ class DatastoreUpsertResponse(ResponseModel):
         resource_id: str
         method: str
         records: list[dict[str, Any]] | None = None
-        total: int | None = None
+        total_records: int | None = None
 
     result: Result
 
@@ -158,7 +158,7 @@ class DatastoreSearchResponse(ResponseModel):
         records: list[dict[str, Any]]
         limit: int
         offset: int
-        total: int | None = None
+        total_records: int | None = None
         # Carries URL strings (`start` / `prev` / `next`) plus integer
         # page counters (`page` / `total_pages`); typed as `Any` for
         # OpenAPI accuracy.

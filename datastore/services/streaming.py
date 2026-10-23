@@ -253,7 +253,7 @@ def _stream_envelope(
     yield b',"offset":'
     yield orjson.dumps(offset)
     if include_total and total is not None:
-        yield b',"total":'
+        yield b',"total_records":'
         yield orjson.dumps(total)
     yield b',"_links":'
     yield orjson.dumps(links)

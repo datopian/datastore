@@ -196,7 +196,7 @@ async def create_datastore(
         schema=schema,
         primary_key=primary_key,
         records=records if include_records else None,
-        total=write_result.get("total") if include_total else None,
+        total_records=write_result.get("total") if include_total else None,
     )
 
 
@@ -229,7 +229,7 @@ async def upsert_datastore(
         resource_id=resource_id,
         method=method,
         records=records if include_records else None,
-        total=write_result.get("total") if include_total else None,
+        total_records=write_result.get("total") if include_total else None,
     )
 
 
