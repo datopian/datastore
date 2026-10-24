@@ -36,7 +36,7 @@ from datastore.core.exceptions import APIError, ValidationError
 from datastore.core.helper import content_disposition, dump_filename_base
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.infrastructure.engines.registry import get_allowed_sql_functions
-from datastore.services.read import overlay_resource_info
+from datastore.services.read import enrich_schema
 from datastore.legacy.constants import (
     LEGACY_DUMP_EXTENSIONS,
     LEGACY_DUMP_MEDIA_TYPES,
@@ -313,13 +313,7 @@ async def _legacy_search_impl(
         include_total=params.include_total,
     )
 
-    # Prefer the CKAN resource's synced schema under AUTH_TYPE=ckan — same
-    # policy v2 `datastore_search` follows, so data-dictionary edits made
-    # CKAN-side (title / description / unit) ride through on legacy's
-    # `fields` list too without a second `datastore_info` round-trip.
-    schema = result.schema
-    if context.config.AUTH_TYPE == "ckan":
-        schema = (auth_result or {}).get("resource", {}).get("schema") or result.schema
+    schema = enrich_schema(result.schema, (auth_result or {}).get("resource"))
     fields, _ = frictionless_schema_to_fields(schema)
     body_iter = stream_legacy_search(
         help_url=str(request.url),
@@ -410,14 +404,7 @@ async def _legacy_search_sql_impl(
         sql=params.sql,
         limit=effective_limit,
     )
-    # Overlay per-column metadata from the referenced CKAN resource(s)
-    # onto the engine's output schema — same policy v2's service applies.
-    # `type`/`format` stay the engine's (BigQuery is the truth about what
-    # the SELECT projected); everything else (title, description, unit,
-    # example, custom extras) comes from the resource schema.
-    schema = result.schema
-    if context.config.AUTH_TYPE == "ckan":
-        schema = overlay_resource_info(result.schema, resources)
+    schema = enrich_schema(result.schema, resources)
     fields, _ = frictionless_schema_to_fields(schema)
     body_iter = stream_legacy_search_sql(
         help_url=str(request.url),

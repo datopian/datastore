@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from datastore.core.constants import SYSTEM_FIELD_INFO
 from datastore.core.exceptions import ValidationError
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.infrastructure.engines.registry import get_allowed_sql_functions
@@ -86,14 +87,7 @@ async def search_datastore(
         include_total=data_dict["include_total"],
     )
 
-    # Prefer the CKAN resource's synced schema when AUTH_TYPE=ckan — same
-    # policy as `datastore_info`, so data-dictionary edits made CKAN-side
-    # (title / description / unit) are reflected on every read endpoint
-    # without a separate `datastore_info` round-trip. Falls back to the
-    # engine's stored schema when the resource has none synced.
-    schema = result.schema
-    if context.config.AUTH_TYPE == "ckan":
-        schema = data_dict.get("resource", {}).get("schema") or result.schema
+    schema = enrich_schema(result.schema, data_dict.get("resource"))
     fields, _ = frictionless_schema_to_fields(schema)
 
     envelope_kwargs = dict(
@@ -159,20 +153,9 @@ async def search_sql_datastore(
         sql=data_dict["sql"],
         limit=limit,
     )
-    # The engine's output schema is the authoritative source — the SELECT
-    # may project computed columns or aggregates that don't correspond to
-    # any resource's data dictionary. But under AUTH_TYPE=ckan we overlay
-    # per-column `info` from any referenced resource whose column name
-    # matches an output column, so a bare `SELECT * FROM "<rid>"`
-    # inherits the resource's title/description/unit metadata. `type`
-    # stays the engine's — a computed column's type is what BigQuery
-    # says it is, not what a same-named source column was.
-    schema = result.schema
-    if context.config.AUTH_TYPE == "ckan":
-        schema = overlay_resource_info(
-            schema, data_dict.get("resources") or [],
-        )
+    schema = enrich_schema(result.schema, data_dict.get("resources"))
     fields, _ = frictionless_schema_to_fields(schema)
+
     return stream_objects(
         help_url=request_url,
         resource_id="",
@@ -223,71 +206,37 @@ async def dump_sql_datastore(context: RequestContext, data_dict: dict[str, Any])
     )
 
 
-# Keys the engine's output schema wins on — the SELECT's result shape
-# is BigQuery's authoritative truth about what the query projected.
-# `type` + `format` on a computed column (`SELECT AVG(Price) AS p`,
-# `SELECT CAST(x AS DATE)`) don't line up with any source column's
-# Frictionless type, and overlaying would be a correctness bug.
-# Everything else (title, description, comment, unit, example,
-# constraints, custom keys, …) is user-managed metadata that the
-# resource schema is the authoritative source for.
-_ENGINE_WINS_KEYS = frozenset({"type", "format"})
-
-
-def overlay_resource_info(
-    output_schema: dict[str, Any],
-    resources: list[dict[str, Any]],
+def enrich_schema(
+    table_schema: dict[str, Any],
+    resources: dict[str, Any] | list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Enrich the engine's output schema with per-column metadata from any
-    referenced CKAN resource whose column name matches.
-
-    Policy: the CKAN resource schema wins on every key *except* `type`
-    and `format` — those stay the engine's, because a computed SELECT
-    column's type is what BigQuery actually returned, not what a
-    same-named source column was. This lets a resource's data-dictionary
-    edit (title, description, unit, example, custom extras) reach
-    `datastore_search_sql` output columns without a second round-trip,
-    while an aggregate like `SUM(x) AS x` keeps its real numeric type.
-
-    When two referenced resources carry the same column name, first-match
-    wins — resources are listed in FROM order, so the first one named
-    takes precedence.
-
-    Called only under `AUTH_TYPE=ckan`; otherwise the engine's schema is
-    the only truth we have.
+    """Overlay publisher + system-column metadata onto the engine schema.
+    Publisher wins on everything except `type`/`format`. `_id` and
+    `_updated_at` get service-provided docs when the publisher hasn't
+    described them. On name collisions across multiple resources,
+    first-match wins (FROM order).
     """
-    # name → full source field entry across every referenced resource.
-    source_fields: dict[str, dict[str, Any]] = {}
-    for resource in resources:
-        schema = resource.get("schema") or {}
-        for src in schema.get("fields", []):
+    if isinstance(resources, dict):
+        resources = [resources]
+    sources: dict[str, dict[str, Any]] = {}
+    for resource in resources or ():
+        for src in (resource.get("schema") or {}).get("fields") or ():
             name = src.get("name")
-            if not name or name in source_fields:
-                continue
-            source_fields[name] = src
+            if name:
+                sources.setdefault(name, src)
+    for name, src in SYSTEM_FIELD_INFO.items():
+        sources.setdefault(name, src)
 
-    if not source_fields:
-        return output_schema
-
-    enriched_fields: list[dict[str, Any]] = []
-    for field in output_schema.get("fields", []):
-        name = field.get("name")
-        src = source_fields.get(name)
+    merged_fields: list[dict[str, Any]] = []
+    for field in table_schema.get("fields") or ():
+        src = sources.get(field.get("name"))
         if src is None:
-            enriched_fields.append(field)
+            merged_fields.append(field)
             continue
-        # Start from the CKAN source (richer metadata), then pin the
-        # engine's type/format on top so BigQuery's view of the output
-        # column stays authoritative. `name` already matches by lookup.
-        merged = dict(src)
-        for engine_key in _ENGINE_WINS_KEYS:
-            if engine_key in field:
-                merged[engine_key] = field[engine_key]
-            else:
-                merged.pop(engine_key, None)
-        enriched_fields.append(merged)
-
-    return {**output_schema, "fields": enriched_fields}
+        merged_fields.append(
+            {**src, **{k: field[k] for k in ("type", "format") if k in field}}
+        )
+    return {**table_schema, "fields": merged_fields}
 
 
 def _ensure_allowed_sql_functions(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 # Default for the `API_URL` setting — the public base URL used to render
 # absolute URLs in the OpenAPI examples. Deployments override it via env;
@@ -201,3 +201,48 @@ RESERVED_SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset(
         "_updated_at",
     }
 )
+
+
+# Service-provided documentation for the two engine-managed system
+# columns, shaped as full Frictionless field entries with an `info`
+# sub-dict so the read-side merger overlays them like any
+# publisher-supplied field. CKAN's sync strips these columns from a
+# resource's own schema, so without the seed `_id` / `_updated_at`
+# would arrive on every read as bare `{name, type}` entries with no
+# title or description.
+SYSTEM_FIELD_INFO: dict[str, dict[str, Any]] = {
+    "_id": {
+        "name": "_id",
+        "info": {
+            "title": "Record Identifier",
+            "description": (
+                "System-generated unique identifier assigned to each "
+                "record in the database. Used to uniquely identify a "
+                "row within a resource table."
+            ),
+            "comment": (
+                "Automatically populated. Not publisher-maintained. "
+                "Values are unique within a resource and may be used "
+                "for record retrieval and updates."
+            ),
+            "example": "12345",
+            "unit": "N/A",
+        },
+    },
+    "_updated_at": {
+        "name": "_updated_at",
+        "info": {
+            "title": "Last Updated Timestamp",
+            "description": (
+                "System-generated timestamp indicating when the record "
+                "was last created or modified in the database."
+            ),
+            "comment": (
+                "Automatically maintained. Useful for identifying "
+                "recently changed records. Stored in UTC."
+            ),
+            "example": "2026-08-27T12:45:30",
+            "unit": "ISO 8601 UTC Timestamp",
+        },
+    },
+}
