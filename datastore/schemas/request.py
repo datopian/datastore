@@ -21,6 +21,7 @@ from datastore.schemas.validators import (
     fields_to_frictionless_schema,
     parse_sql_pagination,
     parse_sql_references,
+    to_csv_list,
     to_json_object,
     to_str_or_json_object,
     validate_frictionless_schema,
@@ -268,7 +269,11 @@ class DatastoreSearchRequest(BaseModel):
     offset: int = Field(default=0, ge=0, description="Rows to skip — pagination offset.")
     fields: str | None = Field(
         default=None,
-        description="Comma-separated columns to project. Default: all columns.",
+        description=(
+            "Columns to project. Accepts a comma-separated string "
+            "(`a,b,c`) or a JSON array of strings (`[\"a\",\"b\"]`). "
+            "Default: all columns."
+        ),
         examples=["auction_id,product_code,clearing_price_gbp_per_mwh"],
     )
     sort: str | None = Field(
@@ -297,6 +302,13 @@ class DatastoreSearchRequest(BaseModel):
     def _check_q(cls, v: str | None) -> str | None:
         if v:
             to_str_or_json_object(v)  # raises if it looks like JSON but isn't
+        return v
+
+    @field_validator("fields")
+    @classmethod
+    def _check_fields(cls, v: str | None) -> str | None:
+        if v:
+            to_csv_list(v)  # raises if JSON-array form is malformed
         return v
 
 

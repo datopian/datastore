@@ -72,6 +72,12 @@ _LEGACY_DUMP_UNBOUNDED = 2**31 - 1
 _log = logging.getLogger(__name__)
 
 
+def _legacy_help_url(request: Request) -> str:
+    """CKAN legacy help URL for a legacy action request."""
+    action = request.url.path.rsplit("/", 1)[-1]
+    return f"{request.url.scheme}://{request.url.netloc}/api/3/action/help_show?name={action}"
+
+
 # HTTP status code the legacy surface should emit for each logical error
 # type. These match what the legacy CKAN API returns on the same shapes
 # (verified end-to-end):
@@ -316,7 +322,7 @@ async def _legacy_search_impl(
     schema = enrich_schema(result.schema, (auth_result or {}).get("resource"))
     fields, _ = frictionless_schema_to_fields(schema)
     body_iter = stream_legacy_search(
-        help_url=str(request.url),
+        help_url=_legacy_help_url(request),
         resource_id=params.resource_id,
         fields=fields,
         records=result.records,
@@ -407,7 +413,7 @@ async def _legacy_search_sql_impl(
     schema = enrich_schema(result.schema, resources)
     fields, _ = frictionless_schema_to_fields(schema)
     body_iter = stream_legacy_search_sql(
-        help_url=str(request.url),
+        help_url=_legacy_help_url(request),
         sql=params.sql,
         fields=fields,
         records=result.records,
