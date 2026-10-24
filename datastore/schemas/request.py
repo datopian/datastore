@@ -51,9 +51,33 @@ class DatastoreCreateRequest(BaseModel):
                     "resource_id": "balancing_auction_results_2025",
                     "schema": {
                         "fields": [
-                            {"name": "auction_id", "type": "integer"},
-                            {"name": "product_code", "type": "string"},
-                            {"name": "clearing_price_gbp_per_mwh", "type": "number"},
+                            {
+                                "name": "auction_id",
+                                "type": "integer",
+                                "title": "Auction ID",
+                                "description": "Unique auction identifier. Stable across all products auctioned in the same market window.",
+                                "comment": "Primary-key component; pairs with product_code to uniquely reference a cleared bid.",
+                                "example": "144",
+                                "unit": "N/A",
+                            },
+                            {
+                                "name": "product_code",
+                                "type": "string",
+                                "title": "Product Code",
+                                "description": "Product mnemonic for the balancing service (e.g. DCL, DCH, FFR).",
+                                "comment": "Primary-key component; controlled vocabulary maintained by the market operator.",
+                                "example": "DCL",
+                                "unit": "N/A",
+                            },
+                            {
+                                "name": "clearing_price_gbp_per_mwh",
+                                "type": "number",
+                                "title": "Clearing Price",
+                                "description": "Pay-as-cleared price for the auction. Negative values are possible during oversupply.",
+                                "comment": "Pay-as-cleared: every accepted bid settles at this price, not its own offer.",
+                                "example": "47.82",
+                                "unit": "GBP/MWh",
+                            },
                         ],
                         "primaryKey": ["auction_id", "product_code"],
                     },
@@ -61,7 +85,7 @@ class DatastoreCreateRequest(BaseModel):
                         {
                             "auction_id": 144,
                             "product_code": "DCL",
-                            "clearing_price_gbp_per_mwh": 47.82,
+                            "clearing_price_gbp_per_mwh": 48.05,
                         }
                     ],
                 }

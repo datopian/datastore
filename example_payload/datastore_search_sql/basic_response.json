@@ -1,0 +1,49 @@
+{
+  "help": "http://localhost:8000/datastore/api/v2/docs#/Datastore/datastore_search_sql",
+  "success": true,
+  "result": {
+    "sql": "SELECT auction_id, product_code, clearing_price_gbp_per_mwh FROM \"balancing_auction_results_2025\" WHERE accepted = true LIMIT 100",
+    "fields": [
+      {
+        "id": "auction_id",
+        "type": "int4",
+        "info": {
+          "title": "Auction ID",
+          "example": "144",
+          "unit": "N/A"
+        }
+      },
+      {
+        "id": "product_code",
+        "type": "text",
+        "info": {
+          "title": "Product Code",
+          "example": "DCL"
+        }
+      },
+      {
+        "id": "clearing_price_gbp_per_mwh",
+        "type": "float8",
+        "info": {
+          "title": "Clearing Price",
+          "example": "47.82",
+          "unit": "GBP/MWh"
+        }
+      }
+    ],
+    "records_format": "objects",
+    "records": [
+      {
+        "auction_id": 2,
+        "product_code": "DCH",
+        "clearing_price_gbp_per_mwh": 35.66
+      },
+      {
+        "auction_id": 3,
+        "product_code": "DCL",
+        "clearing_price_gbp_per_mwh": 40.51
+      }
+    ],
+    "records_truncated": false
+  }
+}

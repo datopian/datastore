@@ -374,24 +374,46 @@ def _build_endpoint_folder(
     if not dir_path.is_dir():
         return {"name": action, "description": description, "item": []}
     for payload_file in _sorted_payloads(action, dir_path):
-        if "response" in payload_file.stem:
-            # Sample server responses live next to requests for docs;
-            # they don't belong in a Postman *request* collection.
+        if payload_file.stem.endswith("_response"):
+            # Sample server responses are attached to their sibling
+            # request (stem without `_response`), not shown as items.
             continue
         with payload_file.open() as f:
             body = json.load(f)
         name, scenario_desc = _scenario(action, payload_file)
         builder = _post_request if method == "POST" else _get_request
+        request = builder(action, body, scenario_desc)
         folder_items.append({
             "name": name,
-            "request": builder(action, body, scenario_desc),
-            "response": [],
+            "request": request,
+            "response": _collect_responses(dir_path, payload_file.stem, request, name),
         })
     return {
         "name": action,
         "description": description,
         "item": folder_items,
     }
+
+
+def _collect_responses(
+    dir_path: Path, request_stem: str, request: dict[str, Any], request_name: str,
+) -> list[dict[str, Any]]:
+    """Attach a sibling `<stem>_response.json` (if present) as a Postman example."""
+    response_file = dir_path / f"{request_stem}_response.json"
+    if not response_file.is_file():
+        return []
+    with response_file.open() as f:
+        body = json.load(f)
+    return [{
+        "name": f"{request_name} — example response",
+        "originalRequest": request,
+        "status": "OK",
+        "code": 200,
+        "_postman_previewlanguage": "json",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": json.dumps(body, indent=2),
+        "cookie": [],
+    }]
 
 
 def _build_health_folder() -> dict[str, Any]:
