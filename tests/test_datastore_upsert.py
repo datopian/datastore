@@ -91,19 +91,19 @@ def test_include_total_returns_total(client: TestClient) -> None:
 
     assert response.status_code == 200
     result = response.json()["result"]
-    assert "total" in result
+    assert "total_records" in result
     # BigQuery placeholder returns len(records); real engine will COUNT(*).
-    assert result["total"] == 2
+    assert result["total_records"] == 2
 
 
 def test_default_omits_optional_fields(client: TestClient) -> None:
-    """`records` and `total` should not appear when their flags are False."""
+    """`records` and `total_records` should not appear when their flags are False."""
     response = client.post(UPSERT_URL, json=_payload())
 
     assert response.status_code == 200
     result = response.json()["result"]
     assert "records" not in result
-    assert "total" not in result
+    assert "total_records" not in result
 
 
 # 3. Records optional --------------------------------------------------------

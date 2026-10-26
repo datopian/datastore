@@ -668,7 +668,7 @@ is easy to follow.
 
 Optional response fields (omitted from the body when not requested):
 - `records` — echoes the input rows back when the request sets `include_records: true`.
-- `total` — total row count after the write, populated when `include_total: true`.
+- `total_records` — total row count after the write, populated when `include_total: true`.
 
 ### 6.2 `GET /datastore/api/v2/datastore_search`
 
@@ -718,7 +718,7 @@ GET /datastore/api/v2/datastore_search
       {"auction_id": 152, "product_code": "DCL", "delivery_start": "2025-11-05T18:30:00Z", "clearing_price_gbp_per_mwh": 39.40, "volume_mwh": 95.0},
       {"auction_id": 144, "product_code": "DCL", "delivery_start": "2025-11-04T16:00:00Z", "clearing_price_gbp_per_mwh": 47.82, "volume_mwh": 120.0}
     ],
-    "total": 2,
+    "total_records": 2,
     "_links": {
       "start": "https://example.com/datastore/api/v2/datastore_search?resource_id=balancing_auction_results_2025&limit=100",
       "next":  "https://example.com/datastore/api/v2/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=100"
@@ -775,7 +775,7 @@ empty `records` array on the next page — there's no `prev` field today.
 
 - `method`: `upsert` | `insert` | `update`. The table's stored `unique_key` (set at `datastore_create`) decides which rows match — the request body itself never carries it.
 - `include_records`: if `true`, echoes the written rows back in the response.
-- `include_total`: if `true`, the engine runs a `COUNT(*)` after the write and populates `result.total`. Off by default.
+- `include_total`: if `true`, the engine runs a `COUNT(*)` after the write and populates `result.total_records`. Off by default.
 - `force`: bypasses optional client-side guards (reserved; backend-specific).
 
 **Response**
@@ -793,7 +793,7 @@ empty `records` array on the next page — there's no `prev` field today.
 Optional fields appear in `result` only when requested:
 
 - `records` — echoes input rows when `include_records: true`.
-- `total` — total row count after the write when `include_total: true`.
+- `total_records` — total row count after the write when `include_total: true`.
 
 `null` is never serialised — fields that aren't populated are simply omitted (see `_orjson_default` in `api/responses.py`).
 
@@ -932,7 +932,7 @@ metadata catalog (titles, descriptions, units, examples) without a side store.
     ],
     "unique_key": ["auction_id", "product_code"],
     "primary_key": ["auction_id", "product_code"],
-    "total": 18420
+    "total_records": 18420
   }
 }
 ```
