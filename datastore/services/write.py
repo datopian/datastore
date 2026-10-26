@@ -157,9 +157,13 @@ async def create_datastore(
         # Tag the new resource as datastore-managed so CKAN (and our own
         # read-only guard on subsequent writes) knows the datastore owns
         # its data. Caller-supplied url_type is overridden on purpose.
+        # The schema goes in up front too: CKAN may validate it on create
+        # (e.g. an `upsert` resource must declare a primaryKey), so leaving
+        # it to the post-write sync would reject the resource.
         resource = await context.ckan.resource_create(
             resource={
                 **resource,
+                "schema": schema,
                 "url_type": "datastore",
                 "datastore_active": True,
             }
