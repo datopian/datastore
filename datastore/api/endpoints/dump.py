@@ -1,4 +1,6 @@
-"""Download endpoints: `<DUMP_PREFIX>/{resource_id}` + `<DUMP_PREFIX>/query`.
+"""Download endpoints: `<DUMP_PREFIX>/{resource_id}` + `<DUMP_PREFIX>/query`,
+plus a resource's data dictionary and metadata at
+`<DUMP_PREFIX>/{resource_id}/dictionary` and `…/metadata`.
 
 csv / gzip / ndjson shards are composed into one GCS object, so those
 always redirect — the server never touches the bytes. Parquet can't be
@@ -13,16 +15,29 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 from starlette.requests import Request
-from starlette.responses import RedirectResponse, StreamingResponse
+from starlette.responses import RedirectResponse, Response, StreamingResponse
 
 from datastore.api.context import Context
 from datastore.api.responses import ERROR_RESPONSES
-from datastore.core.constants import DUMP_EXTENSIONS, DUMP_MEDIA_TYPES, DumpFormat
+from datastore.core.constants import (
+    DOCUMENT_MEDIA_TYPES,
+    DUMP_EXTENSIONS,
+    DUMP_MEDIA_TYPES,
+    DocumentFormat,
+    DumpFormat,
+)
 from datastore.core.exceptions import ServerError
 from datastore.core.helper import content_disposition, dump_filename_base
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.request import DatastoreDumpSQLRequest
 from datastore.schemas.validators import ResourceId
+from datastore.services.metadata import (
+    dictionary_csv,
+    dictionary_document,
+    json_bytes,
+    metadata_csv,
+    metadata_record,
+)
 from datastore.services.read import dump_sql_datastore
 from datastore.services.streaming import zip_archive_writer
 
@@ -163,3 +178,80 @@ async def dump(
 
     urls = await engine.dump(resource_id, fmt, filename_base=filename_base)
     return download_response(request, urls, fmt, filename_base)
+
+
+# What a dictionary / metadata download returns, for OpenAPI: the file
+# itself, served by this API (no redirect — the documents are small).
+_DOCUMENT_RESPONSES: dict[int | str, dict[str, Any]] = {
+    200: {
+        "description": (
+            "The file, named by `Content-Disposition`. Content type follows "
+            "`format`: "
+            + ", ".join(f"`{f}` → `{m}`" for f, m in DOCUMENT_MEDIA_TYPES.items())
+            + "."
+        ),
+        "content": {media: {} for media in DOCUMENT_MEDIA_TYPES.values()},
+    },
+}
+
+
+def document_response(
+    body: bytes, fmt: DocumentFormat, authorized: dict[str, Any], resource_id: str, suffix: str
+) -> Response:
+    """Serve an in-memory document, named like the resource's dump
+    (`<name>_<suffix>.<fmt>`)."""
+    base = dump_filename_base(authorized.get("resource"), fmt) or resource_id
+    return Response(
+        content=body,
+        media_type=DOCUMENT_MEDIA_TYPES[fmt],
+        headers={"Content-Disposition": content_disposition(f"{base}_{suffix}.{fmt}")},
+    )
+
+
+@router.get(
+    "/{resource_id}/dictionary",
+    summary="Download a resource's data dictionary",
+    response_class=Response,
+    responses=_DOCUMENT_RESPONSES,
+)
+async def dump_dictionary(
+    context: Context,
+    resource_id: ResourceId,
+    fmt: Annotated[DocumentFormat, Query(alias="format")] = "csv",
+):
+    """Download the resource's table schema (data dictionary).
+
+    `json` is the Frictionless Table Schema as `datastore_info` returns it.
+    `csv` has one row per column and one column per field property
+    (`name`, `type`, `title`, `description`, then any others); nested
+    values such as `constraints` are written as JSON in their cell."""
+    authorized = await context.authorize(resource_id=resource_id, permission="read")
+    schema = await dictionary_document(
+        context, {"resource_id": resource_id, "resource": authorized.get("resource")}
+    )
+    body = dictionary_csv(schema) if fmt == "csv" else json_bytes(schema)
+    return document_response(body, fmt, authorized, resource_id, "data_dictionary")
+
+
+@router.get(
+    "/{resource_id}/metadata",
+    summary="Download a resource's and its dataset's metadata",
+    response_class=Response,
+    responses=_DOCUMENT_RESPONSES,
+)
+async def dump_metadata(
+    context: Context,
+    resource_id: ResourceId,
+    fmt: Annotated[DocumentFormat, Query(alias="format")] = "csv",
+):
+    """Download the resource's metadata alongside its dataset's: names,
+    ids, description, organization, update frequencies, timestamps,
+    licence, tags, format, download URL, record count, temporal and
+    spatial coverage.
+
+    `json` is one object; `csv` is a header row and one value row, with
+    tags comma-joined. Requires `AUTH_TYPE=ckan`."""
+    authorized = await context.authorize(resource_id=resource_id, permission="read")
+    record = await metadata_record(context, resource_id, authorized)
+    body = metadata_csv(record) if fmt == "csv" else json_bytes(record)
+    return document_response(body, fmt, authorized, resource_id, "metadata")

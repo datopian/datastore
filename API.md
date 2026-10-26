@@ -78,6 +78,8 @@ token (except under `anonymous`).
 | GET | `/datastore/api/v2/dump/query` | Download the result of a SQL `SELECT` as a file |
 | GET | `/datastore/api/v2/datastore_info` | Schema + row stats for a resource |
 | GET | `/datastore/api/v2/dump/{resource_id}` | Download a whole resource (CSV/NDJSON/Parquet) |
+| GET | `/datastore/api/v2/dump/{resource_id}/dictionary` | Download a resource's data dictionary (CSV/JSON) |
+| GET | `/datastore/api/v2/dump/{resource_id}/metadata` | Download a resource's + its dataset's metadata (CSV/JSON) |
 | GET | `/datastore/api/health` · `/datastore/api/ready` | Liveness / readiness |
 
 ---
@@ -419,6 +421,54 @@ Requires `read` permission on the resource and a configured export bucket
 `query` is a **reserved name** on this route — `/datastore/api/v2/dump/query` is the SQL
 download endpoint below, so a resource literally named `query` can't be dumped
 by this URL.
+
+---
+
+## `GET /datastore/api/v2/dump/{resource_id}/dictionary`
+
+Download the resource's data dictionary. `?format=csv` (default) or `json`.
+Unlike the table dump this is served directly (`200`, no redirect) — the file
+is small and built in memory.
+
+- **json** — the Frictionless Table Schema, exactly as `datastore_info`
+  returns it under `result.schema` (`application/json`).
+- **csv** — one row per column, one column per field property: `name`,
+  `type`, `title`, `description` first, then any other property in the order
+  first seen. Nested values (e.g. `constraints`) are written as compact JSON
+  in their cell (`text/csv; charset=utf-8`).
+
+Named `<name>_data_dictionary.<format>`, where `<name>` follows the table
+dump's naming (uploaded filename, else `download_filename`, else the resource
+id). Requires `read` permission on the resource.
+
+---
+
+## `GET /datastore/api/v2/dump/{resource_id}/metadata`
+
+Download the resource's metadata together with its dataset's. `?format=csv`
+(default) or `json`. Served directly (`200`). **Requires `AUTH_TYPE=ckan`**
+(`Validation Error` otherwise) and `read` permission on the resource.
+
+| Field | Source |
+|---|---|
+| Dataset name / id / description | package `title` / `id` / `notes` |
+| Data group | package `organization.title` |
+| Dataset update frequency | package `update_frequency` |
+| Dataset created / last updated | package `metadata_created` / `metadata_modified` |
+| Licence | package `license_title` (else `license_id`) |
+| Tags | package tag names |
+| Resource name / id / format | resource `name` / `id` / `format` |
+| Resource created | resource `created` |
+| Resource last updated | resource `metadata_modified`, else `last_modified` (what the portal shows) |
+| Download URL | this service's `dump/{resource_id}` URL |
+| Total record count | datastore row count; empty when the resource has no table |
+| Resource update frequency | resource `update_frequency` |
+| Temporal coverage from / to | resource `temporal_coverage`, split on `/` |
+| Spatial coverage | resource `spatial_coverage` |
+
+The dataset is read with CKAN `package_show`. **json** is one object keyed by
+the labels above (`Tags` is a list); **csv** is a header row and one value
+row, with tags comma-joined. Named `<name>_metadata.<format>`.
 
 ---
 
