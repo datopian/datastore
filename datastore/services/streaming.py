@@ -35,7 +35,7 @@ yielded a chunk at a time and never accumulated.
 from __future__ import annotations
 
 import base64
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 import csv
 import io
 import zipfile
@@ -73,6 +73,10 @@ def _json_default(obj: Any) -> Any:
     same `YYYY-MM-DDTHH:MM:SS` wire shape.
     """
     if isinstance(obj, Decimal):
+        # Match Postgres `NUMERIC`: whole numbers serialise without a
+        # trailing `.0` (`150`, not `150.0`), fractions keep their value.
+        if obj == obj.to_integral_value():
+            return int(obj)
         return float(obj)
     if isinstance(obj, bytes):
         return base64.b64encode(obj).decode("ascii")
@@ -84,6 +88,8 @@ def _json_default(obj: Any) -> Any:
             obj = obj.astimezone(timezone.utc).replace(tzinfo=None)
         return obj.isoformat()
     if isinstance(obj, date):
+        return obj.isoformat()
+    if isinstance(obj, time):
         return obj.isoformat()
     raise TypeError(
         f"orjson cannot serialise {type(obj).__name__}; "

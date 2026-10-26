@@ -20,7 +20,7 @@ from __future__ import annotations
 # BigQuery has no native equivalent that round-trips losslessly.
 FRICTIONLESS_TO_BIGQUERY: dict[str, str] = {
     "integer": "INT64",
-    "number": "FLOAT64",
+    "number": "NUMERIC",
     "string": "STRING",
     "boolean": "BOOL",
     "date": "DATE",

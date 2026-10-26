@@ -34,6 +34,10 @@ def _orjson_default(obj: Any) -> Any:
     # values past ~15 significant digits round to the nearest IEEE-754
     # double (full-precision callers should CAST to STRING in SQL).
     if isinstance(obj, Decimal):
+        # Match Postgres `NUMERIC`: whole numbers serialise without a
+        # trailing `.0` (`150`, not `150.0`), fractions keep their value.
+        if obj == obj.to_integral_value():
+            return int(obj)
         return float(obj)
     # `BYTES` columns come back as raw `bytes`; base64-encode so the
     # response stays UTF-8 and round-trippable.
