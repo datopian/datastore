@@ -104,7 +104,7 @@ existing resource adds columns and widens types (see below).
 | `primary_key` | string \| array | *Deprecated*. Use `schema.primaryKey`. |
 | `records` | array | Optional rows to seed. |
 | `include_records` | bool | Echo written rows back in `result.records`. |
-| `include_total` | bool | Run `COUNT(*)` and return `result.total`. |
+| `include_total` | bool | Run `COUNT(*)` and return `result.total_records`. |
 | `force` | bool | Required to write a datastore-managed resource (see [read-only guard](#read-only-resource-guard)). |
 
 **Field types** accept Frictionless canonical names (`integer`, `number`,
@@ -154,7 +154,7 @@ round-tripped by `datastore_info`.
 }
 ```
 
-`records` and `total` appear only when `include_records` / `include_total` are set.
+`records` and `total_records` appear only when `include_records` / `include_total` are set.
 
 ---
 
@@ -170,7 +170,7 @@ Write rows into an existing resource (declare it with `datastore_create` first).
 | `records` | array | Rows to write. |
 | `method` | string | `upsert` (default) · `insert` · `update`. |
 | `include_records` | bool | Echo written rows in `result.records`. |
-| `include_total` | bool | Return `result.total`. |
+| `include_total` | bool | Return `result.total_records`. |
 | `force` | bool | Required for a datastore-managed resource (see [read-only guard](#read-only-resource-guard)). |
 
 - **`upsert`** — `MERGE` on the table's stored `primaryKey`: match → update, miss → insert.
@@ -291,7 +291,7 @@ GET /datastore/api/v2/datastore_search
     "records": [
       {"auction_id": 144, "product_code": "DCL", "clearing_price_gbp_per_mwh": 47.82}
     ],
-    "total": 2,
+    "total_records": 2,
     "_links": {
       "start": ".../datastore_search?resource_id=...&limit=100",
       "next":  ".../datastore_search?resource_id=...&limit=100&offset=100"
@@ -378,7 +378,7 @@ row stats — a column-level metadata catalog without a side store.
     "meta": {
       "resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937",
       "primary_key": ["auction_id", "product_code"],
-      "total": 18420
+      "total_records": 18420
     }
   }
 }

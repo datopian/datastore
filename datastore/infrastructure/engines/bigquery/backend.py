@@ -927,7 +927,7 @@ class BigQueryBackend(DatastoreBackend):
         if self.client is None:
             return InfoResult(
                 schema={"fields": []},
-                meta={"resource_id": resource_id, "total": 0},
+                meta={"resource_id": resource_id, "total_records": 0},
             )
 
         schema = self._read_schema(resource_id)
@@ -940,7 +940,7 @@ class BigQueryBackend(DatastoreBackend):
             schema=schema,
             meta={
                 "resource_id": resource_id,
-                "total": total,
+                "total_records": total,
                 "primary_key": normalize_pk(schema),
             },
         )

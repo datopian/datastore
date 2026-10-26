@@ -364,7 +364,7 @@ def test_upsert_returns_typed_result() -> None:
     # Optional fields stay None when their flags default to False — the
     # exclude_none serializer drops them from the wire body.
     assert result.records is None
-    assert result.total is None
+    assert result.total_records is None
 
 
 def test_upsert_rejects_invalid_records_before_engine_write(
@@ -461,7 +461,7 @@ def test_upsert_returns_total_when_include_total() -> None:
         )
     )
 
-    assert result.total == 2
+    assert result.total_records == 2
 
 
 def test_upsert_omits_total_when_include_total_false() -> None:
@@ -479,7 +479,7 @@ def test_upsert_omits_total_when_include_total_false() -> None:
         )
     )
 
-    assert result.total is None
+    assert result.total_records is None
 
 
 def test_upsert_records_optional() -> None:

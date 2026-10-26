@@ -1198,7 +1198,7 @@ def test_info_returns_stored_schema_total_and_primary_key(
     assert sql == ("SELECT COUNT(*) AS n FROM `proj-1.ds-1.balancing_auction_results_2025`")
     assert result.schema == schema
     assert result.meta["resource_id"] == "balancing_auction_results_2025"
-    assert result.meta["total"] == 18420
+    assert result.meta["total_records"] == 18420
     assert result.meta["primary_key"] == ["auction_id", "product_code"]
 
 
@@ -1234,7 +1234,7 @@ def test_info_returns_total_zero_when_count_fails(
 
     result = backend.info("res-1")
 
-    assert result.meta["total"] == 0
+    assert result.meta["total_records"] == 0
     assert result.schema == schema
 
 
@@ -1247,7 +1247,7 @@ def test_info_placeholder_mode_returns_stub(mock_client: MagicMock) -> None:
     result = backend.info("res-1")
 
     assert result.schema == {"fields": []}
-    assert result.meta == {"resource_id": "res-1", "total": 0}
+    assert result.meta == {"resource_id": "res-1", "total_records": 0}
     mock_client.query.assert_not_called()
 
 
