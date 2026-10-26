@@ -433,6 +433,8 @@ Each endpoint takes a single `ContextDep`. The handler calls `context.authorize(
 | GET  | `/datastore/api/v2/dump/query` | **implemented** | `sql=<SELECT…>`, `format=csv\|gzip\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 | GET  | `/datastore/api/v2/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
 | GET  | `/datastore/api/v2/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
+| GET  | `/datastore/api/v2/dump/{resource_id}/dictionary` | **implemented** | `format=csv\|json` | 200 file — the resource's schema (`services/metadata.py`) |
+| GET  | `/datastore/api/v2/dump/{resource_id}/metadata` | **implemented** (`AUTH_TYPE=ckan`) | `format=csv\|json` | 200 file — resource + dataset metadata via CKAN `package_show` |
 
 The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, parameterised search, native table-level metadata (the Frictionless schema + unique_key are JSON-encoded into the table's own `description` OPTION) for the schema round-trip, a row-count fast path via `INFORMATION_SCHEMA.TABLE_STORAGE`, and `EXPORT DATA`-backed dump with `table.modified`-keyed GCS caching. The DuckLake engine is the next concrete adapter — see §7.
 
