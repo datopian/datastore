@@ -305,7 +305,7 @@ def _wrap_date_vs_column_comparison(tree, notes: list[str], *, exp) -> None:
         )
 
 
-import re as _re
+import re as _re  # noqa: E402
 
 # Post-emit text rewrite: `TIMESTAMP_SECONDS(<expr> / 1000)` → `TIMESTAMP_MILLIS(<expr>)`.
 # `<expr>` is the shortest run of chars that balances parens; we restrict to a

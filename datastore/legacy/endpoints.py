@@ -36,7 +36,6 @@ from datastore.core.exceptions import APIError, ValidationError
 from datastore.core.helper import content_disposition, dump_filename_base
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.infrastructure.engines.registry import get_allowed_sql_functions
-from datastore.services.read import enrich_schema
 from datastore.legacy.constants import (
     LEGACY_DUMP_EXTENSIONS,
     LEGACY_DUMP_MEDIA_TYPES,
@@ -61,6 +60,7 @@ from datastore.schemas.validators import (
     to_json_object,
     to_str_or_json_object,
 )
+from datastore.services.read import enrich_schema
 
 # Signed-int32 max — well under BigQuery's LIMIT ceiling, lets a legacy
 # dump without an explicit `?limit=` drain the whole table while still

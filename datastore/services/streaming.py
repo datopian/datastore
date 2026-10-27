@@ -35,11 +35,11 @@ yielded a chunk at a time and never accumulated.
 from __future__ import annotations
 
 import base64
-from datetime import date, datetime, time, timezone
 import csv
 import io
 import zipfile
 from collections.abc import AsyncIterator, Iterator
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any
 

@@ -55,8 +55,8 @@ class DatastoreCreateRequest(BaseModel):
                                 "name": "auction_id",
                                 "type": "integer",
                                 "title": "Auction ID",
-                                "description": "Unique auction identifier. Stable across all products auctioned in the same market window.",
-                                "comment": "Primary-key component; pairs with product_code to uniquely reference a cleared bid.",
+                                "description": "Unique auction identifier. Stable across all products auctioned in the same market window.",  # noqa: E501
+                                "comment": "Primary-key component; pairs with product_code to uniquely reference a cleared bid.",  # noqa: E501
                                 "example": "144",
                                 "unit": "N/A",
                             },
@@ -64,8 +64,8 @@ class DatastoreCreateRequest(BaseModel):
                                 "name": "product_code",
                                 "type": "string",
                                 "title": "Product Code",
-                                "description": "Product mnemonic for the balancing service (e.g. DCL, DCH, FFR).",
-                                "comment": "Primary-key component; controlled vocabulary maintained by the market operator.",
+                                "description": "Product mnemonic for the balancing service (e.g. DCL, DCH, FFR).",  # noqa: E501
+                                "comment": "Primary-key component; controlled vocabulary maintained by the market operator.",  # noqa: E501
                                 "example": "DCL",
                                 "unit": "N/A",
                             },
@@ -73,8 +73,8 @@ class DatastoreCreateRequest(BaseModel):
                                 "name": "clearing_price_gbp_per_mwh",
                                 "type": "number",
                                 "title": "Clearing Price",
-                                "description": "Pay-as-cleared price for the auction. Negative values are possible during oversupply.",
-                                "comment": "Pay-as-cleared: every accepted bid settles at this price, not its own offer.",
+                                "description": "Pay-as-cleared price for the auction. Negative values are possible during oversupply.",  # noqa: E501
+                                "comment": "Pay-as-cleared: every accepted bid settles at this price, not its own offer.",  # noqa: E501
                                 "example": "47.82",
                                 "unit": "GBP/MWh",
                             },
