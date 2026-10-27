@@ -78,6 +78,8 @@ token (except under `anonymous`).
 | GET | `/datastore/api/v2/dump/query` | Download the result of a SQL `SELECT` as a file |
 | GET | `/datastore/api/v2/datastore_info` | Schema + row stats for a resource |
 | GET | `/datastore/api/v2/dump/{resource_id}` | Download a whole resource (CSV/NDJSON/Parquet) |
+| GET | `/datastore/api/v2/dump/{resource_id}/dictionary` | Download a resource's data dictionary (CSV/JSON) |
+| GET | `/datastore/api/v2/dump/{resource_id}/metadata` | Download a resource's + its dataset's metadata (CSV/JSON) |
 | GET | `/datastore/api/health` · `/datastore/api/ready` | Liveness / readiness |
 
 ---
@@ -104,7 +106,7 @@ existing resource adds columns and widens types (see below).
 | `primary_key` | string \| array | *Deprecated*. Use `schema.primaryKey`. |
 | `records` | array | Optional rows to seed. |
 | `include_records` | bool | Echo written rows back in `result.records`. |
-| `include_total` | bool | Run `COUNT(*)` and return `result.total`. |
+| `include_total` | bool | Run `COUNT(*)` and return `result.total_records`. |
 | `force` | bool | Required to write a datastore-managed resource (see [read-only guard](#read-only-resource-guard)). |
 
 **Field types** accept Frictionless canonical names (`integer`, `number`,
@@ -154,7 +156,7 @@ round-tripped by `datastore_info`.
 }
 ```
 
-`records` and `total` appear only when `include_records` / `include_total` are set.
+`records` and `total_records` appear only when `include_records` / `include_total` are set.
 
 ---
 
@@ -170,7 +172,7 @@ Write rows into an existing resource (declare it with `datastore_create` first).
 | `records` | array | Rows to write. |
 | `method` | string | `upsert` (default) · `insert` · `update`. |
 | `include_records` | bool | Echo written rows in `result.records`. |
-| `include_total` | bool | Return `result.total`. |
+| `include_total` | bool | Return `result.total_records`. |
 | `force` | bool | Required for a datastore-managed resource (see [read-only guard](#read-only-resource-guard)). |
 
 - **`upsert`** — `MERGE` on the table's stored `primaryKey`: match → update, miss → insert.
@@ -291,7 +293,7 @@ GET /datastore/api/v2/datastore_search
     "records": [
       {"auction_id": 144, "product_code": "DCL", "clearing_price_gbp_per_mwh": 47.82}
     ],
-    "total": 2,
+    "total_records": 2,
     "_links": {
       "start": ".../datastore_search?resource_id=...&limit=100",
       "next":  ".../datastore_search?resource_id=...&limit=100&offset=100"
@@ -378,7 +380,7 @@ row stats — a column-level metadata catalog without a side store.
     "meta": {
       "resource_id": "c6153a74-43cb-4edf-8bdf-bb664feca937",
       "primary_key": ["auction_id", "product_code"],
-      "total": 18420
+      "total_records": 18420
     }
   }
 }
@@ -419,6 +421,54 @@ Requires `read` permission on the resource and a configured export bucket
 `query` is a **reserved name** on this route — `/datastore/api/v2/dump/query` is the SQL
 download endpoint below, so a resource literally named `query` can't be dumped
 by this URL.
+
+---
+
+## `GET /datastore/api/v2/dump/{resource_id}/dictionary`
+
+Download the resource's data dictionary. `?format=csv` (default) or `json`.
+Unlike the table dump this is served directly (`200`, no redirect) — the file
+is small and built in memory.
+
+- **json** — the Frictionless Table Schema, exactly as `datastore_info`
+  returns it under `result.schema` (`application/json`).
+- **csv** — one row per column, one column per field property: `name`,
+  `type`, `title`, `description` first, then any other property in the order
+  first seen. Nested values (e.g. `constraints`) are written as compact JSON
+  in their cell (`text/csv; charset=utf-8`).
+
+Named `<name>_data_dictionary.<format>`, where `<name>` follows the table
+dump's naming (uploaded filename, else `download_filename`, else the resource
+id). Requires `read` permission on the resource.
+
+---
+
+## `GET /datastore/api/v2/dump/{resource_id}/metadata`
+
+Download the resource's metadata together with its dataset's. `?format=csv`
+(default) or `json`. Served directly (`200`). **Requires `AUTH_TYPE=ckan`**
+(`Validation Error` otherwise) and `read` permission on the resource.
+
+| Field | Source |
+|---|---|
+| Dataset name / id / description | package `title` / `id` / `notes` |
+| Data group | package `organization.title` |
+| Dataset update frequency | package `update_frequency` |
+| Dataset created / last updated | package `metadata_created` / `metadata_modified` |
+| Licence | package `license_title` (else `license_id`) |
+| Tags | package tag names |
+| Resource name / id / format | resource `name` / `id` / `format` |
+| Resource created | resource `created` |
+| Resource last updated | resource `metadata_modified`, else `last_modified` (what the portal shows) |
+| Download URL | this service's `dump/{resource_id}` URL |
+| Total record count | datastore row count; empty when the resource has no table |
+| Resource update frequency | resource `update_frequency` |
+| Temporal coverage from / to | resource `temporal_coverage`, split on `/` |
+| Spatial coverage | resource `spatial_coverage` |
+
+The dataset is read with CKAN `package_show`. **json** is one object keyed by
+the labels above (`Tags` is a list); **csv** is a header row and one value
+row, with tags comma-joined. Named `<name>_metadata.<format>`.
 
 ---
 

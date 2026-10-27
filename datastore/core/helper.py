@@ -3,8 +3,13 @@ from __future__ import annotations
 import os
 import re
 import unicodedata
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote, urlparse
+
+from datastore.core.constants import DUMP_PREFIX
+
+if TYPE_CHECKING:
+    from datastore.core.config import Config
 
 
 def parse_authorization_header(authorization: str | None) -> str | None:
@@ -84,3 +89,17 @@ def content_disposition(filename: str) -> str:
         fallback = fallback.replace('"', "").replace("\\", "") or "download"
         return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
     return f'attachment; filename="{filename}"'
+
+
+def dump_url(config: Config, resource_id: str) -> str:
+    """Absolute download URL for `resource_id` on this service.
+
+    Base is `API_URL` when set, else `CKAN_URL`. The fallback is safe on
+    the CKAN paths that call this: under `AUTH_TYPE=ckan` a config
+    validator already guarantees `CKAN_URL` is non-empty — so the URL is
+    never left host-less. It does assume the datastore is reachable on
+    CKAN's host, which is true for the deployments this serves; a split
+    host needs `API_URL` set explicitly.
+    """
+    base = (config.API_URL or config.CKAN_URL).rstrip("/")
+    return f"{base}{DUMP_PREFIX}/{resource_id}"

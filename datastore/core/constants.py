@@ -57,6 +57,15 @@ DUMP_MEDIA_TYPES: dict[str, str] = {
     "parquet": "application/vnd.apache.parquet",
 }
 
+# Formats for the data dictionary + metadata downloads
+# (`<DUMP_PREFIX>/{rid}/dictionary`, `<DUMP_PREFIX>/{rid}/metadata`). Small
+# documents built in memory, so the API serves the bytes itself.
+DocumentFormat = Literal["csv", "json"]
+DOCUMENT_MEDIA_TYPES: dict[str, str] = {
+    "csv": "text/csv; charset=utf-8",
+    "json": "application/json",
+}
+
 POSTGRES_TYPES: dict[str, str] = {
     # integer
     "int2": "int2",

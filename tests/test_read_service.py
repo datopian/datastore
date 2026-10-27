@@ -459,7 +459,7 @@ def _info(
         schema=engine_schema if engine_schema is not None else _ENGINE_SCHEMA,
         meta=engine_meta
         if engine_meta is not None
-        else {"resource_id": "res-1", "total": 7, "primary_key": ["auction_id"]},
+        else {"resource_id": "res-1", "total_records": 7, "primary_key": ["auction_id"]},
     )
 
     def fake(self: BigQueryBackend, resource_id: str) -> InfoResult:
@@ -481,7 +481,7 @@ def test_info_ckan_schema_overrides_fields_and_primary_key() -> None:
     assert [f["id"] for f in out.fields] == ["auction_id", "product_code"]
     assert out.meta["primary_key"] == ["auction_id", "product_code"]
     # Untouched engine metadata survives the override.
-    assert out.meta["total"] == 7
+    assert out.meta["total_records"] == 7
 
 
 def test_info_ckan_schema_without_primary_key_clears_engine_key() -> None:
@@ -516,7 +516,7 @@ def test_info_engine_meta_without_primary_key_stays_absent() -> None:
     out = _info(
         auth_type="ckan",
         resource={"schema": _CKAN_SCHEMA},
-        engine_meta={"resource_id": "res-1", "total": 7},
+        engine_meta={"resource_id": "res-1", "total_records": 7},
     )
 
     assert "primary_key" not in out.meta

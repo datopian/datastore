@@ -74,6 +74,11 @@ class CKANClient:
             body["permission"] = permission
         return await self._post_action("datastore_authorize", body)
 
+    async def package_show(self, *, package_id: str) -> dict[str, Any]:
+        """`/api/3/action/package_show`. The full dataset dict, with its
+        resources, organization, tags and scheming extras."""
+        return await self._post_action("package_show", {"id": package_id})
+
     async def resource_create(self, *, resource: dict[str, Any]) -> dict[str, Any]:
         """`/api/3/action/resource_create`. `resource` must include `package_id`."""
         if not resource.get("package_id"):
@@ -125,7 +130,6 @@ class CKANClient:
     @staticmethod
     def _unwrap(action: str, response: httpx.Response) -> dict[str, Any]:
         """Parse the CKAN envelope; raise on `success=false` or bad shape."""
-        print(response.status_code)
         try:
             payload = response.json()
         except ValueError as exc:

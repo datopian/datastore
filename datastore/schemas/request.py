@@ -137,7 +137,7 @@ class DatastoreCreateRequest(BaseModel):
     )
     include_total: bool = Field(
         default=False,
-        description="Run `COUNT(*)` after the write and return `result.total`.",
+        description="Run `COUNT(*)` after the write and return `result.total_records`.",
     )
     force: bool | None = Field(
         default=None, description="Bypass optional client-side guards (reserved)."
@@ -232,7 +232,7 @@ class DatastoreUpsertRequest(BaseModel):
     )
     include_total: bool = Field(
         default=False,
-        description="Run `COUNT(*)` after the write and return `result.total`.",
+        description="Run `COUNT(*)` after the write and return `result.total_records`.",
     )
     force: bool = Field(default=False, description="Bypass optional client-side guards (reserved).")
 
@@ -307,7 +307,7 @@ class DatastoreSearchRequest(BaseModel):
     )
     include_total: bool = Field(
         default=True,
-        description="Include `result.total` (row count). Set `false` to skip the COUNT.",
+        description="Include `result.total_records` (row count). Set `false` to skip the COUNT.",
     )
     records_format: RecordsFormat = Field(
         default="objects",
