@@ -150,10 +150,10 @@ POSTGRES_TO_FRICTIONLESS: dict[str, str] = {
 # Frictionless field type → canonical Postgres type. Used when deriving the
 # legacy `fields` shape from a Frictionless schema. Lossy in the other
 # direction (e.g., a Frictionless `integer` could have been any width); we
-# pick the widest/most-permissive Postgres type so the column accepts
-# anything the Frictionless type implies.
+# pick the type CKAN classic emits so the legacy wire shape matches —
+# `integer` → `int4` (both CKAN's user integers and `_id serial`).
 FRICTIONLESS_TO_POSTGRES: dict[str, str] = {
-    "integer": "int8",
+    "integer": "int4",
     "number": "numeric",
     "boolean": "bool",
     "string": "text",

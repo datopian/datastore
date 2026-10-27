@@ -81,7 +81,6 @@ _PG_ENGLISH_STOPWORDS: frozenset[str] = frozenset({
 # calls — snowballstemmer's state is per-call, not per-instance).
 _SNOWBALL = snowballstemmer.stemmer("english")
 
-
 def build_legacy_pagination_links(
     url: str,
     *,
@@ -324,7 +323,11 @@ def _records_with_full_text(
         projected[full_text_at] = _compute_full_text(
             [v for i, v in enumerate(projected) if i != full_text_at and columns[i] != "_id"]
         )
-        yield orjson.dumps(dict(zip(columns, projected)), default=_json_default)
+        yield orjson.dumps(
+            dict(zip(columns, projected)),
+            default=_json_default,
+            option=orjson.OPT_PASSTHROUGH_DATETIME,
+        )
     yield b"]"
 
 
@@ -446,7 +449,11 @@ def _records_object_array(
         else:
             yield b","
         projected = tuple(row[i] for i in keep_indices)
-        yield orjson.dumps(dict(zip(columns, projected)), default=_json_default)
+        yield orjson.dumps(
+            dict(zip(columns, projected)),
+            default=_json_default,
+            option=orjson.OPT_PASSTHROUGH_DATETIME,
+        )
     yield b"]"
 
 

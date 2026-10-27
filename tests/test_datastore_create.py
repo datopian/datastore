@@ -328,7 +328,7 @@ def test_create_with_schema_succeeds_and_returns_both_shapes(
     assert result["primary_key"] == ["auction_id", "product_code"]
     # Legacy `fields` derived from the schema, with Postgres types.
     assert [f["id"] for f in result["fields"]] == ["auction_id", "product_code"]
-    assert result["fields"][0]["type"] == "int8"
+    assert result["fields"][0]["type"] == "int4"
     assert result["fields"][1]["type"] == "text"
     # Schema returned verbatim (Frictionless shape).
     assert result["schema"]["primaryKey"] == ["auction_id", "product_code"]
