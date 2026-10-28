@@ -128,15 +128,17 @@ async def dump_sql(
     """Download query result as a file, named
     `<download_filename>_filtered_<hash>` when the query reads a single
     resource that has a download name (see `dump`), else `query_<hash>`."""
-    resources = [
-        (await context.authorize(resource_id=resource_id, permission="read")).get("resource")
+    authorized = [
+        await context.authorize(resource_id=resource_id, permission="read")
         for resource_id in params.resource_ids
     ]
-    name = (
-        dump_filename_base(resources[0], DUMP_EXTENSIONS[params.format])
-        if len(resources) == 1
-        else None
-    )
+    name = None
+    if len(authorized) == 1:
+        # Live resource: the cached one still holds the pre-replace url.
+        resource = await context.fresh_resource(
+            params.resource_ids[0], authorized[0].get("resource")
+        )
+        name = dump_filename_base(resource, DUMP_EXTENSIONS[params.format])
     filename_prefix = f"{name}_filtered" if name else None
 
     urls = await dump_sql_datastore(
@@ -171,9 +173,9 @@ async def dump(
     resources, else the resource's `download_filename`; when neither is
     available, after the resource id."""
     authorized = await context.authorize(resource_id=resource_id, permission="read")
-    filename_base = (
-        dump_filename_base(authorized.get("resource"), DUMP_EXTENSIONS[fmt]) or resource_id
-    )
+    # Live resource: the cached one still holds the pre-replace url.
+    resource = await context.fresh_resource(resource_id, authorized.get("resource"))
+    filename_base = dump_filename_base(resource, DUMP_EXTENSIONS[fmt]) or resource_id
     engine = get_datastore_engine(context, mode="ro")
 
     urls = await engine.dump(resource_id, fmt, filename_base=filename_base)
@@ -226,6 +228,7 @@ async def dump_dictionary(
     (`name`, `type`, `title`, `description`, then any others); nested
     values such as `constraints` are written as JSON in their cell."""
     authorized = await context.authorize(resource_id=resource_id, permission="read")
+    authorized["resource"] = await context.fresh_resource(resource_id, authorized.get("resource"))
     schema = await dictionary_document(
         context, {"resource_id": resource_id, "resource": authorized.get("resource")}
     )
@@ -252,6 +255,7 @@ async def dump_metadata(
     `json` is one object; `csv` is a header row and one value row, with
     tags comma-joined. Requires `AUTH_TYPE=ckan`."""
     authorized = await context.authorize(resource_id=resource_id, permission="read")
+    authorized["resource"] = await context.fresh_resource(resource_id, authorized.get("resource"))
     record = await metadata_record(context, resource_id, authorized)
     body = metadata_csv(record) if fmt == "csv" else json_bytes(record)
     return document_response(body, fmt, authorized, resource_id, "metadata")

@@ -74,6 +74,10 @@ class CKANClient:
             body["permission"] = permission
         return await self._post_action("datastore_authorize", body)
 
+    async def resource_show(self, *, resource_id: str) -> dict[str, Any]:
+        """`/api/3/action/resource_show`. The live resource dict."""
+        return await self._post_action("resource_show", {"id": resource_id})
+
     async def package_show(self, *, package_id: str) -> dict[str, Any]:
         """`/api/3/action/package_show`. The full dataset dict, with its
         resources, organization, tags and scheming extras."""
