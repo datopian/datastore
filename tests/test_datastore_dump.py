@@ -181,6 +181,41 @@ def test_dump_of_upload_uses_uploaded_filename(client: TestClient, fake_ckan: Fa
     assert calls[0]["filename_base"] == "auction-results"
 
 
+def test_dump_names_file_after_replaced_upload_despite_stale_auth(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    """The auth check can still report the pre-replace url (TTL cache); the
+    dump must be named after the file CKAN holds now."""
+    rid = "balancing_auction_results_2025"
+    old = {
+        **fake_ckan.resources[rid],
+        "url_type": "upload",
+        "url": "https://ckan/dataset/d/resource/r/download/first.csv",
+    }
+    fake_ckan.stale_resources[rid] = old
+    fake_ckan.resources[rid] = {
+        **old,
+        "url": "https://ckan/dataset/d/resource/r/download/second.csv",
+    }
+    calls: list[dict[str, Any]] = []
+    with _patch_dump(["https://example/a.ndjson"], calls):
+        client.get(DUMP_URL, params={"format": "ndjson"}, follow_redirects=False)
+    assert calls[0]["filename_base"] == "second"
+
+
+def test_dump_falls_back_to_cached_resource_when_ckan_fails(
+    client: TestClient, fake_ckan: FakeCKAN
+) -> None:
+    rid = "balancing_auction_results_2025"
+    fake_ckan.resources[rid]["download_filename"] = "Cached Name"
+    fake_ckan.fail_resource_show = True
+    calls: list[dict[str, Any]] = []
+    with _patch_dump(["https://example/a.csv"], calls):
+        response = client.get(DUMP_URL, follow_redirects=False)
+    assert response.status_code == 302
+    assert calls[0]["filename_base"] == "Cached Name"
+
+
 def test_sharded_parquet_zip_uses_download_filename(
     client: TestClient, fake_ckan: FakeCKAN
 ) -> None:

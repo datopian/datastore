@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
@@ -12,8 +13,11 @@ from datastore.api import auth as auth_fns
 from datastore.api.auth import Permission
 from datastore.auth.base import AuthProvider
 from datastore.core.config import Config, get_config
+from datastore.core.exceptions import APIError
 from datastore.core.helper import parse_authorization_header
 from datastore.infrastructure.ckan_client import CKANClient
+
+log = logging.getLogger(__name__)
 
 ConfigDep = Annotated[Config, Depends(get_config)]
 
@@ -86,6 +90,24 @@ class RequestContext:
             authorization_dict(self.request, data_dict)
         data_dict.pop("user", None)
         return data_dict
+
+    async def fresh_resource(
+        self, resource_id: str, cached: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """The live CKAN resource, for values that must not lag a replace.
+
+        `authorize` returns the resource as it was when the decision was
+        cached (up to `AUTH_CACHE_TTL`), so a file replaced since then still
+        carries the old `url`. Falls back to `cached` when CKAN is
+        unreachable or standalone, so a CKAN blip never blocks a download.
+        """
+        if self.ckan is None:
+            return cached
+        try:
+            return await self.ckan.resource_show(resource_id=resource_id)
+        except APIError:
+            log.warning("resource_show failed for %s; using cached resource", resource_id)
+            return cached
 
 
 def get_context(

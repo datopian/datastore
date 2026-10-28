@@ -39,7 +39,7 @@ from typing import Any  # noqa: E402
 import pytest  # noqa: E402
 from datastore.api.context import get_auth_provider, get_ckan_client  # noqa: E402
 from datastore.auth.ckan import Provider as CKANAuthProvider  # noqa: E402
-from datastore.core.exceptions import AuthorizationError, NotFoundError  # noqa: E402
+from datastore.core.exceptions import AuthorizationError, NotFoundError, ServerError  # noqa: E402
 from datastore.infrastructure.cache import InMemoryCache  # noqa: E402
 from datastore.main import create_app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -105,6 +105,10 @@ class FakeCKAN:
         self.authorize_calls = 0
         self.package_show_calls = 0
         self.deny_keys: set[str] = set()
+        # What `datastore_authorize` still reports after a resource changed,
+        # i.e. the entry the provider's TTL cache would hand back.
+        self.stale_resources: dict[str, dict[str, Any]] = {}
+        self.fail_resource_show = False
         self._api_key: str | None = None
 
     def add_resource(self, resource_id: str, **extra: Any) -> None:
@@ -141,7 +145,8 @@ class FakeCKAN:
             package = self.packages.get(pkg_id)
             if package is None:
                 raise NotFoundError(f"package '{pkg_id}' not found")
-            return {"package": package, "resource": existing, "user": user}
+            resource = self.stale_resources.get(resource_id, existing)
+            return {"package": package, "resource": resource, "user": user}
 
         assert package_id is not None
         package = self.packages.get(package_id)
@@ -152,6 +157,14 @@ class FakeCKAN:
             "resource": {"package_id": package_id},
             "user": user,
         }
+
+    async def resource_show(self, *, resource_id: str) -> dict[str, Any]:
+        if self.fail_resource_show:
+            raise ServerError("CKAN returned 500 for resource_show")
+        existing = self.resources.get(resource_id)
+        if existing is None:
+            raise NotFoundError(f"resource '{resource_id}' not found")
+        return existing
 
     async def package_show(self, *, package_id: str) -> dict[str, Any]:
         """Mirrors CKAN: the package with its resources embedded."""
