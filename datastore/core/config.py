@@ -54,7 +54,7 @@ class Config(BaseSettings):
 
     # Request limits
     MAX_REQUEST_BODY_MB: int = Field(
-        default=50,
+        default=10,
         ge=1,
         le=1000,
         description="Maximum request body size in MB",
