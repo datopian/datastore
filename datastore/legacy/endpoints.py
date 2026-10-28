@@ -139,6 +139,7 @@ class _CKANCompatRoute(APIRoute):
                     # itself does the same.
                     raise
                 status = _LEGACY_STATUS_BY_TYPE.get(exc.type_label, 409)
+                fields = exc.fields or _fields_from_engine_message(exc.message)
                 _log.debug(
                     "legacy APIError %s %s -> %s (HTTP %d)",
                     request.method,
@@ -150,7 +151,7 @@ class _CKANCompatRoute(APIRoute):
                     request,
                     type_label=exc.type_label,
                     message=exc.message,
-                    fields=exc.fields,
+                    fields=fields,
                     status_code=status,
                 )
             except RequestValidationError as exc:
@@ -172,6 +173,22 @@ class _CKANCompatRoute(APIRoute):
                 )
 
         return ckan_handler
+
+
+_ENGINE_FIELD_KEYED_PARAMS = ("filters", "q", "fields", "sort")
+
+
+def _fields_from_engine_message(message: str) -> dict[str, list[str]] | None:
+    """Parse `"<param> references unknown column 'X'"` into a legacy
+    field-keyed detail map so the error envelope matches CKAN:
+    `{"<param>": ["invalid value \"X\""]}`. Returns None otherwise.
+    """
+    for param in _ENGINE_FIELD_KEYED_PARAMS:
+        prefix = f"{param} references unknown column "
+        if message.startswith(prefix):
+            col = message[len(prefix):].strip().strip("'\"")
+            return {param: [f'invalid value "{col}"']}
+    return None
 
 
 def _legacy_error_envelope(
@@ -317,11 +334,11 @@ async def _legacy_search_impl(
         offset=params.offset,
         total=result.total,
         include_total=params.include_total,
+        records_format=params.records_format,
         links=build_legacy_pagination_links(
             str(request.url),
             limit=params.limit,
             offset=params.offset,
-            total=result.total,
         ),
     )
     return StreamingResponse(body_iter, media_type="application/json")

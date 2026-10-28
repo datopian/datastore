@@ -14,9 +14,8 @@ public CKAN API.
 Deltas vs `datastore/services/streaming.py`:
 
   - No `schema` block. Legacy CKAN only knows the `fields` list.
-  - No `records_format` beyond `objects`. Real CKAN accepts the other
-    three but all customer scripts hit the default; a legacy caller
-    who turns up with `records_format=lists` falls through to objects.
+  - All four `records_format` values are honored (`objects` /
+    `lists` / `csv` / `tsv`), matching the public CKAN API.
   - No `warnings` envelope — legacy clients never read it.
   - `fields` entries carry `{"type", "id", "info"?}` — `info` is
     passed through when the resource schema set one, so `datastore_search`
@@ -50,7 +49,11 @@ from datastore.legacy.constants import (
     LEGACY_HIDDEN_COLUMNS,
     UTF8_BOM,
 )
-from datastore.services.streaming import _json_default
+from datastore.services.streaming import (
+    _delimited_row,
+    _json_default,
+    _json_string_inner,
+)
 
 # Postgres's `english_stem` dictionary (`tsearch_data/english.stop` in the
 # PG source). Used verbatim so our tsvector output matches what a Postgres-
@@ -86,32 +89,11 @@ def build_legacy_pagination_links(
     *,
     limit: int,
     offset: int,
-    total: int | None = None,
 ) -> dict[str, str]:
-    """CKAN-legacy `_links` dict: path-only URL strings, no page counters.
+    """Legacy `_links` dict: path-only URL strings, no page counters.
 
-    Matches what real CKAN emits byte-for-byte:
-
-        {"start": "/api/3/action/...?limit=5&resource_id=...",
-         "next":  "/api/3/action/...?offset=5&limit=5&resource_id=..."}
-
-    Differences vs v2's `_build_pagination_links`:
-
-      - Only URL strings: no `page_size`, `page`, `total_pages`
-        counters. Real CKAN never emits these; legacy consumers that
-        parse `_links` as a map of href strings would otherwise choke
-        on an integer value.
-      - **Path-only URLs** (no scheme/host). Real CKAN strips the
-        origin because the links are followed relative to the API
-        host the caller already hit. v2 preserves scheme+host because
-        v2's clients paste them into docs; legacy must not.
-      - `next` is emitted when `total` is known **and** another page
-        exists. When `total` is None (an SQL / raw-iterator call that
-        skipped the COUNT) we fall back to emitting `next` eagerly so
-        a caller doing "page until records empty" still terminates
-        correctly; real CKAN's `datastore_search` always has `total`,
-        so this fallback never fires in the normal case.
-      - `prev` is emitted when `offset > 0`, same as CKAN.
+    `start` is always present; `prev` when `offset > 0`; `next`
+    whenever `limit > 0` (last page included).
     """
     parsed = urlparse(url)
     pairs = parse_qsl(parsed.query, keep_blank_values=True)
@@ -125,7 +107,7 @@ def build_legacy_pagination_links(
     if offset > 0:
         prev_offset = max(0, offset - limit)
         out["prev"] = _link([("offset", str(prev_offset))] + base_pairs)
-    if limit > 0 and (total is None or offset + limit < total):
+    if limit > 0:
         out["next"] = _link([("offset", str(offset + limit))] + base_pairs)
     return out
 
@@ -141,20 +123,13 @@ def stream_legacy_search(
     total: int | None,
     include_total: bool,
     links: dict[str, Any],
+    records_format: str = "objects",
 ) -> Iterator[bytes]:
     """CKAN legacy `datastore_search` envelope writer.
 
-    `fields` is the v2 legacy-shape list `[{"id", "type", "info"?}, ...]`
-    in the engine's column order; `records` is the matching tuple
-    iterator.
-
-    Output rules (matching real CKAN's `datastore_search`):
-
-      - `_updated_at` is stripped (datastore-internal).
-      - `_id` passes through if the engine emits it.
-      - `_full_text` is NOT emitted here. CKAN only surfaces the
-        tsvector column via `datastore_search_sql`'s `SELECT *` path;
-        the structured `datastore_search` output omits it.
+    `records_format` picks the shape of the `records` field (default
+    `objects`). The other three — `lists`, `csv`, `tsv` — match what
+    the public CKAN API emits.
     """
     kept_fields, keep_indices = _project_fields(fields)
     columns = [f["id"] for f in kept_fields]
@@ -168,9 +143,10 @@ def stream_legacy_search(
     yield orjson.dumps(resource_id)
     yield b',"fields":'
     yield orjson.dumps(kept_fields)
-    yield b',"records_format":"objects"'
+    yield b',"records_format":'
+    yield orjson.dumps(records_format)
     yield b',"records":'
-    yield from _records_object_array(columns, records, keep_indices)
+    yield from _records_for_format(records_format, columns, records, keep_indices)
     yield b',"limit":'
     yield orjson.dumps(limit)
     yield b',"offset":'
@@ -182,6 +158,71 @@ def stream_legacy_search(
         yield orjson.dumps(total)
     yield b"}"
     yield b"}"
+
+
+def _records_for_format(
+    records_format: str,
+    columns: list[str],
+    records: Iterator[tuple[Any, ...]],
+    keep_indices: list[int],
+) -> Iterator[bytes]:
+    """Dispatch the `records` field writer by `records_format`.
+
+    - `objects` → `[{col: v, ...}, ...]`
+    - `lists`   → `[[v1, v2, ...], ...]`
+    - `csv`     → JSON string of CSV data rows (no header; column names
+                  on `result.fields`), matching real CKAN
+    - `tsv`     → JSON string of TSV data rows (same)
+    """
+    if records_format == "objects":
+        yield from _records_object_array(columns, records, keep_indices)
+    elif records_format == "lists":
+        yield from _records_array_array(records, keep_indices)
+    elif records_format == "csv":
+        yield from _records_delimited_string(records, keep_indices, delimiter=",")
+    elif records_format == "tsv":
+        yield from _records_delimited_string(records, keep_indices, delimiter="\t")
+    else:
+        yield from _records_object_array(columns, records, keep_indices)
+
+
+def _records_array_array(
+    records: Iterator[tuple[Any, ...]],
+    keep_indices: list[int],
+) -> Iterator[bytes]:
+    """`[[v1, v2, ...], ...]` projected to kept columns."""
+    yield b"["
+    first = True
+    for row in records:
+        if first:
+            first = False
+        else:
+            yield b","
+        yield orjson.dumps(
+            [row[i] for i in keep_indices],
+            default=_json_default,
+            option=orjson.OPT_PASSTHROUGH_DATETIME,
+        )
+    yield b"]"
+
+
+def _records_delimited_string(
+    records: Iterator[tuple[Any, ...]],
+    keep_indices: list[int],
+    *,
+    delimiter: str,
+) -> Iterator[bytes]:
+    """One JSON string containing CSV / TSV data rows (no header).
+
+    `_delimited_row` has to see post-serialisation primitives, so
+    datetime / dict / list / bytes / Decimal cells are coerced via
+    `_stringify` first — the dump writers do the same.
+    """
+    yield b'"'
+    for row in records:
+        projected = [_stringify(row[i]) for i in keep_indices]
+        yield _json_string_inner(_delimited_row(projected, delimiter=delimiter))
+    yield b'"'
 
 
 def stream_legacy_search_sql(

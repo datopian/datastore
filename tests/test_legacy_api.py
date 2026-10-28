@@ -841,18 +841,18 @@ def test_legacy_search_links_are_path_only(
         )
 
 
-def test_legacy_search_links_next_omitted_on_last_page(
+def test_legacy_search_links_next_always_emitted(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When `offset + limit >= total`, `next` must not be emitted."""
+    """`next` is present on every page, including the last."""
     _install_mock_search(monkeypatch)
     links = (
-        # total=3, limit=10 → no next page
         client.get(SEARCH_URL, params={"resource_id": _RESOURCE_ID, "limit": 10})
         .json()["result"]["_links"]
     )
     assert "start" in links
-    assert "next" not in links
+    assert "next" in links
+    assert "offset=10" in links["next"]
 
 
 def test_legacy_search_links_prev_emitted_when_paging(
