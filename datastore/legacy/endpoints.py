@@ -287,21 +287,8 @@ async def _legacy_search_impl(
     context: Context,
     params: DatastoreSearchRequest,
 ) -> StreamingResponse:
-    """Shared body: authorize, run the engine, stream the legacy envelope.
-
-    LIMIT policy mirrors v2 — the engine still enforces
-    `Config.SEARCH_RESULT_ROWS_MAX`, so a legacy caller trying to pull a
-    million rows at once gets the same 400 as a v2 caller.
-    """
+    """Shared body: authorize, run the engine, stream the legacy envelope."""
     auth_result = await context.authorize(resource_id=params.resource_id, permission="read")
-
-    max_limit = context.config.SEARCH_RESULT_ROWS_MAX
-    if params.limit > max_limit:
-        raise ValidationError(
-            f"limit greater than {max_limit} is not allowed; "
-            "paginate with `offset` to fetch more rows",
-            fields={"limit": [f"must be <= {max_limit}"]},
-        )
 
     engine = get_datastore_engine(context, mode="ro")
     result = await asyncio.to_thread(
