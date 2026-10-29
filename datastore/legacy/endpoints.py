@@ -514,7 +514,6 @@ async def _legacy_info_impl(
     return _success_response(
         request,
         legacy_info_result(
-            resource_id=resource_id,
             fields=fields,
             meta=info.meta,
         ),

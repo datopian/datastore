@@ -98,7 +98,10 @@ def _install_mock_search(
 
 def _install_mock_info(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_info(self: BigQueryBackend, resource_id: str) -> InfoResult:
-        return InfoResult(schema=_FAKE_SCHEMA, meta={"total": 3})
+        return InfoResult(
+            schema=_FAKE_SCHEMA,
+            meta={"resource_id": resource_id, "total_records": 3, "primary_key": []},
+        )
 
     monkeypatch.setattr(BigQueryBackend, "info", fake_info)
 
@@ -447,22 +450,28 @@ def test_legacy_search_sql_post_matches_get(
 # --- datastore_info --------------------------------------------------------
 
 
-def test_legacy_info_system_column_handling(
+def test_legacy_info_ckan_shape(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """info: `_updated_at` stripped; `_id` kept. No `_full_text` on info
-    (synthesis happens on search records only, not on the schema listing)."""
+    """Shape matches CKAN 2.8 keys (flat `schema`, `meta.count`,
+    `primary_keys` list, no `fields` array, no `_id` / `_updated_at`),
+    but column types are the Postgres names `datastore_search` reports
+    (`int4`, `numeric`, `text`, ...) instead of CKAN's coarsened
+    `"number"` / `"date"` / `"text"` — so both endpoints share one
+    vocabulary."""
     _install_mock_info(monkeypatch)
     response = client.get(INFO_URL, params={"resource_id": _RESOURCE_ID})
     assert response.status_code == 200
 
     result = response.json()["result"]
-    field_ids = {f["id"] for f in result["fields"]}
-    assert "_updated_at" not in field_ids
-    assert "_id" in field_ids
-    assert "_full_text" not in field_ids
-    assert "schema" not in result, "legacy info must not surface the v2 schema block"
-    assert result["meta"] == {"total": 3}
+    assert set(result.keys()) == {"meta", "primary_keys", "schema"}
+    assert result["meta"] == {"count": 3}
+    assert result["primary_keys"] == []
+    assert "_id" not in result["schema"]
+    assert "_updated_at" not in result["schema"]
+    assert result["schema"]["auction_id"] == "int4"
+    assert result["schema"]["product_code"] == "text"
+    assert result["schema"]["clearing_price_gbp_per_mwh"] == "numeric"
 
 
 def test_legacy_info_post_accepts_body(
@@ -471,7 +480,7 @@ def test_legacy_info_post_accepts_body(
     _install_mock_info(monkeypatch)
     response = client.post(INFO_URL, json={"resource_id": _RESOURCE_ID})
     assert response.status_code == 200
-    assert response.json()["result"]["resource_id"] == _RESOURCE_ID
+    assert set(response.json()["result"].keys()) == {"meta", "primary_keys", "schema"}
 
 
 def test_legacy_info_id_alias(
@@ -481,7 +490,7 @@ def test_legacy_info_id_alias(
     _install_mock_info(monkeypatch)
     response = client.get(INFO_URL, params={"id": _RESOURCE_ID})
     assert response.status_code == 200
-    assert response.json()["result"]["resource_id"] == _RESOURCE_ID
+    assert set(response.json()["result"].keys()) == {"meta", "primary_keys", "schema"}
 
 
 # --- auth / errors (legacy CKAN API status-code parity) -------------------

@@ -288,25 +288,19 @@ def _pop_full_text(
 
 def legacy_info_result(
     *,
-    resource_id: str,
     fields: list[dict[str, Any]],
     meta: dict[str, Any],
 ) -> dict[str, Any]:
-    """CKAN legacy `datastore_info` result body.
-
-    No streaming — info responses are small. Returns the inner `result`
-    dict ready to drop into `_success_response`'s envelope. Fields are
-    stripped of `_id`/`_updated_at` and reduced to the minimal
-    `{"type", "id"}` shape; meta is piped through verbatim.
-    """
-    kept_fields, _ = _project_fields(fields)
-    out: dict[str, Any] = {
-        "meta": meta,
-        "fields": kept_fields,
+    """CKAN legacy `datastore_info` result body."""
+    return {
+        "meta": {"count": meta.get("total_records", 0)},
+        "primary_keys": list(meta.get("primary_key") or []),
+        "schema": {
+            f["id"]: f.get("type", "text")
+            for f in fields
+            if f["id"] not in ("_id", "_updated_at", "_full_text")
+        },
     }
-    if resource_id:
-        out["resource_id"] = resource_id
-    return out
 
 
 def _records_with_full_text(
