@@ -86,24 +86,28 @@ def test_include_records_echoes_records(client: TestClient) -> None:
     assert response.json()["result"]["records"] == payload["records"]
 
 
-def test_include_total_returns_total(client: TestClient) -> None:
+def test_include_total_returns_total_records(client: TestClient) -> None:
+    """v2 wire key is `total_records` (renamed from legacy `total`)."""
     response = client.post(UPSERT_URL, json=_payload(include_total=True))
 
     assert response.status_code == 200
     result = response.json()["result"]
     assert "total_records" in result
+    assert "total" not in result
     # BigQuery placeholder returns len(records); real engine will COUNT(*).
     assert result["total_records"] == 2
 
 
 def test_default_omits_optional_fields(client: TestClient) -> None:
-    """`records` and `total_records` should not appear when their flags are False."""
+    """`records` and `total_records` should not appear when their flags
+    are False."""
     response = client.post(UPSERT_URL, json=_payload())
 
     assert response.status_code == 200
     result = response.json()["result"]
     assert "records" not in result
     assert "total_records" not in result
+    assert "total" not in result
 
 
 # 3. Records optional --------------------------------------------------------

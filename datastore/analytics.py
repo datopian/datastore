@@ -46,11 +46,25 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from datastore.core.constants import API_PREFIX, DUMP_PREFIX
 
+# DEPRECATED legacy surface — this import, the two `LEGACY_*` constants
+# below, and the three `LEGACY_*` references downstream in this file
+# are the only legacy touch points in analytics. See
+# `datastore/legacy/__init__.py` for the full removal plan: when the
+# legacy URLs retire, delete lines marked `LEGACY ONLY` here plus the
+# single import above and analytics returns to the pure v2 shape.
+from datastore.legacy.constants import LEGACY_API_PREFIX, LEGACY_DUMP_PREFIX
+
 log = logging.getLogger(__name__)
 
 ACTION_PREFIX = f"{API_PREFIX}/"
 DUMP_PATH_PREFIX = f"{DUMP_PREFIX}/"
 DUMP_QUERY_PATH = f"{DUMP_PREFIX}/query"
+
+# LEGACY ONLY — CKAN-compatible surface. Recorded with the same action
+# names and event shape as v2 — downstream can split v2 vs legacy by
+# the `endpoint` path when it needs to.
+LEGACY_ACTION_PREFIX = f"{LEGACY_API_PREFIX}/"
+LEGACY_DUMP_PATH_PREFIX = f"{LEGACY_DUMP_PREFIX}/"
 
 # Served under the versioned prefix but not part of the API surface, so
 # they must not be recorded as action calls.
@@ -69,6 +83,17 @@ def action_name(path: str) -> str | None:
     if path.startswith(ACTION_PREFIX):
         name = path[len(ACTION_PREFIX) :].strip("/").split("/", 1)[0]
         if not name or name in DOCS_PATHS:
+            return None
+        return name
+    # LEGACY ONLY — CKAN-compatible surface. Same action names as v2 so
+    # one event stream covers both API versions. The `endpoint` field
+    # preserves the raw path so a downstream filter can isolate legacy
+    # traffic. Delete this block when the legacy URLs retire.
+    if path.startswith(LEGACY_DUMP_PATH_PREFIX):
+        return "datastore_dump"
+    if path.startswith(LEGACY_ACTION_PREFIX):
+        name = path[len(LEGACY_ACTION_PREFIX) :].strip("/").split("/", 1)[0]
+        if not name:
             return None
         return name
     return None
@@ -172,7 +197,12 @@ class AnalyticsMiddleware:
         state: dict[str, Any] = scope.setdefault("state", {})
         status = 500  # what reaches the caller if the app dies before a response
         body = bytearray()
-        capture = scope["method"] == "POST" and scope["path"].startswith(ACTION_PREFIX)
+        # LEGACY ONLY: `LEGACY_ACTION_PREFIX` in the tuple keeps POST
+        # body capture working for `/api/3/action/*`. Drop that element
+        # when the legacy URLs retire.
+        capture = scope["method"] == "POST" and scope["path"].startswith(
+            (ACTION_PREFIX, LEGACY_ACTION_PREFIX)
+        )
 
         async def tee_receive() -> Any:
             message = await receive()
@@ -256,9 +286,16 @@ class AnalyticsMiddleware:
         those events rely on ``authorization_dict`` alone.
         """
         path: str = scope["path"]
-        if path.startswith(DUMP_PATH_PREFIX):
-            ref = path[len(DUMP_PATH_PREFIX) :].split("/", 1)[0]
-            return ref if ref and ref != "query" else None
+        # Both v2 (`/datastore/api/v2/dump/<rid>`) and legacy
+        # (`/datastore/dump/<rid>`) carry the resource id as the first
+        # path segment after the dump prefix. `query` is reserved on v2
+        # (SQL download endpoint) and not a resource id.
+        # LEGACY ONLY: drop `LEGACY_DUMP_PATH_PREFIX` from this tuple
+        # when the legacy URLs retire.
+        for prefix in (DUMP_PATH_PREFIX, LEGACY_DUMP_PATH_PREFIX):
+            if path.startswith(prefix):
+                ref = path[len(prefix) :].split("/", 1)[0]
+                return ref if ref and ref != "query" else None
 
         query: bytes = scope.get("query_string", b"")
         params = parse_qs(query.decode("latin-1"))

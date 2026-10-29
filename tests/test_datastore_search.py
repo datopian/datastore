@@ -127,23 +127,29 @@ def test_search_with_distinct(client: TestClient) -> None:
 # 3. Pagination + include_total --------------------------------------------
 
 
-def test_include_total_returns_total(client: TestClient) -> None:
+def test_include_total_returns_total_records(client: TestClient) -> None:
+    """`include_total=true` surfaces the row count under the `total_records`
+    wire key (renamed from legacy `total` on v2 to disambiguate from
+    pagination's `total_pages`)."""
     response = client.get(SEARCH_URL, params=_params(include_total=True))
 
     assert response.status_code == 200
     result = response.json()["result"]
     assert "total_records" in result
+    assert "total" not in result   # old key must not sneak back in
     # Placeholder engine returns 0 when include_total=True.
     assert result["total_records"] == 0
 
 
-def test_include_total_false_omits_total(client: TestClient) -> None:
-    """exclude_none keeps `total_records` off the wire when the engine returns None."""
+def test_include_total_false_omits_total_records(client: TestClient) -> None:
+    """exclude_none keeps `total_records` off the wire when the engine
+    returns None."""
     response = client.get(SEARCH_URL, params=_params(include_total=False))
 
     assert response.status_code == 200
     result = response.json()["result"]
     assert "total_records" not in result
+    assert "total" not in result
 
 
 def test_pagination_echoes_limit_offset(client: TestClient) -> None:

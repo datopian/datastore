@@ -1,0 +1,127 @@
+{
+  "help": "http://localhost:8000/datastore/api/v2/docs#/Datastore/datastore_create",
+  "success": true,
+  "result": {
+    "resource_id": "balancing_auction_results_2025",
+    "fields": [
+      {
+        "id": "_id",
+        "type": "int8",
+        "info": {
+          "title": "Record Identifier",
+          "description": "System-generated unique identifier assigned to each record in the database. Used to uniquely identify a row within a resource table.",
+          "comment": "Automatically populated. Not publisher-maintained. Values are unique within a resource and may be used for record retrieval and updates.",
+          "example": "12345",
+          "unit": "N/A"
+        }
+      },
+      {
+        "id": "_updated_at",
+        "type": "timestamp",
+        "info": {
+          "title": "Last Updated Timestamp",
+          "description": "System-generated timestamp indicating when the record was last created or modified in the database.",
+          "comment": "Automatically maintained. Useful for identifying recently changed records. Stored in UTC.",
+          "example": "2026-08-27T12:45:30",
+          "unit": "ISO 8601 UTC Timestamp"
+        }
+      },
+      {
+        "id": "auction_id",
+        "type": "int4",
+        "info": {
+          "title": "Auction ID",
+          "description": "Unique auction identifier. Stable across all products auctioned in the same market window.",
+          "comment": "Primary-key component; pairs with product_code to uniquely reference a cleared bid.",
+          "example": "144",
+          "unit": null
+        }
+      },
+      {
+        "id": "product_code",
+        "type": "text",
+        "info": {
+          "title": "Product Code",
+          "description": "Product mnemonic for the balancing service (e.g. DCL, DCH, FFR).",
+          "comment": "Primary-key component; controlled vocabulary maintained by the market operator.",
+          "example": "DCL",
+          "unit": null
+        }
+      },
+      {
+        "id": "delivery_start",
+        "type": "timestamptz",
+        "info": {
+          "title": "Delivery Start (UTC)",
+          "description": "First instant of the delivery window. Stored as UTC; clients render local time.",
+          "comment": "Always persisted as UTC \u2014 do not assume the caller's timezone.",
+          "example": "2025-11-04T16:00:00Z",
+          "unit": null
+        }
+      },
+      {
+        "id": "duration_minutes",
+        "type": "int4",
+        "info": {
+          "title": "Delivery Duration",
+          "description": "Length of the delivery window.",
+          "comment": "Add to delivery_start to derive the delivery end instant.",
+          "example": "30",
+          "unit": "minutes"
+        }
+      },
+      {
+        "id": "clearing_price_gbp_per_mwh",
+        "type": "float8",
+        "info": {
+          "title": "Clearing Price",
+          "description": "Pay-as-cleared price for the auction. Negative values are possible during oversupply.",
+          "comment": "Pay-as-cleared: every accepted bid settles at this price, not its own offer.",
+          "example": "47.82",
+          "unit": "GBP/MWh"
+        }
+      },
+      {
+        "id": "volume_mwh",
+        "type": "float8",
+        "info": {
+          "title": "Cleared Volume",
+          "description": "Total volume cleared in this auction.",
+          "comment": "Sum across accepted bids for the (auction_id, product_code) pair.",
+          "example": "120.0",
+          "unit": "MWh"
+        }
+      },
+      {
+        "id": "accepted",
+        "type": "bool",
+        "info": {
+          "title": "Accepted",
+          "description": "Whether the bid cleared (true) or was rejected (false).",
+          "comment": "Rejected rows are retained for audit; filter accepted=true for settlement.",
+          "example": "true",
+          "unit": null
+        }
+      },
+      {
+        "id": "bidder_metadata",
+        "type": "jsonb",
+        "info": {
+          "title": "Bidder Metadata",
+          "description": "Free-form provider-specific metadata captured at submission time.",
+          "comment": "Schema not enforced; kept opaque for downstream analytics.",
+          "example": "{\"unit_id\": \"DRAX-1\", \"submission_lag_ms\": 412}",
+          "unit": null
+        }
+      }
+    ],
+    "primary_key": [
+      "auction_id",
+      "product_code"
+    ],
+    "unique_key": [
+      "auction_id",
+      "product_code"
+    ]
+  }
+}

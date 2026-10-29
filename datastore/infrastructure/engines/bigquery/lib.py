@@ -29,7 +29,7 @@ SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset({"_id", "_updated_at"})
 # JSON / array / geojson absent — equality on those is rejected.
 _FILTER_PARAM_TYPE: dict[str, str] = {
     "integer": "INT64",
-    "number": "FLOAT64",
+    "number": "BIGNUMERIC",
     "boolean": "BOOL",
     "string": "STRING",
     "date": "DATE",
@@ -78,6 +78,8 @@ def format_select_column(name: str, bq_type: str | None) -> str:
         return f"FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `{name}`, 'UTC') AS `{name}`"
     if bq == "DATETIME":
         return f"FORMAT_DATETIME('%Y-%m-%dT%H:%M:%S', `{name}`) AS `{name}`"
+    if bq in ("NUMERIC", "BIGNUMERIC"):
+        return f"CAST(`{name}` AS FLOAT64) AS `{name}`"
     return f"`{name}`"
 
 
@@ -511,18 +513,49 @@ def strip_limit_offset(sql: str, *, dialect: str = "bigquery") -> str:
     return tree.sql(dialect=dialect)
 
 
-def qualify_table_refs(sql: str, project: str, dataset: str) -> str:
+def qualify_table_refs(
+    sql: str,
+    project: str,
+    dataset: str,
+    *,
+    translate: bool = True,
+) -> str:
     """Rewrite unqualified table refs to `project.dataset.<name>` for BigQuery.
 
     User SQL refs look like CKAN resource_ids (`FROM "uuid"` /
     `FROM uuid`); we parse as postgres (accepts double-quoted idents)
     and re-emit as BigQuery. Already-qualified refs and CTE aliases
     are left alone.
+
+    `translate=True` (default) also runs the Postgres→BigQuery dialect
+    translator from `translate.py` first — the single hook that lets
+    customer scripts carried over from the Postgres-backed CKAN
+    datastore keep working (`"col"::numeric`, `CURRENT_DATE - 1`,
+    `to_char(..., 'YYYY-MM-DD')`, …). When the translator rewrites the
+    SQL, a DEBUG log line prints both the before/after and the list of
+    applied steps so operators can see exactly what changed. Pass
+    `translate=False` (wired to `Config.BIGQUERY_TRANSLATE_PG_SQL`) to
+    disable it per environment without a code change.
     """
     import sqlglot
     from sqlglot import expressions as exp
 
-    tree = sqlglot.parse_one(sql, dialect="postgres")
+    from datastore.infrastructure.engines.bigquery.translate import translate_pg_to_bq
+
+    translated, notes = translate_pg_to_bq(sql, enabled=translate)
+    if notes:
+        log.debug(
+            "pg→bq translation applied (%s): %r → %r",
+            "; ".join(notes),
+            sql,
+            translated,
+        )
+
+    # After translation the SQL is BigQuery-shaped (backticks, DATE_SUB,
+    # etc.) so parse under the BQ dialect; when translation is off we
+    # fall back to postgres so a user's `"ident"` still parses.
+    parse_dialect = "bigquery" if notes else "postgres"
+    tree = sqlglot.parse_one(translated, dialect=parse_dialect)
     cte_aliases = {cte.alias_or_name for cte in tree.find_all(exp.CTE) if cte.alias_or_name}
     for table in tree.find_all(exp.Table):
         name = table.name

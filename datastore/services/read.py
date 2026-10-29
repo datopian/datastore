@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from datastore.core.constants import SYSTEM_FIELD_INFO
 from datastore.core.exceptions import ValidationError
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.infrastructure.engines.registry import get_allowed_sql_functions
@@ -86,12 +87,13 @@ async def search_datastore(
         include_total=data_dict["include_total"],
     )
 
-    fields, _ = frictionless_schema_to_fields(result.schema)
+    schema = enrich_schema(result.schema, data_dict.get("resource"))
+    fields, _ = frictionless_schema_to_fields(schema)
 
     envelope_kwargs = dict(
         help_url=request_url,
         resource_id=data_dict["resource_id"],
-        schema=result.schema,
+        schema=schema,
         fields=fields,
         records=result.records,
         limit=data_dict["limit"],
@@ -151,11 +153,13 @@ async def search_sql_datastore(
         sql=data_dict["sql"],
         limit=limit,
     )
-    fields, _ = frictionless_schema_to_fields(result.schema)
+    schema = enrich_schema(result.schema, data_dict.get("resources"))
+    fields, _ = frictionless_schema_to_fields(schema)
+
     return stream_objects(
         help_url=request_url,
         resource_id="",
-        schema=result.schema,
+        schema=schema,
         fields=fields,
         records=result.records,
         limit=limit,
@@ -200,6 +204,39 @@ async def dump_sql_datastore(context: RequestContext, data_dict: dict[str, Any])
         function_names=data_dict["function_names"],
         filename_prefix=data_dict.get("filename_prefix"),
     )
+
+
+def enrich_schema(
+    table_schema: dict[str, Any],
+    resources: dict[str, Any] | list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Overlay publisher + system-column metadata onto the engine schema.
+    Publisher wins on everything except `type`/`format`. `_id` and
+    `_updated_at` get service-provided docs when the publisher hasn't
+    described them. On name collisions across multiple resources,
+    first-match wins (FROM order).
+    """
+    if isinstance(resources, dict):
+        resources = [resources]
+    sources: dict[str, dict[str, Any]] = {}
+    for resource in resources or ():
+        for src in (resource.get("schema") or {}).get("fields") or ():
+            name = src.get("name")
+            if name:
+                sources.setdefault(name, src)
+    for name, src in SYSTEM_FIELD_INFO.items():
+        sources.setdefault(name, src)
+
+    merged_fields: list[dict[str, Any]] = []
+    for field in table_schema.get("fields") or ():
+        src = sources.get(field.get("name"))
+        if src is None:
+            merged_fields.append(field)
+            continue
+        merged_fields.append(
+            {**src, **{k: field[k] for k in ("type", "format") if k in field}}
+        )
+    return {**table_schema, "fields": merged_fields}
 
 
 def _ensure_allowed_sql_functions(

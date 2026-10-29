@@ -194,6 +194,7 @@ async def dump_sql(
             sql,
             project=backend.config.BIGQUERY_PROJECT,
             dataset=backend.config.BIGQUERY_DATASET,
+            translate=backend.config.BIGQUERY_TRANSLATE_PG_SQL,
         )
     except Exception as e:
         raise ServerError(

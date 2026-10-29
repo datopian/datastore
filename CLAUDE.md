@@ -653,6 +653,8 @@ is easy to follow.
   "result": {
     "resource_id": "balancing_auction_results_2025",
     "fields": [
+      {"id": "_id",                        "type": "integer",  "info": {"title": "Record Identifier",      "...": "..."}},
+      {"id": "_updated_at",                "type": "datetime", "info": {"title": "Last Updated Timestamp", "...": "..."}},
       {"id": "auction_id",                 "type": "integer",  "info": {"title": "Auction ID", "...": "..."}},
       {"id": "product_code",               "type": "string",   "info": {"...": "..."}},
       {"id": "delivery_start",             "type": "datetime", "info": {"...": "..."}},
@@ -667,6 +669,13 @@ is easy to follow.
   }
 }
 ```
+
+System columns are engine-managed — the request body must omit them
+(validation rejects `_id` / `_updated_at` in `fields`), and the service
+prepends them to the stored schema with service-provided `info`
+(title / description / comment / example / unit). The same `info` block
+rides through every read endpoint so clients see consistent column
+documentation.
 
 Optional response fields (omitted from the body when not requested):
 - `records` — echoes the input rows back when the request sets `include_records: true`.
@@ -888,6 +897,9 @@ can confirm the table's new shape without a follow-up `datastore_info`:
 Returns the same field shape that was supplied to `datastore_create`, including
 the `info` data dictionary verbatim — clients can use this as a column-level
 metadata catalog (titles, descriptions, units, examples) without a side store.
+The two engine-managed system columns (`_id`, `_updated_at`) are prepended
+to `fields` with service-provided `info` so every read endpoint carries the
+same documentation for them.
 
 **Response**
 ```json
@@ -897,6 +909,28 @@ metadata catalog (titles, descriptions, units, examples) without a side store.
   "result": {
     "resource_id": "balancing_auction_results_2025",
     "fields": [
+      {
+        "id": "_id",
+        "type": "integer",
+        "info": {
+          "title": "Record Identifier",
+          "description": "System-generated unique identifier assigned to each record in the database. Used to uniquely identify a row within a resource table.",
+          "comment": "Automatically populated. Not publisher-maintained. Values are unique within a resource and may be used for record retrieval and updates.",
+          "example": "12345",
+          "unit": "N/A"
+        }
+      },
+      {
+        "id": "_updated_at",
+        "type": "datetime",
+        "info": {
+          "title": "Last Updated Timestamp",
+          "description": "System-generated timestamp indicating when the record was last created or modified in the database.",
+          "comment": "Automatically maintained. Useful for identifying recently changed records. Stored in UTC.",
+          "example": "2026-08-27T12:45:30",
+          "unit": "ISO 8601 UTC Timestamp"
+        }
+      },
       {
         "id": "auction_id",
         "type": "integer",

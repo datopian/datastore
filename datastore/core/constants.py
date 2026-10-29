@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 # Default for the `API_URL` setting — the public base URL used to render
 # absolute URLs in the OpenAPI examples. Deployments override it via env;
@@ -27,6 +27,9 @@ API_BASE_PREFIX = f"{SERVICE_PREFIX}/api"
 API_VERSION = "v2"
 API_PREFIX = f"{API_BASE_PREFIX}/{API_VERSION}"
 DUMP_PREFIX = f"{API_PREFIX}/dump"
+# Note: legacy CKAN URL prefixes + their format tables live in
+# `datastore/legacy/constants.py`, kept out of this file so the whole
+# backwards-compat surface is one `rm -rf datastore/legacy/` away.
 # Download formats served by the export pipeline (`<DUMP_PREFIX>/…` and
 # `datastore_search_sql?download=…`). Lives here — not in `api/` — because
 # both the request schemas (pydantic layer) and the endpoints (starlette
@@ -156,10 +159,10 @@ POSTGRES_TO_FRICTIONLESS: dict[str, str] = {
 # Frictionless field type → canonical Postgres type. Used when deriving the
 # legacy `fields` shape from a Frictionless schema. Lossy in the other
 # direction (e.g., a Frictionless `integer` could have been any width); we
-# pick the widest/most-permissive Postgres type so the column accepts
-# anything the Frictionless type implies.
+# pick the type CKAN classic emits so the legacy wire shape matches —
+# `integer` → `int4` (both CKAN's user integers and `_id serial`).
 FRICTIONLESS_TO_POSTGRES: dict[str, str] = {
-    "integer": "int8",
+    "integer": "int4",
     "number": "numeric",
     "boolean": "bool",
     "string": "text",
@@ -207,3 +210,48 @@ RESERVED_SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset(
         "_updated_at",
     }
 )
+
+
+# Service-provided documentation for the two engine-managed system
+# columns, shaped as full Frictionless field entries with an `info`
+# sub-dict so the read-side merger overlays them like any
+# publisher-supplied field. CKAN's sync strips these columns from a
+# resource's own schema, so without the seed `_id` / `_updated_at`
+# would arrive on every read as bare `{name, type}` entries with no
+# title or description.
+SYSTEM_FIELD_INFO: dict[str, dict[str, Any]] = {
+    "_id": {
+        "name": "_id",
+        "info": {
+            "title": "Record Identifier",
+            "description": (
+                "System-generated unique identifier assigned to each "
+                "record in the database. Used to uniquely identify a "
+                "row within a resource table."
+            ),
+            "comment": (
+                "Automatically populated. Not publisher-maintained. "
+                "Values are unique within a resource and may be used "
+                "for record retrieval and updates."
+            ),
+            "example": "12345",
+            "unit": "N/A",
+        },
+    },
+    "_updated_at": {
+        "name": "_updated_at",
+        "info": {
+            "title": "Last Updated Timestamp",
+            "description": (
+                "System-generated timestamp indicating when the record "
+                "was last created or modified in the database."
+            ),
+            "comment": (
+                "Automatically maintained. Useful for identifying "
+                "recently changed records. Stored in UTC."
+            ),
+            "example": "2026-08-27T12:45:30",
+            "unit": "ISO 8601 UTC Timestamp",
+        },
+    },
+}

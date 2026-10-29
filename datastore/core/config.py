@@ -264,6 +264,19 @@ class Config(BaseSettings):
             "force a fresh scan in tests."
         ),
     )
+    BIGQUERY_TRANSLATE_PG_SQL: bool = Field(
+        default=True,
+        description=(
+            "Translate Postgres-dialect SQL into BigQuery-dialect SQL before "
+            "running `datastore_search_sql` and `dump/query`. Covers the "
+            "pg-isms that broke customer scripts carried over from the "
+            "Postgres-backed CKAN datastore (double-quoted identifiers, "
+            "`::type` casts, `to_char`, `INTERVAL '10 days'`, "
+            "`CURRENT_DATE - 1`, …). Set False to disable the translator "
+            "per environment without a code change — SQL is then sent to "
+            "BigQuery as written."
+        ),
+    )
     BIGQUERY_EXPORT_BUCKET: str = Field(
         default="",
         description=("GCS bucket name (no `gs://` prefix) that `<DUMP_PREFIX>/<rid>` "),
