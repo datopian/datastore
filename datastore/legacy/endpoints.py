@@ -39,6 +39,7 @@ from datastore.infrastructure.engines.registry import get_allowed_sql_functions
 from datastore.legacy.constants import (
     LEGACY_DUMP_EXTENSIONS,
     LEGACY_DUMP_MEDIA_TYPES,
+    LEGACY_FULL_TEXT_FIELD,
     LegacyDumpFormat,
 )
 from datastore.legacy.schemas import DatastoreLegacySearchSQLRequest
@@ -130,6 +131,7 @@ class _CKANCompatRoute(APIRoute):
         original = super().get_route_handler()
 
         async def ckan_handler(request: Request) -> Response:
+            is_sql_path = request.url.path.endswith("/datastore_search_sql")
             try:
                 return await original(request)
             except APIError as exc:
@@ -138,18 +140,27 @@ class _CKANCompatRoute(APIRoute):
                     # and emit a 5xx so monitoring stays honest. CKAN
                     # itself does the same.
                     raise
-                status = _LEGACY_STATUS_BY_TYPE.get(exc.type_label, 409)
+                type_label = exc.type_label
                 fields = exc.fields or _fields_from_engine_message(exc.message)
+                if is_sql_path:
+                    # Any error on `datastore_search_sql` is reported by
+                    # CKAN under `error.query` as a 409 Validation Error.
+                    # Covers unknown table (which the engine raises as
+                    # NotFoundError), engine-level DB errors, and the
+                    # schema-level `sql` field key alike.
+                    type_label = "Validation Error"
+                    fields = {"query": [exc.message]}
+                status = _LEGACY_STATUS_BY_TYPE.get(type_label, 409)
                 _log.debug(
                     "legacy APIError %s %s -> %s (HTTP %d)",
                     request.method,
                     request.url.path,
-                    exc.type_label,
+                    type_label,
                     status,
                 )
                 return _legacy_error_envelope(
                     request,
-                    type_label=exc.type_label,
+                    type_label=type_label,
                     message=exc.message,
                     fields=fields,
                     status_code=status,
@@ -159,6 +170,21 @@ class _CKANCompatRoute(APIRoute):
                 fields = _group_errors(errors)
                 first = errors[0] if errors else {"msg": "invalid request"}
                 message = f"{_format_loc(tuple(first.get('loc', ())))}: {first.get('msg')}"
+                if is_sql_path:
+                    # CKAN keys SQL-content errors (bad SQL, non-SELECT,
+                    # multi-statement, …) under `error.query`, but keeps
+                    # a plain missing-value error under `error.sql`.
+                    # Mirror that: rename `sql` → `query` only for
+                    # errors that aren't the "field required" kind.
+                    sql_errors_are_content = any(
+                        e.get("type") != "missing"
+                        for e in errors
+                        if e.get("loc") and e["loc"][-1] == "sql"
+                    )
+                    if sql_errors_are_content and "sql" in fields:
+                        fields = {
+                            ("query" if k == "sql" else k): v for k, v in fields.items()
+                        }
                 _log.debug(
                     "legacy RequestValidationError %s %s -> HTTP 409",
                     request.method,
@@ -176,6 +202,21 @@ class _CKANCompatRoute(APIRoute):
 
 
 _ENGINE_FIELD_KEYED_PARAMS = ("filters", "q", "fields", "sort")
+
+
+def _with_full_text_field(
+    fields: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a copy of `fields` with `_full_text` spliced in right
+    after `_id` (or at the head when `_id` isn't present), matching
+    the ordering CKAN emits for `SELECT *` responses.
+    """
+    pos = 0
+    for i, f in enumerate(fields):
+        if f.get("id") == "_id":
+            pos = i + 1
+            break
+    return fields[:pos] + [LEGACY_FULL_TEXT_FIELD] + fields[pos:]
 
 
 def _fields_from_engine_message(message: str) -> dict[str, list[str]] | None:
@@ -416,6 +457,8 @@ async def _legacy_search_sql_impl(
     )
     schema = enrich_schema(result.schema, resources)
     fields, _ = frictionless_schema_to_fields(schema)
+    if params.has_select_star:
+        fields = _with_full_text_field(fields)
     body_iter = stream_legacy_search_sql(
         help_url=_legacy_help_url(request),
         sql=params.sql,

@@ -549,8 +549,8 @@ def test_legacy_search_sql_bad_sql_returns_409(
 ) -> None:
     """A disallowed statement is a validation error — 409 under prod.
 
-    Per CKAN parity: field-context errors land as top-level keys on
-    the error dict (`error["sql"]` here), not under `error["fields"]`.
+    SQL-content errors land under `error.query` to match CKAN; a
+    missing `sql` param stays under `error.sql`.
     """
     response = client.get(SEARCH_SQL_URL, params={"sql": "DELETE FROM foo"})
     assert response.status_code == 409
@@ -558,8 +558,8 @@ def test_legacy_search_sql_bad_sql_returns_409(
     assert body["success"] is False
     error = body["error"]
     assert error["__type"] == "Validation Error"
-    # The error context from pydantic is `sql`, so it should be at root.
-    assert "sql" in error
+    assert "query" in error
+    assert "sql" not in error
     assert "fields" not in error
 
 

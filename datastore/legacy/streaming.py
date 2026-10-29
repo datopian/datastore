@@ -236,43 +236,54 @@ def stream_legacy_search_sql(
 
     No `_links` (legacy SQL responses don't paginate) and no `limit` /
     `offset` echoes — the SQL carries them. `sql` is echoed back so
-    callers can confirm what ran, matching real CKAN. The echoed SQL
-    is stripped of surrounding whitespace to match CKAN's output
-    verbatim: real CKAN emits `"SELECT …\""` with no trailing space,
-    even when the caller sent `?sql=SELECT…%20` (a trailing `%20` in
-    the query string).
+    callers can confirm what ran, matching real CKAN.
 
     No `records_truncated` key: real CKAN's `datastore_search_sql`
-    doesn't emit one. (v2's `SearchResult.records_truncated` is an
-    engine-internal flag, not a wire-level field here.)
+    doesn't emit one.
 
-    Output rules (matching real CKAN's `datastore_search_sql`):
-
-      - `_updated_at` is stripped (datastore-internal).
-      - `_id` passes through if the SQL output includes it (always
-        true for `SELECT *`).
-      - `_full_text` is synthesised per row (space-joined concat of
-        the row's non-null text values). CKAN emits a Postgres
-        tsvector here because `SELECT *` on a Postgres datastore
-        picks up the tsvector column; BigQuery has no equivalent, so
-        we emit a text approximation so client scripts that read
-        `record["_full_text"]` get a value in the expected shape.
-        `_full_text` lives right after `_id` in `fields` — CKAN's
-        conventional ordering.
+    `_full_text` is treated as a synthesised column: whenever the
+    caller lists it in `fields` (right after `_id`, matching CKAN's
+    `SELECT *` output), the writer computes a tsvector-shaped value
+    per row from the row's other non-null cells. The engine never
+    materialises it; the field list is the single source of truth.
     """
-    kept_fields, keep_indices = _project_fields(fields)
-    kept_fields, keep_indices, full_text_at = _inject_full_text(kept_fields, keep_indices)
+    # `_full_text` is virtual (synthesised per row). Pop it before
+    # `_project_fields` runs so column→engine-row indices stay aligned,
+    # then splice it back in with a sentinel index after projection.
+    real_fields, full_text_at = _pop_full_text(fields)
+    kept_fields, keep_indices = _project_fields(real_fields)
+    if full_text_at is not None:
+        slot = min(full_text_at, len(kept_fields))
+        kept_fields = kept_fields[:slot] + [LEGACY_FULL_TEXT_FIELD] + kept_fields[slot:]
+        keep_indices = keep_indices[:slot] + [-1] + keep_indices[slot:]
     columns = [f["id"] for f in kept_fields]
 
     yield b'{"help":'
     yield orjson.dumps(help_url)
     yield b',"success":true,"result":{"records":'
-    yield from _records_with_full_text(columns, records, keep_indices, full_text_at)
+    if full_text_at is None:
+        yield from _records_object_array(columns, records, keep_indices)
+    else:
+        yield from _records_with_full_text(columns, records, keep_indices, slot)
     yield b',"fields":'
     yield orjson.dumps(kept_fields)
     yield b',"sql":'
     yield orjson.dumps(sql.strip())
     yield b"}}"
+
+
+def _pop_full_text(
+    fields: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int | None]:
+    """Strip the virtual `_full_text` entry from `fields` and return
+    `(real_fields, original_index)`. Returns `(fields, None)` unchanged
+    when `_full_text` is absent — the common case for every SQL shape
+    other than `SELECT *`.
+    """
+    for i, f in enumerate(fields):
+        if f.get("id") == "_full_text":
+            return fields[:i] + fields[i + 1:], i
+    return fields, None
 
 
 def legacy_info_result(
@@ -298,37 +309,6 @@ def legacy_info_result(
     return out
 
 
-def _inject_full_text(
-    kept_fields: list[dict[str, Any]],
-    keep_indices: list[int],
-) -> tuple[list[dict[str, Any]], list[int], int]:
-    """Insert the synthesised `_full_text` field right after `_id`.
-
-    Returns `(fields, keep_indices, full_text_at)` where
-    `full_text_at` is the output-row position the synthesised value
-    must be inserted at. `keep_indices` is extended with a sentinel
-    `-1` at that same position so the row serialiser can treat the
-    synthetic column uniformly without a parallel data structure.
-
-    Positioning rules:
-      - `_id` first (if present), then `_full_text`, then user cols.
-        Matches real CKAN's field ordering.
-      - If `_id` isn't in the schema (unusual — happens when the engine
-        doesn't materialise one), `_full_text` lands at position 0.
-    """
-    pos = 0
-    for i, f in enumerate(kept_fields):
-        if f.get("id") == "_id":
-            pos = i + 1
-            break
-    new_fields = kept_fields[:pos] + [LEGACY_FULL_TEXT_FIELD] + kept_fields[pos:]
-    # Sentinel index `-1` marks the synthesised slot; `_records_with_full_text`
-    # watches for it so the real engine tuple is never indexed by -1 (which
-    # would silently pick the row's last column).
-    new_indices = keep_indices[:pos] + [-1] + keep_indices[pos:]
-    return new_fields, new_indices, pos
-
-
 def _records_with_full_text(
     columns: list[str],
     records: Iterator[tuple[Any, ...]],
@@ -337,9 +317,10 @@ def _records_with_full_text(
 ) -> Iterator[bytes]:
     """`[{col: value, ...}, ...]` with a synthesised `_full_text` per row.
 
-    `keep_indices[full_text_at] == -1` by construction (see
-    `_inject_full_text`); we substitute the computed value at that
-    position. Every other position is a real engine-tuple index.
+    `keep_indices[full_text_at] == -1` by construction (the writer
+    splices a sentinel at the slot it got from `_full_text_slot`), so
+    we substitute the computed value at that position. Every other
+    position is a real engine-tuple index.
 
     `_full_text` is formatted as a Postgres tsvector lexeme string
     (`'word':pos1,pos2 'word2':pos3 ...`) built from the row's
