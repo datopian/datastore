@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 # `build_search`). Anything else falls back to STRING.
 _PARAM_TYPE: dict[str, str] = {
     "integer": "INT64",
-    "number": "NUMERIC",
+    "number": "BIGNUMERIC",
     "boolean": "BOOL",
     "string": "STRING",
     "date": "DATE",

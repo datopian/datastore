@@ -73,11 +73,10 @@ def _json_default(obj: Any) -> Any:
     same `YYYY-MM-DDTHH:MM:SS` wire shape.
     """
     if isinstance(obj, Decimal):
-        # Match Postgres `NUMERIC`: whole numbers serialise without a
-        # trailing `.0` (`150`, not `150.0`), fractions keep their value.
-        if obj == obj.to_integral_value():
-            return int(obj)
-        return float(obj)
+        f = float(obj)
+        if f.is_integer() and abs(f) < 2**63:
+            return int(f)
+        return f
     if isinstance(obj, bytes):
         return base64.b64encode(obj).decode("ascii")
     if isinstance(obj, datetime):
@@ -302,6 +301,13 @@ def _stream_envelope(
 _ROW_OPTS = orjson.OPT_PASSTHROUGH_DATETIME
 
 
+def _coerce(v: Any) -> Any:
+    """Integer-valued floats serialise without `.0` to match CKAN wire shape."""
+    if isinstance(v, float) and v.is_integer() and abs(v) < 2**63:
+        return int(v)
+    return v
+
+
 def _records_object_array(columns: list[str], records: Iterator[tuple]) -> Iterator[bytes]:
     """`[{col: value, ...}, ...]`."""
     yield b"["
@@ -311,7 +317,11 @@ def _records_object_array(columns: list[str], records: Iterator[tuple]) -> Itera
             first = False
         else:
             yield b","
-        yield orjson.dumps(dict(zip(columns, row)), default=_json_default, option=_ROW_OPTS)
+        yield orjson.dumps(
+            {c: _coerce(v) for c, v in zip(columns, row)},
+            default=_json_default,
+            option=_ROW_OPTS,
+        )
     yield b"]"
 
 
@@ -324,7 +334,7 @@ def _records_array_array(records: Iterator[tuple]) -> Iterator[bytes]:
             first = False
         else:
             yield b","
-        yield orjson.dumps(list(row), default=_json_default, option=_ROW_OPTS)
+        yield orjson.dumps([_coerce(v) for v in row], default=_json_default, option=_ROW_OPTS)
     yield b"]"
 
 

@@ -29,7 +29,7 @@ SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset({"_id", "_updated_at"})
 # JSON / array / geojson absent — equality on those is rejected.
 _FILTER_PARAM_TYPE: dict[str, str] = {
     "integer": "INT64",
-    "number": "NUMERIC",
+    "number": "BIGNUMERIC",
     "boolean": "BOOL",
     "string": "STRING",
     "date": "DATE",
@@ -78,6 +78,8 @@ def format_select_column(name: str, bq_type: str | None) -> str:
         return f"FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `{name}`, 'UTC') AS `{name}`"
     if bq == "DATETIME":
         return f"FORMAT_DATETIME('%Y-%m-%dT%H:%M:%S', `{name}`) AS `{name}`"
+    if bq in ("NUMERIC", "BIGNUMERIC"):
+        return f"CAST(`{name}` AS FLOAT64) AS `{name}`"
     return f"`{name}`"
 
 

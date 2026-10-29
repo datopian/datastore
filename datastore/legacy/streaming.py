@@ -50,6 +50,7 @@ from datastore.legacy.constants import (
     UTF8_BOM,
 )
 from datastore.services.streaming import (
+    _coerce,
     _delimited_row,
     _json_default,
     _json_string_inner,
@@ -199,7 +200,7 @@ def _records_array_array(
         else:
             yield b","
         yield orjson.dumps(
-            [row[i] for i in keep_indices],
+            [_coerce(row[i]) for i in keep_indices],
             default=_json_default,
             option=orjson.OPT_PASSTHROUGH_DATETIME,
         )
@@ -335,7 +336,7 @@ def _records_with_full_text(
             if pos == full_text_at:
                 projected.append(None)  # placeholder — overwritten below
             else:
-                projected.append(row[src_idx])
+                projected.append(_coerce(row[src_idx]))
         projected[full_text_at] = _compute_full_text(
             [v for i, v in enumerate(projected) if i != full_text_at and columns[i] != "_id"]
         )
@@ -464,7 +465,7 @@ def _records_object_array(
             first = False
         else:
             yield b","
-        projected = tuple(row[i] for i in keep_indices)
+        projected = tuple(_coerce(row[i]) for i in keep_indices)
         yield orjson.dumps(
             dict(zip(columns, projected)),
             default=_json_default,
@@ -627,7 +628,7 @@ def _stringify(value: Any) -> str:
         return orjson.dumps(value, default=_json_default).decode("utf-8")
     if isinstance(value, bytes):
         return value.decode("latin-1", errors="replace")
-    return str(value)
+    return str(_coerce(value))
 
 
 # XML tag names must start with a letter / underscore and contain only
