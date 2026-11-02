@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
+from datastore.core.constants import RESERVED_SYSTEM_COLUMN_NAMES
 from datastore.core.exceptions import NotFoundError, ValidationError
 from datastore.core.helper import dump_url
 from datastore.infrastructure.engines import get_datastore_engine
@@ -27,13 +28,29 @@ if TYPE_CHECKING:  # type-only — no runtime import from api/
 # order; any other property a field carries follows in first-seen order.
 _DICTIONARY_LEADING_COLUMNS = ("name", "type", "title", "description")
 
+# Engine-managed columns every table carries but no user schema declares.
+# The dictionary lists them where downloads and `datastore_search` put
+# them: `_id` first, `_updated_at` last.
+_ID_FIELD = {
+    "name": "_id",
+    "type": "integer",
+    "title": "Row ID",
+    "description": "System generated. Row identifier assigned by the datastore.",
+}
+_UPDATED_AT_FIELD = {
+    "name": "_updated_at",
+    "type": "datetime",
+    "title": "Row last updated",
+    "description": "System generated. When the row was last inserted or changed (UTC).",
+}
+
 
 async def dictionary_document(context: RequestContext, data_dict: dict[str, Any]) -> dict[str, Any]:
     """The resource's Frictionless Table Schema — the same `schema`
     `datastore_info` returns (CKAN's copy under `AUTH_TYPE=ckan`, else
-    the engine's)."""
+    the engine's), plus the system columns."""
     result = await info_datastore(context, data_dict)
-    return result.schema
+    return _with_system_fields(result.schema, context.config.INCLUDE_UPDATED_AT)
 
 
 def dictionary_csv(schema: dict[str, Any]) -> bytes:
@@ -100,8 +117,10 @@ async def metadata_record(
 
 
 def metadata_csv(record: dict[str, Any]) -> bytes:
-    """A header row and one value row."""
-    return _csv_bytes(list(record), [record])
+    """One row per metadata key: the label in the first column, its
+    value in the second."""
+    rows = [{"Field": key, "Value": value} for key, value in record.items()]
+    return _csv_bytes(["Field", "Value"], rows)
 
 
 def json_bytes(document: Any) -> bytes:
@@ -118,6 +137,18 @@ async def _record_count(context: RequestContext, resource_id: str) -> int | None
         return None
     total = info.meta.get("total_records")
     return total if isinstance(total, int) else None
+
+
+def _with_system_fields(schema: dict[str, Any], include_updated_at: bool) -> dict[str, Any]:
+    """`schema` with `_id` prepended and `_updated_at` (when the engine
+    adds it) appended. A schema with no fields means no table to
+    describe, so it's returned as is."""
+    fields = [f for f in schema.get("fields") or [] if isinstance(f, dict)]
+    user = [f for f in fields if f.get("name") not in RESERVED_SYSTEM_COLUMN_NAMES]
+    if not user:
+        return schema
+    system_tail = [_UPDATED_AT_FIELD] if include_updated_at else []
+    return {**schema, "fields": [_ID_FIELD, *user, *system_tail]}
 
 
 def _split_temporal_coverage(value: Any) -> tuple[str | None, str | None]:

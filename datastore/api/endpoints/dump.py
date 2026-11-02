@@ -223,8 +223,9 @@ async def dump_dictionary(
 ):
     """Download the resource's table schema (data dictionary).
 
-    `json` is the Frictionless Table Schema as `datastore_info` returns it.
-    `csv` has one row per column and one column per field property
+    `json` is the Frictionless Table Schema as `datastore_info` returns it,
+    plus the system columns the data download carries (`_id` first,
+    `_updated_at` last when enabled). `csv` has one row per column and one column per field property
     (`name`, `type`, `title`, `description`, then any others); nested
     values such as `constraints` are written as JSON in their cell."""
     authorized = await context.authorize(resource_id=resource_id, permission="read")
@@ -252,8 +253,8 @@ async def dump_metadata(
     licence, tags, format, download URL, record count, temporal and
     spatial coverage.
 
-    `json` is one object; `csv` is a header row and one value row, with
-    tags comma-joined. Requires `AUTH_TYPE=ckan`."""
+    `json` is one object; `csv` has a `Field` and a `Value` column with
+    one row per metadata key, tags comma-joined. Requires `AUTH_TYPE=ckan`."""
     authorized = await context.authorize(resource_id=resource_id, permission="read")
     authorized["resource"] = await context.fresh_resource(resource_id, authorized.get("resource"))
     record = await metadata_record(context, resource_id, authorized)
