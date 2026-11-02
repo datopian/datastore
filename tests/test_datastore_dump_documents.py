@@ -15,7 +15,13 @@ import json
 import pytest
 from datastore.analytics import action_name
 from datastore.core.constants import DUMP_PREFIX
-from datastore.services.metadata import _csv_cell, _split_temporal_coverage
+from datastore.services.metadata import (
+    _ID_FIELD,
+    _UPDATED_AT_FIELD,
+    _csv_cell,
+    _split_temporal_coverage,
+    _with_system_fields,
+)
 from fastapi.testclient import TestClient
 
 from tests.conftest import FakeCKAN
@@ -83,6 +89,14 @@ def test_dictionary_csv_has_a_row_per_field(client: TestClient, seeded: FakeCKAN
     assert header == ["name", "type", "title", "description", "constraints", "unit"]
     assert rows == [
         [
+            "_id",
+            "integer",
+            "Row ID",
+            "System generated. Row identifier assigned by the datastore.",
+            "",
+            "",
+        ],
+        [
             "auction_id",
             "integer",
             "Auction ID",
@@ -91,16 +105,46 @@ def test_dictionary_csv_has_a_row_per_field(client: TestClient, seeded: FakeCKAN
             "",
         ],
         ["product_code", "string", "", "", "", "N/A"],
+        [
+            "_updated_at",
+            "datetime",
+            "Row last updated",
+            "System generated. When the row was last inserted or changed (UTC).",
+            "",
+            "",
+        ],
     ]
 
 
-def test_dictionary_json_is_the_schema(client: TestClient, seeded: FakeCKAN) -> None:
+def test_dictionary_json_is_the_schema_plus_system_columns(
+    client: TestClient, seeded: FakeCKAN
+) -> None:
     response = client.get(DICTIONARY_URL, params={"format": "json"})
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/json"
     assert response.headers["content-disposition"].endswith('_data_dictionary.json"')
-    assert response.json() == SCHEMA
+    assert response.json() == {
+        **SCHEMA,
+        "fields": [_ID_FIELD, *SCHEMA["fields"], _UPDATED_AT_FIELD],
+    }
+
+
+def test_system_fields_follow_include_updated_at() -> None:
+    assert _with_system_fields(SCHEMA, include_updated_at=False)["fields"] == [
+        _ID_FIELD,
+        *SCHEMA["fields"],
+    ]
+
+
+def test_system_fields_replace_declared_ones() -> None:
+    """A schema already naming a system column (e.g. inferred from an
+    unmanaged table) doesn't list it twice."""
+    schema = {"fields": [{"name": "_id", "type": "string"}, {"name": "a", "type": "string"}]}
+
+    names = [f["name"] for f in _with_system_fields(schema, include_updated_at=True)["fields"]]
+
+    assert names == ["_id", "a", "_updated_at"]
 
 
 def test_dictionary_without_schema_is_header_only(client: TestClient) -> None:
@@ -155,18 +199,20 @@ def test_metadata_prefers_resource_metadata_modified(client: TestClient, seeded:
     assert record["Resource last updated"] == "2025-04-01T09:00:00"
 
 
-def test_metadata_csv_is_header_plus_one_row(client: TestClient, seeded: FakeCKAN) -> None:
+def test_metadata_csv_is_one_row_per_key(client: TestClient, seeded: FakeCKAN) -> None:
     response = client.get(METADATA_URL)
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/csv; charset=utf-8"
     header, *rows = _csv_rows(response.content)
-    assert len(rows) == 1
-    row = dict(zip(header, rows[0], strict=True))
-    assert header[0] == "Dataset name"
-    assert row["Tags"] == "balancing, auctions"
-    assert row["Data group"] == "NESO"
-    assert row["Total record count"] == "0"
+    assert header == ["Field", "Value"]
+    assert all(len(r) == 2 for r in rows)
+    assert rows[0] == ["Dataset name", "Balancing Market 2025"]
+    values = dict(rows)
+    assert len(values) == len(rows) == 20
+    assert values["Tags"] == "balancing, auctions"
+    assert values["Data group"] == "NESO"
+    assert values["Total record count"] == "0"
 
 
 def test_metadata_reads_the_dataset_through_package_show(
