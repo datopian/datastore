@@ -170,7 +170,18 @@ class BigQueryBackend(DatastoreBackend):
         ref = f"{self.config.BIGQUERY_PROJECT}.{self.config.BIGQUERY_DATASET}.{resource_id}"
         try:
             table = self.client.get_table(ref)
-        except NotFound:
+        except NotFound as e:
+            # Google's tables.get 404 can mean "genuinely absent" or a
+            # masked authorization failure (some GCP APIs report 404
+            # instead of 403 to avoid leaking existence). Log the raw
+            # response so an unexpected NotFound is diagnosable instead
+            # of silently indistinguishable from a real missing table.
+            log.debug(
+                "BigQuery tables.get NotFound for resource %r (ref=%r): %s",
+                resource_id,
+                ref,
+                e,
+            )
             return None
         except Exception as e:
             raise ServerError(
