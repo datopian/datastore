@@ -103,7 +103,6 @@ class FakeCKAN:
         self.resources: dict[str, dict[str, Any]] = {}
         self.packages: dict[str, dict[str, Any]] = {}
         self.authorize_calls = 0
-        self.package_show_calls = 0
         self.deny_keys: set[str] = set()
         # What `datastore_authorize` still reports after a resource changed,
         # i.e. the entry the provider's TTL cache would hand back.
@@ -165,17 +164,6 @@ class FakeCKAN:
         if existing is None:
             raise NotFoundError(f"resource '{resource_id}' not found")
         return existing
-
-    async def package_show(self, *, package_id: str) -> dict[str, Any]:
-        """Mirrors CKAN: the package with its resources embedded."""
-        self.package_show_calls += 1
-        if self._api_key and self._api_key in self.deny_keys:
-            raise AuthorizationError(f"key '{self._api_key}' is not allowed")
-        package = self.packages.get(package_id)
-        if package is None:
-            raise NotFoundError(f"package '{package_id}' not found")
-        resources = [r for r in self.resources.values() if r.get("package_id") == package_id]
-        return {**package, "resources": resources}
 
     async def resource_create(self, *, resource: dict[str, Any]) -> dict[str, Any]:
         self._guard()

@@ -1,6 +1,6 @@
 """Download endpoints: `<DUMP_PREFIX>/{resource_id}` + `<DUMP_PREFIX>/query`,
-plus a resource's data dictionary and metadata at
-`<DUMP_PREFIX>/{resource_id}/dictionary` and `…/metadata`.
+plus a resource's data dictionary at
+`<DUMP_PREFIX>/{resource_id}/dictionary`.
 
 csv / gzip / ndjson shards are composed into one GCS object, so those
 always redirect — the server never touches the bytes. Parquet can't be
@@ -35,8 +35,6 @@ from datastore.services.metadata import (
     dictionary_csv,
     dictionary_document,
     json_bytes,
-    metadata_csv,
-    metadata_record,
 )
 from datastore.services.read import dump_sql_datastore
 from datastore.services.streaming import zip_archive_writer
@@ -182,7 +180,7 @@ async def dump(
     return download_response(request, urls, fmt, filename_base)
 
 
-# What a dictionary / metadata download returns, for OpenAPI: the file
+# What a dictionary download returns, for OpenAPI: the file
 # itself, served by this API (no redirect — the documents are small).
 _DOCUMENT_RESPONSES: dict[int | str, dict[str, Any]] = {
     200: {
@@ -235,28 +233,3 @@ async def dump_dictionary(
     )
     body = dictionary_csv(schema) if fmt == "csv" else json_bytes(schema)
     return document_response(body, fmt, authorized, resource_id, "data_dictionary")
-
-
-@router.get(
-    "/{resource_id}/metadata",
-    summary="Download a resource's and its dataset's metadata",
-    response_class=Response,
-    responses=_DOCUMENT_RESPONSES,
-)
-async def dump_metadata(
-    context: Context,
-    resource_id: ResourceId,
-    fmt: Annotated[DocumentFormat, Query(alias="format")] = "csv",
-):
-    """Download the resource's metadata alongside its dataset's: names,
-    ids, description, organization, update frequencies, timestamps,
-    licence, tags, format, download URL, record count, temporal and
-    spatial coverage.
-
-    `json` is one object; `csv` has a `Field` and a `Value` column with
-    one row per metadata key, tags comma-joined. Requires `AUTH_TYPE=ckan`."""
-    authorized = await context.authorize(resource_id=resource_id, permission="read")
-    authorized["resource"] = await context.fresh_resource(resource_id, authorized.get("resource"))
-    record = await metadata_record(context, resource_id, authorized)
-    body = metadata_csv(record) if fmt == "csv" else json_bytes(record)
-    return document_response(body, fmt, authorized, resource_id, "metadata")
