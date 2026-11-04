@@ -128,7 +128,7 @@ def test_alter_adds_new_columns_widens_types_then_refreshes_options(
     old = {"fields": [{"name": "a", "type": "integer"}]}
     new = {
         "fields": [
-            {"name": "a", "type": "number"},  # widen INT64 → FLOAT64
+            {"name": "a", "type": "number"},  # widen INT64 → BIGNUMERIC
             {"name": "b", "type": "string"},  # add
         ]
     }
@@ -140,7 +140,7 @@ def test_alter_adds_new_columns_widens_types_then_refreshes_options(
     opts_sql = mock_client.query.call_args_list[1].args[0]
     assert "ALTER TABLE `proj-1.ds-1.res-1`" in col_sql
     assert "ADD COLUMN IF NOT EXISTS `b` STRING" in col_sql
-    assert "ALTER COLUMN `a` SET DATA TYPE FLOAT64" in col_sql
+    assert "ALTER COLUMN `a` SET DATA TYPE BIGNUMERIC" in col_sql
     assert opts_sql.startswith("ALTER TABLE `proj-1.ds-1.res-1` SET OPTIONS(")
     # Refreshed table OPTIONS carries the new schema verbatim.
     assert '"name":"a","type":"number"' in opts_sql
@@ -1295,13 +1295,13 @@ def test_build_search_renders_full_param_set() -> None:
         offset=25,
     )
 
-    assert sql.startswith("SELECT `auction_id`, `product_code` FROM `p.d.r` AS t")
+    assert sql.startswith("SELECT `auction_id`, `product_code` FROM `p.d.r` AS _src")
     assert "WHERE `product_code` = @f0 AND `accepted` = @f1" in sql
-    assert "SEARCH(t, @f2)" in sql
-    # ORDER BY references the underlying table column (`t.<col>`) so the
+    assert "SEARCH(_src, @f2)" in sql
+    # ORDER BY references the underlying table column (`_src.<col>`) so the
     # FORMAT_TIMESTAMP projection alias for datetime columns doesn't shadow
     # the native value at sort time.
-    assert "ORDER BY t.`auction_id` DESC" in sql
+    assert "ORDER BY _src.`auction_id` DESC" in sql
     assert sql.rstrip().endswith("LIMIT 100 OFFSET 25")
     # Parameter types track the schema (STRING / BOOL / STRING for q).
     by_name = {p.name: p for p in params}
@@ -1358,7 +1358,7 @@ def test_build_search_default_sort_is_id_asc() -> None:
         limit=10,
         offset=0,
     )
-    assert "ORDER BY t.`_id` ASC" in sql
+    assert "ORDER BY _src.`_id` ASC" in sql
 
 
 def test_build_search_rejects_unknown_columns() -> None:
@@ -1476,7 +1476,7 @@ def test_search_returns_projection_schema_and_lazy_rows(
     search_sql = mock_client.query.call_args_list[1][0][0]
     assert count_sql.startswith("SELECT COUNT(*) AS n FROM (")
     assert search_sql.startswith(
-        "SELECT `auction_id`, `product_code` FROM `proj-1.ds-1.res-1` AS t"
+        "SELECT `auction_id`, `product_code` FROM `proj-1.ds-1.res-1` AS _src"
     )
     assert result.total == 1
     # `records` is a generator — assert lazy by exhausting it once.
@@ -1533,7 +1533,7 @@ def test_search_unfiltered_uses_cheap_row_count(
     assert sqls[0].startswith(
         "SELECT `_id`, `a`, "
         "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', `_updated_at`, 'UTC') "
-        "AS `_updated_at` FROM `proj-1.ds-1.res-1` AS t"
+        "AS `_updated_at` FROM `proj-1.ds-1.res-1` AS _src"
     )
     assert sqls[1] == ("SELECT COUNT(*) AS n FROM `proj-1.ds-1.res-1`")
     # No filtered count subquery anywhere.

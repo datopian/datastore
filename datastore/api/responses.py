@@ -34,7 +34,10 @@ def _orjson_default(obj: Any) -> Any:
     # values past ~15 significant digits round to the nearest IEEE-754
     # double (full-precision callers should CAST to STRING in SQL).
     if isinstance(obj, Decimal):
-        return float(obj)
+        f = float(obj)
+        if f.is_integer() and abs(f) < 2**63:
+            return int(f)
+        return f
     # `BYTES` columns come back as raw `bytes`; base64-encode so the
     # response stays UTF-8 and round-trippable.
     if isinstance(obj, bytes):

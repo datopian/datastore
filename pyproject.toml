@@ -26,6 +26,11 @@ dependencies = [
     # this package imports it directly.
     "jinja2>=3.1",
     "google-cloud-storage>=2.14",
+    # Byte-for-byte CKAN parity on the legacy `_full_text` tsvector field:
+    # Postgres uses Snowball under the hood (`english_stem` dictionary), so
+    # `restrictions` lemmatises to `restrict`, `networks` to `network`, etc.
+    # ~500KB pure Python, no transitive deps.
+    "snowballstemmer>=3.0",
 ]
 
 [project.optional-dependencies]

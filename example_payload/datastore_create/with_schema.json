@@ -8,6 +8,7 @@
         "title": "Auction ID",
         "description": "Unique auction identifier. Stable across all products auctioned in the same market window.",
         "comment": "Primary-key component; pairs with product_code to uniquely reference a cleared bid.",
+        "example": "144",
         "unit": null
       },
       {
@@ -16,6 +17,7 @@
         "title": "Product Code",
         "description": "Product mnemonic for the balancing service (e.g. DCL, DCH, FFR).",
         "comment": "Primary-key component; controlled vocabulary maintained by the market operator.",
+        "example": "DCL",
         "unit": null
       },
       {
@@ -24,6 +26,7 @@
         "title": "Delivery Start (UTC)",
         "description": "First instant of the delivery window. Stored as UTC; clients render local time.",
         "comment": "Always persisted as UTC \u2014 do not assume the caller's timezone.",
+        "example": "2025-11-04T16:00:00Z",
         "unit": null
       },
       {
@@ -32,6 +35,7 @@
         "title": "Delivery Duration",
         "description": "Length of the delivery window.",
         "comment": "Add to delivery_start to derive the delivery end instant.",
+        "example": "30",
         "unit": "minutes",
         "info": {
           "unit": "minutes"
@@ -43,6 +47,7 @@
         "title": "Clearing Price",
         "description": "Pay-as-cleared price for the auction. Negative values are possible during oversupply.",
         "comment": "Pay-as-cleared: every accepted bid settles at this price, not its own offer.",
+        "example": "47.82",
         "unit": "GBP/MWh",
         "info": {
           "unit": "GBP/MWh"
@@ -54,6 +59,7 @@
         "title": "Cleared Volume",
         "description": "Total volume cleared in this auction.",
         "comment": "Sum across accepted bids for the (auction_id, product_code) pair.",
+        "example": "120.0",
         "unit": "MWh",
         "info": {
           "unit": "MWh"
@@ -65,6 +71,7 @@
         "title": "Accepted",
         "description": "Whether the bid cleared (true) or was rejected (false).",
         "comment": "Rejected rows are retained for audit; filter accepted=true for settlement.",
+        "example": "true",
         "unit": null
       },
       {
@@ -73,6 +80,7 @@
         "title": "Bidder Metadata",
         "description": "Free-form provider-specific metadata captured at submission time.",
         "comment": "Schema not enforced; kept opaque for downstream analytics.",
+        "example": "{\"unit_id\": \"DRAX-1\", \"submission_lag_ms\": 412}",
         "unit": null
       }
     ],

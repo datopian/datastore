@@ -714,6 +714,7 @@ class BigQueryBackend(DatastoreBackend):
                 sql,
                 project=self.config.BIGQUERY_PROJECT,
                 dataset=self.config.BIGQUERY_DATASET,
+                translate=self.config.BIGQUERY_TRANSLATE_PG_SQL,
             )
         except Exception as e:
             raise ServerError(

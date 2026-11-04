@@ -33,6 +33,9 @@ from datastore.infrastructure.engines.registry import (
     warmup_engines,
 )
 
+# DEPRECATED legacy surface — single import so removal is one line.
+from datastore.legacy import log_startup_banner as _log_legacy_banner
+
 logging.basicConfig(
     level=get_config().LOG_LEVEL,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -81,6 +84,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "redis" if config.REDIS_URL else "memory",
             "on" if config.ANALYTICS_ENABLED else "off",
         )
+        _log_legacy_banner()
 
         yield
 

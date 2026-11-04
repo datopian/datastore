@@ -39,6 +39,7 @@ import csv
 import io
 import zipfile
 from collections.abc import AsyncIterator, Iterator
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -46,7 +47,8 @@ import orjson
 
 
 def _json_default(obj: Any) -> Any:
-    """Serialise types `orjson` refuses out of the box.
+    """Serialise types `orjson` refuses out of the box, plus `datetime`
+    / `date` so our shape matches `datastore_search`'s engine-side cast.
 
     BigQuery `NUMERIC` / `BIGNUMERIC` columns come back as
     `decimal.Decimal`. Emit them as JSON numbers so clients can do
@@ -57,11 +59,37 @@ def _json_default(obj: Any) -> Any:
 
     `bytes` (BigQuery `BYTES` columns) are base64-encoded so the
     response stays UTF-8 and round-trippable.
+
+    `datetime` / `date` cells get the same offset-stripped ISO 8601
+    shape `datastore_search` emits. The search path wraps TIMESTAMP /
+    DATETIME columns in `FORMAT_TIMESTAMP(..., 'UTC')` /
+    `FORMAT_DATETIME(...)` via `format_select_column` in
+    `bigquery/lib.py`, so cells arrive pre-stringified there and this
+    branch is a no-op. The `datastore_search_sql` path runs raw user
+    SQL — no engine wrap, so cells arrive as live `datetime` objects.
+    `orjson.OPT_PASSTHROUGH_DATETIME` (set on the row-level dumps
+    below) routes every `datetime` here instead of letting orjson emit
+    its native tz-aware `+00:00` suffix, giving the two endpoints the
+    same `YYYY-MM-DDTHH:MM:SS` wire shape.
     """
     if isinstance(obj, Decimal):
-        return float(obj)
+        f = float(obj)
+        if f.is_integer() and abs(f) < 2**63:
+            return int(f)
+        return f
     if isinstance(obj, bytes):
         return base64.b64encode(obj).decode("ascii")
+    if isinstance(obj, datetime):
+        # Normalise aware datetimes to UTC first, then drop tzinfo so
+        # the serialised form has no offset — same contract
+        # `format_select_column` emits.
+        if obj.tzinfo is not None:
+            obj = obj.astimezone(timezone.utc).replace(tzinfo=None)
+        return obj.isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    if isinstance(obj, time):
+        return obj.isoformat()
     raise TypeError(
         f"orjson cannot serialise {type(obj).__name__}; "
         "extend `_json_default` if a new BigQuery type comes through."
@@ -264,6 +292,22 @@ def _stream_envelope(
     yield b"}"  # close envelope
 
 
+# Route every `date` / `datetime` cell through `_json_default` instead
+# of letting orjson emit its native tz-aware `+00:00` suffix — see the
+# `_json_default` docstring for the full rationale. No-op on
+# `datastore_search` (where `format_select_column` pre-stringifies at
+# the engine); the fix lands on `datastore_search_sql` where no engine
+# cast exists.
+_ROW_OPTS = orjson.OPT_PASSTHROUGH_DATETIME
+
+
+def _coerce(v: Any) -> Any:
+    """Integer-valued floats serialise without `.0` to match CKAN wire shape."""
+    if isinstance(v, float) and v.is_integer() and abs(v) < 2**63:
+        return int(v)
+    return v
+
+
 def _records_object_array(columns: list[str], records: Iterator[tuple]) -> Iterator[bytes]:
     """`[{col: value, ...}, ...]`."""
     yield b"["
@@ -273,7 +317,11 @@ def _records_object_array(columns: list[str], records: Iterator[tuple]) -> Itera
             first = False
         else:
             yield b","
-        yield orjson.dumps(dict(zip(columns, row)), default=_json_default)
+        yield orjson.dumps(
+            {c: _coerce(v) for c, v in zip(columns, row)},
+            default=_json_default,
+            option=_ROW_OPTS,
+        )
     yield b"]"
 
 
@@ -286,7 +334,7 @@ def _records_array_array(records: Iterator[tuple]) -> Iterator[bytes]:
             first = False
         else:
             yield b","
-        yield orjson.dumps(list(row), default=_json_default)
+        yield orjson.dumps([_coerce(v) for v in row], default=_json_default, option=_ROW_OPTS)
     yield b"]"
 
 

@@ -1,0 +1,82 @@
+{
+  "help": "http://localhost:8000/datastore/api/v2/docs#/Datastore/datastore_search",
+  "success": true,
+  "result": {
+    "include_total": true,
+    "resource_id": "balancing_auction_results_2025",
+    "fields": [
+      {
+        "id": "_id",
+        "type": "int8",
+        "info": {
+          "title": "Record Identifier",
+          "description": "System-generated unique identifier assigned to each record in the database. Used to uniquely identify a row within a resource table.",
+          "comment": "Automatically populated. Not publisher-maintained. Values are unique within a resource and may be used for record retrieval and updates.",
+          "example": "12345",
+          "unit": "N/A"
+        }
+      },
+      {
+        "id": "_updated_at",
+        "type": "timestamp",
+        "info": {
+          "title": "Last Updated Timestamp",
+          "description": "System-generated timestamp indicating when the record was last created or modified in the database.",
+          "comment": "Automatically maintained. Useful for identifying recently changed records. Stored in UTC.",
+          "example": "2026-08-27T12:45:30",
+          "unit": "ISO 8601 UTC Timestamp"
+        }
+      },
+      {
+        "id": "auction_id",
+        "type": "int4",
+        "info": {
+          "title": "Auction ID",
+          "example": "144",
+          "unit": "N/A"
+        }
+      },
+      {
+        "id": "product_code",
+        "type": "text",
+        "info": {
+          "title": "Product Code",
+          "example": "DCL"
+        }
+      },
+      {
+        "id": "clearing_price_gbp_per_mwh",
+        "type": "float8",
+        "info": {
+          "title": "Clearing Price",
+          "example": "47.82",
+          "unit": "GBP/MWh"
+        }
+      }
+    ],
+    "records_format": "objects",
+    "records": [
+      {
+        "_id": 1,
+        "_updated_at": "2026-08-27T12:45:30",
+        "auction_id": 1,
+        "product_code": "DCL",
+        "clearing_price_gbp_per_mwh": 50.99
+      },
+      {
+        "_id": 2,
+        "_updated_at": "2026-08-27T12:45:30",
+        "auction_id": 2,
+        "product_code": "DCL",
+        "clearing_price_gbp_per_mwh": 45.55
+      }
+    ],
+    "limit": 100,
+    "offset": 0,
+    "total": 110,
+    "_links": {
+      "start": "http://localhost:8000/datastore/api/v2/datastore_search?resource_id=balancing_auction_results_2025&limit=100",
+      "next": "http://localhost:8000/datastore/api/v2/datastore_search?resource_id=balancing_auction_results_2025&limit=100&offset=100"
+    }
+  }
+}

@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 # `build_search`). Anything else falls back to STRING.
 _PARAM_TYPE: dict[str, str] = {
     "integer": "INT64",
-    "number": "FLOAT64",
+    "number": "BIGNUMERIC",
     "boolean": "BOOL",
     "string": "STRING",
     "date": "DATE",
@@ -238,8 +238,9 @@ def build_search(
     list of `ScalarQueryParameter` / `ArrayQueryParameter` ready to
     drop into a `QueryJobConfig`.
 
-    Layout: ``SELECT [DISTINCT] cols FROM target AS t [WHERE ...]
-    [ORDER BY ...] LIMIT N OFFSET M``. Sort defaults to `_id ASC` when
+    Layout: ``SELECT [DISTINCT] cols FROM target AS _src [WHERE ...]
+    [ORDER BY ...] LIMIT N OFFSET M``. Alias is `_src` (not `t`) so a
+    user column named `t` cannot be shadowed by the table alias. Sort defaults to `_id ASC` when
     `_id` is projected (CKAN's row-id ordering convention); otherwise
     no default sort — caller must specify or accept BigQuery's order
     (undefined).
@@ -275,23 +276,27 @@ def build_search(
         filters=filters,
         q=q,
         type_map=type_map,
-        table_alias="t",
+        table_alias="_src",
         params=params,
     )
 
     parts: list[str] = []
     projection = ", ".join(_project_column(c, type_map) for c in projected)
-    parts.append(f"SELECT {'DISTINCT ' if distinct else ''}{projection} FROM {table_ref} AS t")
+    # Alias is `_src` (not `t`) so a user column literally named `t`
+    # cannot collide: `SELECT \`t\` FROM tbl AS t` resolves `` `t` `` to
+    # the table-alias STRUCT (the whole row) instead of the column — BQ
+    # treats a bare table alias in SELECT as a row-shaped STRUCT.
+    parts.append(f"SELECT {'DISTINCT ' if distinct else ''}{projection} FROM {table_ref} AS _src")
     if where:
         parts.append(f"WHERE {where}")
     if sort_pairs:
-        # Sort against the underlying table column (`t.<col>`) rather than
-        # the projected alias — the datetime projection rewrites
+        # Sort against the underlying table column (`_src.<col>`) rather
+        # than the projected alias — the datetime projection rewrites
         # `col` → `FORMAT_TIMESTAMP(...) AS col`, and we want ORDER BY to
         # operate on the native TIMESTAMP, not the formatted string. (The
         # ISO format happens to sort lexicographically the same way, but
         # the explicit reference future-proofs us if the format changes.)
-        parts.append("ORDER BY " + ", ".join(f"t.`{c}` {d}" for c, d in sort_pairs))
+        parts.append("ORDER BY " + ", ".join(f"_src.`{c}` {d}" for c, d in sort_pairs))
     parts.append(f"LIMIT {int(limit)} OFFSET {int(offset)}")
 
     sql = " ".join(parts)
@@ -335,7 +340,7 @@ def build_count(
         filters=filters,
         q=q,
         type_map=type_map,
-        table_alias="t",
+        table_alias="_src",
         params=params,
     )
 
@@ -344,7 +349,7 @@ def build_count(
     # then dedupes on the formatted (second-precision) string, matching
     # what the user sees in the data response.
     projection = ", ".join(_project_column(c, type_map) for c in projected)
-    inner_parts = [f"SELECT {'DISTINCT ' if distinct else ''}{projection} FROM {table_ref} AS t"]
+    inner_parts = [f"SELECT {'DISTINCT ' if distinct else ''}{projection} FROM {table_ref} AS _src"]
     if where:
         inner_parts.append(f"WHERE {where}")
     inner = " ".join(inner_parts)

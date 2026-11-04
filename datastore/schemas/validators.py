@@ -115,12 +115,22 @@ def to_str_or_json_object(value: Any) -> str | dict[str, Any] | None:
 
 
 def to_csv_list(value: Any) -> list[str] | None:
-    """Coerce a comma-separated string to a list; pass-through lists."""
+    """Coerce a comma-separated string, JSON-array string, or list to a list of names.
+    """
     if value is None or value == "":
         return None
     if isinstance(value, list):
         return [str(v) for v in value]
     if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"invalid JSON array: {e}") from e
+            if not isinstance(parsed, list):
+                raise ValueError("must be a JSON array of strings")
+            return [str(v) for v in parsed]
         parts = [token.strip() for token in value.split(",")]
         return [p for p in parts if p]
     raise ValueError("must be a comma-separated string or list of strings")

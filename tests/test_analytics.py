@@ -23,6 +23,7 @@ from datastore.core.config import get_config
 from datastore.core.constants import API_BASE_PREFIX, API_PREFIX, DUMP_PREFIX
 from datastore.infrastructure.cache import InMemoryCache
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
+from datastore.legacy.constants import LEGACY_API_PREFIX, LEGACY_DUMP_PREFIX
 from datastore.main import create_app
 from fastapi.testclient import TestClient
 
@@ -559,6 +560,15 @@ def test_the_docs_surface_is_not_recorded(suffix: str) -> None:
         (f"{DUMP_PREFIX}/res-1", "datastore_dump"),
         (f"{API_BASE_PREFIX}/health", None),
         (f"{API_BASE_PREFIX}/ready", None),
+        # Legacy CKAN surface — recorded with the same action names
+        # as v2 so one event stream covers both API versions.
+        (f"{LEGACY_API_PREFIX}/datastore_search", "datastore_search"),
+        (f"{LEGACY_API_PREFIX}/datastore_search_sql", "datastore_search_sql"),
+        (f"{LEGACY_API_PREFIX}/datastore_info", "datastore_info"),
+        (f"{LEGACY_DUMP_PREFIX}/res-1", "datastore_dump"),
+        # Not under any tracked prefix.
+        ("/robots.txt", None),
+        ("/", None),
     ],
 )
 def test_action_name_matches_the_live_routes(path: str, expected: str | None) -> None:

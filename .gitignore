@@ -29,6 +29,11 @@ htmlcov/
 .idea/
 *.swp
 
+# Local-only testing / exploration (prod replication scripts, pulled
+# fixtures, production job logs). Everything here stays on the dev's
+# machine — never committed.
+/local_test/
+
 # OS
 .DS_Store
 Thumbs.db
