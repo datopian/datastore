@@ -77,7 +77,7 @@ def action_name(path: str) -> str | None:
         return "datastore_dump_query"
     if path.startswith(DUMP_PATH_PREFIX):
         document = path[len(DUMP_PATH_PREFIX) :].strip("/").split("/")[1:]
-        if document in (["dictionary"], ["metadata"]):
+        if document == ["dictionary"]:
             return f"datastore_dump_{document[0]}"
         return "datastore_dump"
     if path.startswith(ACTION_PREFIX):
