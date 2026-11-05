@@ -15,7 +15,6 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from datastore.core.constants import API_PREFIX
 from datastore.schemas.validators import FieldSpec
 
 
@@ -27,24 +26,15 @@ class ResponseModel(BaseModel):
 
 
 class ErrorEnvelope(BaseModel):
-    """Error body returned for every 4xx / 5xx response."""
+    """Error body returned for every 4xx / 5xx response.
 
-    model_config = ConfigDict(
-        populate_by_name=True,
-        json_schema_extra={
-            "example": {
-                # Relative: the public host comes from `API_URL`, which only
-                # `api/docs.py` can read (`schemas/` must not import config).
-                # That module rewrites this into an absolute URL at app build.
-                "help": f"{API_PREFIX}/docs#/Datastore/datastore_search",
-                "success": False,
-                "error": {
-                    "__type": "Validation Error",
-                    "message": "resource 'foo' is not declared",
-                },
-            }
-        },
-    )
+    Per-status examples live on `api/responses.ERROR_RESPONSES` so each
+    row in Swagger (400 / 403 / 404 / 409 / 500) carries a body whose
+    `__type` + `message` match that row's status, instead of every row
+    reusing a single schema-level example.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
 
     class Error(BaseModel):
         type_: str = Field(

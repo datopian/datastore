@@ -263,19 +263,48 @@ def test_operation_ids_are_the_handler_names(client: TestClient) -> None:
 # 3e. schema examples are absolute and consistent ---------------------------
 
 
-def test_error_example_url_matches_the_route_prefix(client: TestClient) -> None:
-    """The example `help` is built from `API_PREFIX`, so it can't drift out of
-    sync with the paths the service actually serves."""
+def _error_example(schema: dict[str, Any], operation_id: str, status: str) -> dict[str, Any]:
+    """Return the published example body for `operation_id` at `status`.
+    Fails loudly if the operation or status isn't in the schema so a
+    broken example surfaces as a KeyError, not a silent `{}`."""
+    for item in schema["paths"].values():
+        for op in item.values():
+            if isinstance(op, dict) and op.get("operationId") == operation_id:
+                return op["responses"][status]["content"]["application/json"]["example"]
+    raise AssertionError(f"no operation named {operation_id!r} in schema")
+
+
+def test_each_error_status_has_its_own_example(client: TestClient) -> None:
+    """A single shared example (Validation Error on every row) misled
+    callers into thinking a 404 or 500 would carry the same body. Every
+    documented status now ships its own `__type` + `message`."""
     schema = client.get(f"{API_PREFIX}/openapi.json").json()
 
-    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    by_status = {
+        status: _error_example(schema, "datastore_search", status)
+        for status in ("400", "403", "404", "409", "500")
+    }
+    assert by_status["400"]["error"]["__type"] == "Validation Error"
+    assert by_status["403"]["error"]["__type"] == "Authorization Error"
+    assert by_status["404"]["error"]["__type"] == "Not Found Error"
+    assert by_status["409"]["error"]["__type"] == "Conflict Error"
+    assert by_status["500"]["error"]["__type"] == "Internal Error"
 
-    assert example["help"] == (f"{DEFAULT_API_URL}{API_PREFIX}/docs#/Datastore/datastore_search")
+
+def test_error_example_help_deep_links_to_the_operation(client: TestClient) -> None:
+    """Each example's `help` points at the operation that would have
+    produced the error — a reader clicking it lands on the right endpoint
+    in Swagger, regardless of which status row they expanded."""
+    schema = client.get(f"{API_PREFIX}/openapi.json").json()
+
+    for status in ("400", "403", "404", "409", "500"):
+        example = _error_example(schema, "datastore_search", status)
+        assert example["help"] == (
+            f"{DEFAULT_API_URL}{API_PREFIX}/docs#/Datastore/datastore_search"
+        )
 
 
-def test_api_url_sets_the_example_host(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_api_url_sets_the_example_host(monkeypatch: pytest.MonkeyPatch) -> None:
     """`API_URL` from the environment becomes the example's host, so a
     deployed service's docs don't advertise `example.com`."""
     monkeypatch.setenv("API_URL", "https://data.example.org")
@@ -287,7 +316,7 @@ def test_api_url_sets_the_example_host(
     finally:
         get_config.cache_clear()
 
-    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    example = _error_example(schema, "datastore_search", "400")
     assert example["help"] == (
         f"https://data.example.org{API_PREFIX}/docs#/Datastore/datastore_search"
     )
@@ -306,17 +335,17 @@ def test_api_url_trailing_slash_does_not_double_up(
     finally:
         get_config.cache_clear()
 
-    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    example = _error_example(schema, "datastore_search", "400")
     assert "//datastore" not in example["help"]
 
 
 def test_example_help_is_absolute(client: TestClient) -> None:
     """The published example must be a full URL, not the relative path
-    `schemas/` declares — a reader copying it should see a real response's
-    shape."""
+    `api/responses.py` declares — a reader copying it should see a real
+    response's shape."""
     schema = client.get(f"{API_PREFIX}/openapi.json").json()
 
-    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    example = _error_example(schema, "datastore_search", "400")
     assert example["help"].startswith("https://")
 
 
@@ -325,7 +354,7 @@ def test_error_example_anchor_names_a_real_operation(client: TestClient) -> None
     points nowhere teaches the reader the wrong URL shape."""
     schema = client.get(f"{API_PREFIX}/openapi.json").json()
 
-    example = schema["components"]["schemas"]["ErrorEnvelope"]["example"]
+    example = _error_example(schema, "datastore_search", "400")
     _, _, anchor = example["help"].partition("#/")
     tag, _, operation_id = anchor.partition("/")
 

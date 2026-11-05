@@ -86,12 +86,14 @@ def help_url(request: Request, route_name: str | None) -> str:
 
 
 def absolutize_example_urls(app: FastAPI, api_url: str) -> None:
-    """Prefix the `ErrorEnvelope` example's `help` with the public host.
+    """Rewrite each error-response example's `help` to an absolute URL
+    that deep-links into the operation's own Swagger entry.
 
-    `schemas/` declares that example with a relative path, since it may not
-    read config. This fills in the host from `API_URL` so the published
-    example shows a complete URL — a reader copying it should see the shape a
-    real response has.
+    `api/responses.ERROR_RESPONSES` declares one example per status code
+    with a relative `help` (`{API_PREFIX}/docs`). At schema-render time
+    we walk every operation's responses, prefix with `api_url`, and
+    append `#/<tag>/<operationId>` so a reader clicking the example's
+    `help` lands on the endpoint that would have produced the error.
 
     Documentation only: live `help` values are built from the incoming
     request, so they follow whatever host actually served it.
@@ -100,13 +102,25 @@ def absolutize_example_urls(app: FastAPI, api_url: str) -> None:
 
     def openapi() -> dict[str, Any]:
         schema = default_openapi()
-        example = (
-            schema.get("components", {}).get("schemas", {}).get("ErrorEnvelope", {}).get("example")
-        )
-        if isinstance(example, dict):
-            help_path = example.get("help", "")
-            if help_path.startswith("/"):
-                example["help"] = f"{api_url}{help_path}"
+        for path_item in schema.get("paths", {}).values():
+            for operation in path_item.values():
+                if not isinstance(operation, dict):
+                    continue
+                op_id = operation.get("operationId")
+                tags = operation.get("tags") or []
+                anchor = f"#/{tags[0]}/{op_id}" if op_id and tags else ""
+                for response in (operation.get("responses") or {}).values():
+                    example = (
+                        (response or {})
+                        .get("content", {})
+                        .get("application/json", {})
+                        .get("example")
+                    )
+                    if not isinstance(example, dict):
+                        continue
+                    help_path = example.get("help", "")
+                    if isinstance(help_path, str) and help_path.startswith("/"):
+                        example["help"] = f"{api_url}{help_path}{anchor}"
         return schema
 
     app.openapi = openapi  # type: ignore[method-assign]

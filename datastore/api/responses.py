@@ -11,17 +11,59 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from datastore.api.docs import help_url
+from datastore.core.constants import API_PREFIX
 from datastore.schemas.responses import ErrorEnvelope
+
 
 # Shared OpenAPI doc for the CKAN error envelope, attached at router level
 # so every action documents the real 4xx / 5xx shape instead of FastAPI's
 # default 422. The taxonomy matches `core.exceptions.APIError`.
+#
+# Each status carries its own example — otherwise Swagger reuses the one
+# example declared on `ErrorEnvelope` for every row and callers see a
+# `Validation Error` body documented against 404 / 409 / 500.
+def _error_example(type_label: str, message: str) -> dict[str, Any]:
+    return {
+        "application/json": {
+            "example": {
+                # Relative: the public host comes from `API_URL`, which only
+                # `api/docs.py` can read (`schemas/` must not import config).
+                "help": f"{API_PREFIX}/docs",
+                "success": False,
+                "error": {"__type": type_label, "message": message},
+            }
+        }
+    }
+
+
 ERROR_RESPONSES: dict[int, dict[str, Any]] = {
-    400: {"model": ErrorEnvelope, "description": "Validation Error"},
-    403: {"model": ErrorEnvelope, "description": "Authorization Error"},
-    404: {"model": ErrorEnvelope, "description": "Not Found Error"},
-    409: {"model": ErrorEnvelope, "description": "Conflict Error"},
-    500: {"model": ErrorEnvelope, "description": "Internal Error"},
+    400: {
+        "model": ErrorEnvelope,
+        "description": "Validation Error",
+        "content": _error_example("Validation Error", "resource 'foo' is not declared"),
+    },
+    403: {
+        "model": ErrorEnvelope,
+        "description": "Authorization Error",
+        "content": _error_example(
+            "Authorization Error", "user not authorized to read resource 'foo'"
+        ),
+    },
+    404: {
+        "model": ErrorEnvelope,
+        "description": "Not Found Error",
+        "content": _error_example("Not Found Error", "resource 'foo' not found"),
+    },
+    409: {
+        "model": ErrorEnvelope,
+        "description": "Conflict Error",
+        "content": _error_example("Conflict Error", "resource 'foo' already exists"),
+    },
+    500: {
+        "model": ErrorEnvelope,
+        "description": "Internal Error",
+        "content": _error_example("Internal Error", "an internal error occurred"),
+    },
 }
 
 
