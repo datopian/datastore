@@ -17,6 +17,7 @@ from datastore.schemas.validators import (
     to_json_object,
     to_str_or_json_object,
 )
+from datastore.services.sql_labels import rename_generic_sql_labels
 from datastore.services.streaming import (
     stream_csv,
     stream_lists,
@@ -154,6 +155,16 @@ async def search_sql_datastore(
         limit=limit,
     )
     schema = enrich_schema(result.schema, data_dict.get("resources"))
+    # BigQuery labels unaliased aggregates `f0_`, `f1_`, …; CKAN clients
+    # expect `count` / `sum` / `avg` / `min` / `max` for the same SQL, so
+    # the rename runs on both the Frictionless `schema.fields` (key=name)
+    # and the legacy-shaped `fields` sibling (key=id).
+    schema = {
+        **schema,
+        "fields": rename_generic_sql_labels(
+            schema.get("fields") or [], data_dict["sql"], key="name"
+        ),
+    }
     fields, _ = frictionless_schema_to_fields(schema)
 
     return stream_objects(

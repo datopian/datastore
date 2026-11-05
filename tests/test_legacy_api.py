@@ -431,6 +431,134 @@ def test_legacy_search_sql_omits_records_truncated(
     assert "records_truncated" not in response.json()["result"]
 
 
+def test_legacy_search_sql_count_label_matches_ckan_classic(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BigQuery labels an unaliased `count(*)` as `f0_`; CKAN classic
+    (which ran on Postgres) labels it `count`. The legacy endpoint must
+    use the Postgres-style label so scripts porting from real CKAN find
+    the same column id in the response. `count` returns Postgres
+    bigint → stringified value."""
+    schema = {"fields": [{"name": "f0_", "type": "integer"}]}
+    rows = [(8472,)]
+    _install_mock_search(monkeypatch, schema=schema, rows=rows)
+
+    response = client.get(
+        SEARCH_SQL_URL,
+        params={"sql": f'SELECT count(*) FROM "{_RESOURCE_ID}"'},
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert [f["id"] for f in result["fields"]] == ["count"]
+    assert result["records"] == [{"count": "8472"}]
+
+
+def test_legacy_search_sql_count_sum_avg_values_are_strings(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`count` / `sum` / `avg` cells are JSON strings — matches CKAN
+    classic where Postgres bigint (`count`, `sum`) and numeric (`avg`)
+    come out of psycopg2 stringified to preserve precision in
+    JavaScript clients."""
+    schema = {
+        "fields": [
+            {"name": "f0_", "type": "integer"},
+            {"name": "f1_", "type": "integer"},
+            {"name": "f2_", "type": "number"},
+        ]
+    }
+    rows = [(8472, 10368, 1.2237960339943343)]
+    _install_mock_search(monkeypatch, schema=schema, rows=rows)
+
+    sql = f'SELECT count(*), sum("x"), avg("x") FROM "{_RESOURCE_ID}"'
+    response = client.get(SEARCH_SQL_URL, params={"sql": sql})
+
+    result = response.json()["result"]
+    assert result["records"] == [
+        {"count": "8472", "sum": "10368", "avg": "1.2237960339943343"}
+    ]
+
+
+def test_legacy_search_sql_min_max_values_stay_native_numbers(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`min` / `max` preserve the input type, so a `min(int4)` comes
+    back as `int4` → JSON number, not a string."""
+    schema = {
+        "fields": [
+            {"name": "f0_", "type": "integer"},
+            {"name": "f1_", "type": "integer"},
+        ]
+    }
+    rows = [(1, 4)]
+    _install_mock_search(monkeypatch, schema=schema, rows=rows)
+
+    sql = f'SELECT min("x"), max("x") FROM "{_RESOURCE_ID}"'
+    response = client.get(SEARCH_SQL_URL, params={"sql": sql})
+
+    result = response.json()["result"]
+    assert result["records"] == [{"min": 1, "max": 4}]
+
+
+def test_legacy_search_sql_multiple_aggregates_each_labelled(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each unaliased aggregate position gets its function name; an
+    aliased expression keeps the user's alias; a plain column keeps its
+    engine-emitted name. Position-wise stringification: `sum` at 0 and
+    `avg` at 2 are stringified; `min` at 1 and the plain column at 3
+    pass through."""
+    schema = {
+        "fields": [
+            {"name": "f0_", "type": "integer"},
+            {"name": "f1_", "type": "number"},
+            {"name": "mean", "type": "number"},
+            {"name": "product_code", "type": "string"},
+        ]
+    }
+    rows = [(10, 4.5, 2.25, "DCL")]
+    _install_mock_search(monkeypatch, schema=schema, rows=rows)
+
+    sql = (
+        'SELECT sum("x"), min("y"), avg("y") AS mean, "product_code" '
+        f'FROM "{_RESOURCE_ID}"'
+    )
+    response = client.get(SEARCH_SQL_URL, params={"sql": sql})
+
+    result = response.json()["result"]
+    assert [f["id"] for f in result["fields"]] == [
+        "sum",
+        "min",
+        "mean",
+        "product_code",
+    ]
+    assert result["records"] == [
+        {"sum": "10", "min": 4.5, "mean": "2.25", "product_code": "DCL"}
+    ]
+
+
+def test_legacy_search_sql_full_text_suppressed_for_aggregate(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_full_text` is only injected when the SELECT list expands to the
+    whole row (`SELECT *` / `t.*`). An aggregate like `count(*)` embeds
+    a Star as a function argument, not as a whole-row projection, so the
+    response must NOT carry `_full_text`."""
+    schema = {"fields": [{"name": "f0_", "type": "integer"}]}
+    rows = [(8472,)]
+    _install_mock_search(monkeypatch, schema=schema, rows=rows)
+
+    response = client.get(
+        SEARCH_SQL_URL,
+        params={"sql": f'SELECT count(*) FROM "{_RESOURCE_ID}"'},
+    )
+
+    result = response.json()["result"]
+    assert "_full_text" not in [f["id"] for f in result["fields"]]
+    assert "_full_text" not in result["records"][0]
+
+
 def test_legacy_search_sql_post_matches_get(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

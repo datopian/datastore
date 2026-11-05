@@ -44,7 +44,9 @@ class DatastoreLegacySearchSQLRequest(DatastoreSearchSQLRequest):
         """`_full_text` only exists as a column on the underlying
         datastore table, so emit it only when the outer `SELECT *`
         is reading from a real table — not from a CTE / subquery /
-        join where the inner projection may have dropped it.
+        join where the inner projection may have dropped it, and not
+        when the only `*` is the argument to an aggregate like
+        `count(*)` (whole-row count, not whole-row projection).
         """
         import sqlglot
         from sqlglot import expressions as exp
@@ -56,10 +58,18 @@ class DatastoreLegacySearchSQLRequest(DatastoreSearchSQLRequest):
         select = tree.find(exp.Select)
         if select is None:
             return self
-        has_star = any(
-            isinstance(expr, exp.Star) or isinstance(expr.this, exp.Star)
-            for expr in select.expressions
-        )
+        # A projection item is `SELECT *` only when the item itself is
+        # the Star (bare `*`) or a `Column` whose `this` is the Star
+        # (qualified `t.*`). A Star appearing inside a function call
+        # (`count(*)`) is an aggregate argument, not a whole-row expansion.
+        def _is_projection_star(expr: exp.Expression) -> bool:
+            if isinstance(expr, exp.Star):
+                return True
+            if isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star):
+                return True
+            return False
+
+        has_star = any(_is_projection_star(expr) for expr in select.expressions)
         from_clause = select.args.get("from_")
         source = from_clause.this if from_clause else None
         cte_aliases = {cte.alias_or_name for cte in tree.find_all(exp.CTE)}

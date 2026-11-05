@@ -389,3 +389,73 @@ def test_parse_sql_pagination_optional_limit_present() -> None:
 def test_parse_sql_pagination_offset_without_limit_rejected() -> None:
     with pytest.raises(ValueError, match="OFFSET without LIMIT"):
         parse_sql_pagination("SELECT 1 OFFSET 10", require_limit=False)
+
+
+# 10. CKAN-classic SELECT-list labelling -------------------------------------
+
+
+def test_aggregate_label_renamed_from_f0_to_function_name(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BigQuery labels unaliased `count(*)` as `f0_`; CKAN classic (which
+    sat on Postgres) labels it `count`. The v2 `datastore_search_sql`
+    response must use the Postgres-style label so clients porting from
+    CKAN classic don't have to guess the engine's naming scheme."""
+    from typing import Any
+
+    from datastore.infrastructure.engines.base import SearchResult
+    from datastore.infrastructure.engines.bigquery.backend import BigQueryBackend
+
+    def fake(self: BigQueryBackend, sql: str, limit: int) -> SearchResult:
+        return SearchResult(
+            schema={"fields": [{"name": "f0_", "type": "integer"}]},
+            records=iter([(8472,)]),
+            total=None,
+            records_truncated=False,
+        )
+
+    monkeypatch.setattr(BigQueryBackend, "search_sql", fake)
+
+    response: Any = client.get(
+        SQL_URL,
+        params={
+            "sql": 'SELECT count(*) FROM "balancing_auction_results_2025" LIMIT 10'
+        },
+    )
+    assert response.status_code == 200
+
+    result = response.json()["result"]
+    assert [f["name"] for f in result["schema"]["fields"]] == ["count"]
+    assert [f["id"] for f in result["fields"]] == ["count"]
+    assert result["records"] == [{"count": 8472}]
+
+
+def test_aliased_aggregate_keeps_user_alias(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A user-supplied `AS <alias>` already comes back from BigQuery with
+    that label — the rename must NOT touch it."""
+    from typing import Any
+
+    from datastore.infrastructure.engines.base import SearchResult
+    from datastore.infrastructure.engines.bigquery.backend import BigQueryBackend
+
+    def fake(self: BigQueryBackend, sql: str, limit: int) -> SearchResult:
+        return SearchResult(
+            schema={"fields": [{"name": "my_total", "type": "integer"}]},
+            records=iter([(12,)]),
+            total=None,
+            records_truncated=False,
+        )
+
+    monkeypatch.setattr(BigQueryBackend, "search_sql", fake)
+
+    response: Any = client.get(
+        SQL_URL,
+        params={
+            "sql": 'SELECT count(*) AS my_total FROM "balancing_auction_results_2025" LIMIT 10'
+        },
+    )
+
+    result = response.json()["result"]
+    assert [f["name"] for f in result["schema"]["fields"]] == ["my_total"]

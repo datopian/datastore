@@ -62,6 +62,11 @@ from datastore.schemas.validators import (
     to_str_or_json_object,
 )
 from datastore.services.read import enrich_schema
+from datastore.services.sql_labels import (
+    rename_generic_sql_labels,
+    stringified_positions,
+    stringify_cells_at,
+)
 
 # Signed-int32 max — well under BigQuery's LIMIT ceiling, lets a legacy
 # dump without an explicit `?limit=` drain the whole table while still
@@ -217,6 +222,8 @@ def _with_full_text_field(
             pos = i + 1
             break
     return fields[:pos] + [LEGACY_FULL_TEXT_FIELD] + fields[pos:]
+
+
 
 
 def _fields_from_engine_message(message: str) -> dict[str, list[str]] | None:
@@ -457,13 +464,20 @@ async def _legacy_search_sql_impl(
     )
     schema = enrich_schema(result.schema, resources)
     fields, _ = frictionless_schema_to_fields(schema)
+    # BigQuery labels unaliased aggregates `f0_`, `f1_`, …; CKAN clients
+    # expect `count` / `sum` / `avg` / `min` / `max` for the same SQL.
+    fields = rename_generic_sql_labels(fields, params.sql, key="id")
     if params.has_select_star:
         fields = _with_full_text_field(fields)
+    # CKAN classic (on Postgres) returns `count` / `sum` as bigint and
+    # `avg` as numeric — both come out of psycopg2 as JSON strings so
+    # JavaScript clients don't lose precision. `min` / `max` preserve
+    # the input type, so they stay as JSON numbers.
     body_iter = stream_legacy_search_sql(
         help_url=_legacy_help_url(request),
         sql=params.sql,
         fields=fields,
-        records=result.records,
+        records=stringify_cells_at(result.records, stringified_positions(params.sql)),
     )
     return StreamingResponse(body_iter, media_type="application/json")
 
