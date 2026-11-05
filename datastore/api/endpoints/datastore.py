@@ -187,7 +187,7 @@ async def datastore_search_sql(
     # Collect each referenced resource's authorize payload — under
     # AUTH_TYPE=ckan it carries the resource record (with its synced
     # schema), which the service merges into the response so the output
-    # columns inherit CKAN-side data-dictionary edits by name.
+    # columns inherit CKAN-side table-schema edits by name.
     resources: list[dict] = []
     for resource_id in params.resource_ids:
         auth_result = await context.authorize(resource_id=resource_id, permission="read")

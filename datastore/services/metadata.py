@@ -1,4 +1,4 @@
-"""Data dictionary document for `<DUMP_PREFIX>/{rid}/dictionary`.
+"""Table schema document for `<DUMP_PREFIX>/{rid}/table_schema`.
 
 Small, so it's built in memory and handed to the endpoint as bytes — no
 export pipeline, no GCS. CSV and JSON carry the same content; CSV
@@ -21,12 +21,12 @@ if TYPE_CHECKING:  # type-only — no runtime import from api/
     from datastore.api.context import RequestContext
 
 
-# Frictionless field properties that lead the dictionary CSV, in this
+# Frictionless field properties that lead the table schema CSV, in this
 # order; any other property a field carries follows in first-seen order.
-_DICTIONARY_LEADING_COLUMNS = ("name", "type", "title", "description")
+_TABLE_SCHEMA_LEADING_COLUMNS = ("name", "type", "title", "description")
 
 # Engine-managed columns every table carries but no user schema declares.
-# The dictionary lists them where downloads and `datastore_search` put
+# The table schema lists them where downloads and `datastore_search` put
 # them: `_id` first, `_updated_at` last.
 _ID_FIELD = {
     "name": "_id",
@@ -42,7 +42,9 @@ _UPDATED_AT_FIELD = {
 }
 
 
-async def dictionary_document(context: RequestContext, data_dict: dict[str, Any]) -> dict[str, Any]:
+async def table_schema_document(
+    context: RequestContext, data_dict: dict[str, Any]
+) -> dict[str, Any]:
     """The resource's Frictionless Table Schema — the same `schema`
     `datastore_info` returns (CKAN's copy under `AUTH_TYPE=ckan`, else
     the engine's), plus the system columns."""
@@ -50,10 +52,10 @@ async def dictionary_document(context: RequestContext, data_dict: dict[str, Any]
     return _with_system_fields(result.schema, context.config.INCLUDE_UPDATED_AT)
 
 
-def dictionary_csv(schema: dict[str, Any]) -> bytes:
+def table_schema_csv(schema: dict[str, Any]) -> bytes:
     """One row per field, one column per field property."""
     fields = [f for f in schema.get("fields") or [] if isinstance(f, dict)]
-    columns = [c for c in _DICTIONARY_LEADING_COLUMNS if any(c in f for f in fields)]
+    columns = [c for c in _TABLE_SCHEMA_LEADING_COLUMNS if any(c in f for f in fields)]
     for f in fields:
         columns.extend(key for key in f if key not in columns)
     return _csv_bytes(columns, fields)

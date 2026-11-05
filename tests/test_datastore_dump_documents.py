@@ -1,4 +1,4 @@
-"""Tests for `GET <DUMP_PREFIX>/{resource_id}/dictionary`.
+"""Tests for `GET <DUMP_PREFIX>/{resource_id}/table_schema`.
 
 The document is built in memory and served as a 200 file: the resource's
 schema (CKAN's copy under `AUTH_TYPE=ckan`) plus the system columns.
@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import FakeCKAN
 
 RESOURCE_ID = "balancing_auction_results_2025"
-DICTIONARY_URL = f"{DUMP_PREFIX}/{RESOURCE_ID}/dictionary"
+TABLE_SCHEMA_URL = f"{DUMP_PREFIX}/{RESOURCE_ID}/table_schema"
 
 SCHEMA = {
     "fields": [
@@ -70,16 +70,16 @@ def _csv_rows(body: bytes) -> list[list[str]]:
     return list(csv.reader(io.StringIO(body.decode("utf-8"))))
 
 
-# --- dictionary -------------------------------------------------------------
+# --- table_schema -----------------------------------------------------------
 
 
-def test_dictionary_csv_has_a_row_per_field(client: TestClient, seeded: FakeCKAN) -> None:
-    response = client.get(DICTIONARY_URL)
+def test_table_schema_csv_has_a_row_per_field(client: TestClient, seeded: FakeCKAN) -> None:
+    response = client.get(TABLE_SCHEMA_URL)
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/csv; charset=utf-8"
     assert response.headers["content-disposition"] == (
-        'attachment; filename="Auction Results_data_dictionary.csv"'
+        'attachment; filename="Auction Results_table_schema.csv"'
     )
     header, *rows = _csv_rows(response.content)
     assert header == ["name", "type", "title", "description", "constraints", "unit"]
@@ -112,14 +112,14 @@ def test_dictionary_csv_has_a_row_per_field(client: TestClient, seeded: FakeCKAN
     ]
 
 
-def test_dictionary_json_is_the_schema_plus_system_columns(
+def test_table_schema_json_is_the_schema_plus_system_columns(
     client: TestClient, seeded: FakeCKAN
 ) -> None:
-    response = client.get(DICTIONARY_URL, params={"format": "json"})
+    response = client.get(TABLE_SCHEMA_URL, params={"format": "json"})
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/json"
-    assert response.headers["content-disposition"].endswith('_data_dictionary.json"')
+    assert response.headers["content-disposition"].endswith('_table_schema.json"')
     assert response.json() == {
         **SCHEMA,
         "fields": [_ID_FIELD, *SCHEMA["fields"], _UPDATED_AT_FIELD],
@@ -143,9 +143,9 @@ def test_system_fields_replace_declared_ones() -> None:
     assert names == ["_id", "a", "_updated_at"]
 
 
-def test_dictionary_without_schema_is_header_only(client: TestClient) -> None:
+def test_table_schema_without_schema_is_header_only(client: TestClient) -> None:
     """Placeholder engine + no CKAN schema → no fields, still a valid file."""
-    response = client.get(DICTIONARY_URL)
+    response = client.get(TABLE_SCHEMA_URL)
 
     assert response.status_code == 200
     assert response.content == b"\r\n"
@@ -155,14 +155,14 @@ def test_dictionary_without_schema_is_header_only(client: TestClient) -> None:
 
 
 def test_unknown_format_is_rejected(client: TestClient) -> None:
-    response = client.get(DICTIONARY_URL, params={"format": "parquet"})
+    response = client.get(TABLE_SCHEMA_URL, params={"format": "parquet"})
 
     assert response.status_code == 400
     assert response.json()["success"] is False
 
 
 def test_unknown_resource_is_404(client: TestClient) -> None:
-    response = client.get(f"{DUMP_PREFIX}/no_such_resource/dictionary")
+    response = client.get(f"{DUMP_PREFIX}/no_such_resource/table_schema")
 
     assert response.status_code == 404
 
@@ -170,13 +170,13 @@ def test_unknown_resource_is_404(client: TestClient) -> None:
 def test_denied_key_is_403(client: TestClient, fake_ckan: FakeCKAN) -> None:
     fake_ckan.deny("test-token")
 
-    response = client.get(f"{DUMP_PREFIX}/{RESOURCE_ID}/dictionary")
+    response = client.get(f"{DUMP_PREFIX}/{RESOURCE_ID}/table_schema")
 
     assert response.status_code == 403
 
 
-def test_analytics_names_the_dictionary_download() -> None:
-    assert action_name(f"{DUMP_PREFIX}/res-1/dictionary") == "datastore_dump_dictionary"
+def test_analytics_names_the_table_schema_download() -> None:
+    assert action_name(f"{DUMP_PREFIX}/res-1/table_schema") == "datastore_dump_table_schema"
     # Metadata is served by CKAN, so it is not a distinct datastore action.
     assert action_name(f"{DUMP_PREFIX}/res-1/metadata") == "datastore_dump"
 

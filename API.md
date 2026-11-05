@@ -78,7 +78,7 @@ token (except under `anonymous`).
 | GET | `/datastore/api/v2/dump/query` | Download the result of a SQL `SELECT` as a file |
 | GET | `/datastore/api/v2/datastore_info` | Schema + row stats for a resource |
 | GET | `/datastore/api/v2/dump/{resource_id}` | Download a whole resource (CSV/NDJSON/Parquet) |
-| GET | `/datastore/api/v2/dump/{resource_id}/dictionary` | Download a resource's data dictionary (CSV/JSON) |
+| GET | `/datastore/api/v2/dump/{resource_id}/table_schema` | Download a resource's table schema (CSV/JSON) |
 | GET | `/datastore/api/health` · `/datastore/api/ready` | Liveness / readiness |
 
 ---
@@ -112,7 +112,7 @@ existing resource adds columns and widens types (see below).
 `string`, `boolean`, `date`, `datetime`, `time`, `object`, `array`, `geopoint`,
 `geojson`, `any`) or SQL aliases (`int4`, `bigint`, `varchar`, `text`, `float`,
 `numeric`, `bool`, `timestamp`, `json`, …), normalised to canonical on storage.
-Each field may carry an `info` data dictionary (`title`, `description`,
+Each field may carry an `info` table schema (`title`, `description`,
 `comment`, `example`, `unit`, plus custom keys), stored verbatim and
 round-tripped by `datastore_info`.
 
@@ -355,7 +355,7 @@ refuses DML/DDL.
 
 ## `GET /datastore/api/v2/datastore_info`
 
-Returns the column schema (including the `info` data dictionary, verbatim) plus
+Returns the column schema (including the `info` table schema, verbatim) plus
 row stats — a column-level metadata catalog without a side store.
 
 ### Query parameters
@@ -423,9 +423,9 @@ by this URL.
 
 ---
 
-## `GET /datastore/api/v2/dump/{resource_id}/dictionary`
+## `GET /datastore/api/v2/dump/{resource_id}/table_schema`
 
-Download the resource's data dictionary. `?format=csv` (default) or `json`.
+Download the resource's table schema. `?format=csv` (default) or `json`.
 Unlike the table dump this is served directly (`200`, no redirect) — the file
 is small and built in memory.
 
@@ -436,7 +436,7 @@ is small and built in memory.
   first seen. Nested values (e.g. `constraints`) are written as compact JSON
   in their cell (`text/csv; charset=utf-8`).
 
-Named `<name>_data_dictionary.<format>`, where `<name>` follows the table
+Named `<name>_table_schema.<format>`, where `<name>` follows the table
 dump's naming (uploaded filename, else `download_filename`, else the resource
 id). Requires `read` permission on the resource.
 

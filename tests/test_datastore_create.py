@@ -451,7 +451,7 @@ def test_create_on_readonly_resource_with_force_succeeds(
 def test_forced_create_on_upload_keeps_url_and_last_modified(
     client: TestClient, fake_ckan: FakeCKAN
 ) -> None:
-    """Updating the data dictionary of an uploaded resource must not rewrite
+    """Updating the table schema of an uploaded resource must not rewrite
     its file `url` or `last_modified` — CKAN reads either as a new upload and
     ckanext-aircan would re-run the ingestion pipeline."""
     fake_ckan.add_resource(

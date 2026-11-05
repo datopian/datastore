@@ -158,7 +158,7 @@ def fields_to_frictionless_schema(
       - `info` is unpacked: recognised keys (`title`, `description`) move
         to top-level Frictionless properties; the rest stays nested
         under a custom `info` key so `frictionless_schema_to_fields`
-        can round-trip the data dictionary intact (previously these
+        can round-trip the table schema intact (previously these
         extras were spread onto the field and silently lost on the
         reverse path).
 
@@ -205,7 +205,7 @@ def frictionless_schema_to_fields(
     `FRICTIONLESS_TO_POSTGRES` (defaults to `text`) for the outer `type`,
     and is *also* surfaced as `info.type` (the canonical Frictionless type)
     so a client reading the legacy shape can recover it — the outer alias is
-    lossy (e.g. `integer` → `int8`). The recognised data-dictionary keys
+    lossy (e.g. `integer` → `int8`). The recognised table-schema keys
     (`_FIELD_METADATA_KEYS`: title, description, comment, unit, example) move
     from the field's top level into `info`, carried by presence so a declared
     `unit: null` round-trips; any extras saved under a nested `info` are
@@ -460,7 +460,7 @@ class FieldSpec(BaseModel):
     - `id`   — SQL-safe identifier (required).
     - `type` — optional PostgreSQL type; aliases (`integer`, `bigint`, `varchar`,
       …) are normalised to their canonical Postgres form.
-    - `info` — optional free-form data dictionary (title, description, unit, …).
+    - `info` — optional free-form table schema (title, description, unit, …).
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -433,7 +433,7 @@ Each endpoint takes a single `ContextDep`. The handler calls `context.authorize(
 | GET  | `/datastore/api/v2/dump/query` | **implemented** | `sql=<SELECT…>`, `format=csv\|gzip\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
 | GET  | `/datastore/api/v2/datastore_info` | **implemented** | `DatastoreInfoRequest` | `DatastoreInfoResponse` |
 | GET  | `/datastore/api/v2/dump/{resource_id}` | **implemented** | `format=csv\|ndjson\|parquet` | 302 → GCS *or* streaming body (see §5.3) |
-| GET  | `/datastore/api/v2/dump/{resource_id}/dictionary` | **implemented** | `format=csv\|json` | 200 file — the resource's schema (`services/metadata.py`) |
+| GET  | `/datastore/api/v2/dump/{resource_id}/table_schema` | **implemented** | `format=csv\|json` | 200 file — the resource's schema (`services/metadata.py`) |
 
 The BigQuery engine is wired end-to-end: DDL, MERGE-based upsert, DML delete, parameterised search, native table-level metadata (the Frictionless schema + unique_key are JSON-encoded into the table's own `description` OPTION) for the schema round-trip, a row-count fast path via `INFORMATION_SCHEMA.TABLE_STORAGE`, and `EXPORT DATA`-backed dump with `table.modified`-keyed GCS caching. The DuckLake engine is the next concrete adapter — see §7.
 
@@ -639,7 +639,7 @@ is easy to follow.
 - `fields` — non-empty; each entry contains:
   - `id` (or alias `name`) — column identifier; SQL-safe.
   - `type` — column type. Accepts Frictionless canonical (`integer`, `number`, `string`, `boolean`, `date`, `datetime`, `time`, `object`, `array`, `geopoint`, `geojson`, `any`) or SQL aliases (`int4`, `int8`, `bigint`, `varchar`, `text`, `float`, `double`, `numeric`, `bool`, `timestamp`, `json`, …) which are normalised to canonical on storage.
-  - `info` — optional **data dictionary** for documentation. Free-form object; recognised keys: `title`, `description`, `comment`, `example`, `unit`, plus any custom metadata. Stored verbatim and round-tripped on `datastore_info`. The outer `type` is canonical; any `info.type` is treated as a hint and ignored. Whitespace in string values is trimmed.
+  - `info` — optional **table schema** for documentation. Free-form object; recognised keys: `title`, `description`, `comment`, `example`, `unit`, plus any custom metadata. Stored verbatim and round-tripped on `datastore_info`. The outer `type` is canonical; any `info.type` is treated as a hint and ignored. Whitespace in string values is trimmed.
 - `unique_key` — string or list of strings; all entries must reference declared field ids. The example uses a composite key (`auction_id` + `product_code`) since one auction clears multiple products.
 - `records` — optional; each record's keys must be a subset of declared field ids.
 - `primary_key` — accepted for back-compat; emits deprecation warning.
@@ -894,7 +894,7 @@ can confirm the table's new shape without a follow-up `datastore_info`:
 ### 6.6 `GET /datastore/api/v2/datastore_info`
 
 Returns the same field shape that was supplied to `datastore_create`, including
-the `info` data dictionary verbatim — clients can use this as a column-level
+the `info` table schema verbatim — clients can use this as a column-level
 metadata catalog (titles, descriptions, units, examples) without a side store.
 The two engine-managed system columns (`_id`, `_updated_at`) are prepended
 to `fields` with service-provided `info` so every read endpoint carries the
