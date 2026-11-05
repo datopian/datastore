@@ -13,6 +13,7 @@ Without it, the stream crashes mid-row with
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from datastore.services.streaming import (
@@ -67,6 +68,29 @@ def test_records_array_array_serialises_decimal_and_bytes() -> None:
 
     assert records == [["DCL", 47.82, "AP8="]]
     assert isinstance(records[0][1], float)
+
+
+def test_datetime_drops_microseconds_and_offset() -> None:
+    """`datastore_search_sql` returns live `datetime` objects (no engine
+    cast). They must serialise to the same `YYYY-MM-DDTHH:MM:SS` shape
+    `datastore_search` emits via `FORMAT_TIMESTAMP` — no fractional
+    seconds, no `+00:00` offset — so the two endpoints agree on the
+    wire shape of `_updated_at` and any user TIMESTAMP column."""
+    rows = iter(
+        [
+            (datetime(2025, 11, 4, 16, 0, 0, 123456, tzinfo=timezone.utc),),
+            (datetime(2025, 11, 4, 16, 0, 0, tzinfo=timezone.utc),),
+            (datetime(2025, 11, 4, 16, 0, 0, 999999),),  # naive
+        ]
+    )
+
+    body = _join(list(_records_array_array(rows)))
+
+    assert json.loads(body) == [
+        ["2025-11-04T16:00:00"],
+        ["2025-11-04T16:00:00"],
+        ["2025-11-04T16:00:00"],
+    ]
 
 
 def test_unsupported_type_still_raises() -> None:

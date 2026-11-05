@@ -82,10 +82,14 @@ def _json_default(obj: Any) -> Any:
     if isinstance(obj, datetime):
         # Normalise aware datetimes to UTC first, then drop tzinfo so
         # the serialised form has no offset — same contract
-        # `format_select_column` emits.
+        # `format_select_column` emits. Microseconds are dropped too:
+        # BigQuery TIMESTAMP keeps them, so `datastore_search_sql`
+        # (raw SQL, no engine cast) otherwise emits
+        # `YYYY-MM-DDTHH:MM:SS.ffffff` while `datastore_search` emits
+        # `YYYY-MM-DDTHH:MM:SS` for the same cell.
         if obj.tzinfo is not None:
             obj = obj.astimezone(timezone.utc).replace(tzinfo=None)
-        return obj.isoformat()
+        return obj.replace(microsecond=0).isoformat()
     if isinstance(obj, date):
         return obj.isoformat()
     if isinstance(obj, time):
