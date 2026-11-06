@@ -27,6 +27,37 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
+def _check_primary_keys_populated(
+    schema: dict[str, Any], records: list[dict[str, Any]]
+) -> list[str]:
+    """List records that leave any primary-key column empty or absent.
+
+    Frictionless' own primary-key check only fires when every key cell is
+    empty, so a composite key with one part missing slips through. The engine
+    then writes a row whose key is NULL; NULL never equals anything, so each
+    resend inserts a new duplicate instead of updating the existing row.
+    """
+    pk = schema.get("primaryKey")
+    key_columns = [pk] if isinstance(pk, str) else [str(c) for c in (pk or [])]
+    if not key_columns:
+        return []
+
+    messages: list[str] = []
+    for index, record in enumerate(records, start=1):
+        empty = [
+            col
+            for col in key_columns
+            if record.get(col) is None
+            or (isinstance(record.get(col), str) and not record[col].strip())
+        ]
+        if empty:
+            messages.append(
+                f"Record {index}: missing value for primary key column(s): "
+                + ", ".join(empty)
+            )
+    return messages
+
+
 def _validate_records(
     resource_id: str,
     schema: dict[str, Any],
@@ -40,6 +71,13 @@ def _validate_records(
     """
     if not records or not schema.get("fields"):
         return
+
+    key_messages = _check_primary_keys_populated(schema, records)
+    if key_messages:
+        raise ValidationError(
+            f"Provided records do not conform to the schema for resource {resource_id!r}",
+            fields={"records": key_messages[:100]},
+        )
 
     try:
         schema_obj = Schema.from_descriptor(schema)
