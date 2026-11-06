@@ -26,11 +26,11 @@ from datastore.core.constants import (
     DocumentFormat,
     DumpFormat,
 )
-from datastore.core.exceptions import ServerError
+from datastore.core.exceptions import ServerError, ValidationError
 from datastore.core.helper import content_disposition, dump_filename_base
 from datastore.infrastructure.engines import get_datastore_engine
 from datastore.schemas.request import DatastoreDumpSQLRequest
-from datastore.schemas.validators import ResourceId
+from datastore.schemas.validators import ResourceId, to_csv_list
 from datastore.services.metadata import (
     json_bytes,
     table_schema_csv,
@@ -164,19 +164,38 @@ async def dump(
     context: Context,
     resource_id: ResourceId,
     fmt: Annotated[DumpFormat, Query(alias="format")] = "csv",
+    fields: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Columns to download, in this order. Accepts a comma-separated "
+                'string (`a,b,c`) or a JSON array of strings (`["a","b"]`). '
+                "Default: every column. Every row is still downloaded."
+            ),
+            examples=["auctionID,deliveryStart,clearingPrice"],
+        ),
+    ] = None,
 ):
-    """Download an entire resource; pick the format with `?format=`.
+    """Download an entire resource; pick the format with `?format=` and,
+    optionally, the columns with `?fields=`.
 
     The file is named after the uploaded file for `url_type: upload`
     resources, else the resource's `download_filename`; when neither is
-    available, after the resource id."""
+    available, after the resource id. A `fields` download gets a
+    `_selected_columns` suffix."""
+    try:
+        field_names = to_csv_list(fields)
+    except ValueError as e:
+        raise ValidationError(f"fields: {e}") from e
     authorized = await context.authorize(resource_id=resource_id, permission="read")
     # Live resource: the cached one still holds the pre-replace url.
     resource = await context.fresh_resource(resource_id, authorized.get("resource"))
     filename_base = dump_filename_base(resource, DUMP_EXTENSIONS[fmt]) or resource_id
+    if field_names:
+        filename_base = f"{filename_base}_selected_columns"
     engine = get_datastore_engine(context, mode="ro")
 
-    urls = await engine.dump(resource_id, fmt, filename_base=filename_base)
+    urls = await engine.dump(resource_id, fmt, filename_base=filename_base, fields=field_names)
     return download_response(request, urls, fmt, filename_base)
 
 
