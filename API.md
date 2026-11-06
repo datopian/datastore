@@ -392,12 +392,6 @@ row stats — a column-level metadata catalog without a side store.
 Download an entire resource. Pick the format with `?format=csv` (default),
 `gzip`, `ndjson`, or `parquet`.
 
-To leave columns out, list the ones to keep with `?fields=` — a comma-separated
-string (`fields=auctionID,deliveryStart`) or a JSON array of strings. Columns
-come out in the order given; every row is still downloaded. An unknown column
-name is a `400`. The file name gets a `_selected_columns` suffix, and each
-column subset is cached separately from the whole-table file.
-
 This route returns a **file**, never the JSON envelope — the only JSON it can
 produce is an error. The content type comes from the signed GCS URL and
 follows `format`:

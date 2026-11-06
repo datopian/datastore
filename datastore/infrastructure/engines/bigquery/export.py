@@ -113,21 +113,11 @@ _FORMAT_HINT = "`format=csv` or `format=ndjson`"
 
 
 async def dump(
-    backend: Any,
-    resource_id: str,
-    fmt: str,
-    *,
-    filename_base: str | None = None,
-    fields: list[str] | None = None,
+    backend: Any, resource_id: str, fmt: str, *, filename_base: str | None = None
 ) -> list[str]:
     """Whole-table download → signed URLs. Cache key
     `dumps/<rid>/<fmt>/<rev>/` with `rev` = `table.modified`. The name
-    only lives in the signed URL, so it doesn't affect the cache.
-
-    `fields` narrows the download to those columns, in the given order
-    (every row is still exported). A column subset is cached apart from
-    the whole table, under `dumps/<rid>/fields-<fhash>/<fmt>/<rev>/`,
-    with `fhash` = hash of the column list."""
+    only lives in the signed URL, so it doesn't affect the cache."""
     if backend.client is None:
         return []
 
@@ -138,23 +128,17 @@ async def dump(
     # read and every request exports.
     cacheable = table.modified is not None
     rev = f"{int(table.modified.timestamp() * 1_000_000):x}" if cacheable else uuid4().hex[:12]
+    prefix = f"{_EXPORT_ROOT}/{resource_id}/{fmt}/{rev}/"
     source = f"`{backend.config.BIGQUERY_PROJECT}.{backend.config.BIGQUERY_DATASET}.{resource_id}`"
 
-    if fields:
-        columns = _select_dump_columns(table.schema, fields)
-        fhash = hashlib.sha256("\0".join(f.name for f in columns).encode()).hexdigest()[:16]
-        key = f"{_EXPORT_ROOT}/{resource_id}/fields-{fhash}/{fmt}/"
-    else:
-        columns = _dump_column_order(table.schema)
-        key = f"{_EXPORT_ROOT}/{resource_id}/{fmt}/"
-    prefix = f"{key}{rev}/"
+    columns = _dump_column_order(table.schema)
 
     async def build_export_sql(uri: str) -> tuple[str, bytes | None]:
         # Schema is already known from get_table — no dry run needed.
         sql = _export_data_sql(
             uri,
             fmt,
-            _export_select_list(columns, fmt, allow_star=not fields),
+            _export_select_list(columns, fmt),
             source=source,
             suffix=" ORDER BY `_id`",
         )
@@ -168,7 +152,7 @@ async def dump(
         fmt=fmt,
         cacheable=cacheable,
         build_export_sql=build_export_sql,
-        sweep_prefix=key,
+        sweep_prefix=f"{_EXPORT_ROOT}/{resource_id}/{fmt}/",
         filename_base=filename_base or resource_id,
         what=f"resource {resource_id!r}",
     )
@@ -650,19 +634,7 @@ def _dump_column_order(schema: Any) -> list[Any]:
     ]
 
 
-def _select_dump_columns(schema: Any, fields: list[str]) -> list[Any]:
-    """The table columns named by `fields`, in `fields` order, duplicates
-    dropped. An unknown name is the caller's mistake → 400."""
-    by_name = {f.name: f for f in schema}
-    unknown = [name for name in fields if name not in by_name]
-    if unknown:
-        raise ValidationError(
-            "unknown field(s): " + ", ".join(repr(name) for name in unknown),
-        )
-    return [by_name[name] for name in dict.fromkeys(fields)]
-
-
-def _export_select_list(schema: Any, fmt: str, *, allow_star: bool = True) -> str:
+def _export_select_list(schema: Any, fmt: str) -> str:
     """SELECT column list for an export.
 
     Every format applies the same `format_select_column` casts as
@@ -674,12 +646,11 @@ def _export_select_list(schema: Any, fmt: str, *, allow_star: bool = True) -> st
     while csv/ndjson rendered a whole-second ISO string - the same row
     came back as `...T07:08:35` in csv and `...T07:08:35.908256` in
     parquet. `*` is still emitted when there is nothing to cast, which
-    keeps the common case free of a column list. `allow_star=False`
-    (a column subset) always gets the explicit list.
+    keeps the common case free of a column list.
     """
     fields = list(schema)
     if fmt == "parquet":
-        if allow_star and not any(
+        if not any(
             (f.field_type or "").upper() in ("JSON", "TIMESTAMP", "DATETIME") for f in fields
         ):
             return "*"
