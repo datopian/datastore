@@ -19,14 +19,12 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 from datastore.core.constants import DUMP_PREFIX
-from datastore.core.exceptions import ValidationError
 from datastore.infrastructure.engines.bigquery import BigQueryBackend
 from datastore.infrastructure.engines.bigquery.export import (
     _csv_header_bytes,
     _dump_column_order,
     _export_select_list,
     _is_export_too_large,
-    _select_dump_columns,
 )
 from fastapi.testclient import TestClient
 
@@ -40,22 +38,10 @@ def _patch_dump(urls_or_exc: list[str] | Exception, calls: list[dict[str, Any]] 
     arguments are appended to `calls` when given."""
 
     async def fake(
-        self: BigQueryBackend,
-        resource_id: str,
-        fmt: str,
-        *,
-        filename_base: str | None = None,
-        fields: list[str] | None = None,
+        self: BigQueryBackend, resource_id: str, fmt: str, *, filename_base: str | None = None
     ) -> list[str]:
         if calls is not None:
-            calls.append(
-                {
-                    "resource_id": resource_id,
-                    "fmt": fmt,
-                    "filename_base": filename_base,
-                    "fields": fields,
-                }
-            )
+            calls.append({"resource_id": resource_id, "fmt": fmt, "filename_base": filename_base})
         if isinstance(urls_or_exc, Exception):
             raise urls_or_exc
         return urls_or_exc
@@ -180,7 +166,6 @@ def test_dump_uses_download_filename(client: TestClient, fake_ckan: FakeCKAN) ->
         "resource_id": "balancing_auction_results_2025",
         "fmt": "gzip",
         "filename_base": "Auction Results",
-        "fields": None,
     }
 
 
@@ -249,40 +234,6 @@ def test_sharded_parquet_zip_uses_download_filename(
 
 
 # --- error paths ----------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "fields",
-    ["auctionID,deliveryStart", " auctionID , deliveryStart ", '["auctionID","deliveryStart"]'],
-)
-def test_dump_passes_fields_and_suffixes_filename(client: TestClient, fields: str) -> None:
-    """`?fields=` reaches the engine as a list (comma-separated or JSON
-    array) and the file is marked as a column subset."""
-    calls: list[dict[str, Any]] = []
-    with _patch_dump(["https://signed"], calls):
-        response = client.get(DUMP_URL, params={"fields": fields}, follow_redirects=False)
-    assert response.status_code == 302
-    assert calls[0]["fields"] == ["auctionID", "deliveryStart"]
-    assert calls[0]["filename_base"].endswith("_selected_columns")
-
-
-@pytest.mark.parametrize("params", [{}, {"fields": ""}])
-def test_dump_without_fields_downloads_every_column(
-    client: TestClient, params: dict[str, str]
-) -> None:
-    calls: list[dict[str, Any]] = []
-    with _patch_dump(["https://signed"], calls):
-        client.get(DUMP_URL, params=params, follow_redirects=False)
-    assert calls[0]["fields"] is None
-    assert not calls[0]["filename_base"].endswith("_selected_columns")
-
-
-def test_dump_with_malformed_fields_returns_validation_error(client: TestClient) -> None:
-    calls: list[dict[str, Any]] = []
-    with _patch_dump(["https://signed"], calls):
-        response = client.get(DUMP_URL, params={"fields": "[not json"})
-    assert response.status_code == 400
-    assert calls == []
 
 
 def test_unknown_format_returns_validation_error(client: TestClient) -> None:
@@ -670,74 +621,6 @@ def test_dump_cache_key_changes_when_table_modified_advances() -> None:
     second_prefix = bucket_obj.list_blobs.call_args_list[-2].kwargs["prefix"]
 
     assert first_prefix != second_prefix, "table.modified change must produce a different cache key"
-
-
-def test_select_dump_columns_keeps_requested_order_and_drops_duplicates() -> None:
-    schema = [_bq_field("_id", "INT64"), _bq_field("a", "STRING"), _bq_field("b", "INT64")]
-    assert [f.name for f in _select_dump_columns(schema, ["b", "_id", "b"])] == ["b", "_id"]
-
-
-def test_select_dump_columns_rejects_unknown_names() -> None:
-    schema = [_bq_field("a", "STRING")]
-    with pytest.raises(ValidationError, match="'nope'"):
-        _select_dump_columns(schema, ["a", "nope"])
-
-
-def test_build_export_select_parquet_subset_never_returns_star() -> None:
-    schema = [_bq_field("id", "INT64")]
-    assert _export_select_list(schema, "parquet", allow_star=False) == "`id`"
-
-
-def test_dump_with_fields_exports_only_those_columns_under_own_cache_key() -> None:
-    """A column subset selects just those columns, keeps every row
-    (ORDER BY `_id`, no WHERE), and caches/sweeps under its own
-    `fields-<hash>` prefix so it never serves or deletes the whole-table file."""
-    import asyncio
-
-    backend, storage_client = _engine_with_storage([])
-    table = backend.client.get_table.return_value
-    table.schema = [
-        _bq_field("_id", "INT64"),
-        _bq_field("_updated_at", "TIMESTAMP"),
-        _bq_field("a", "STRING"),
-        _bq_field("b", "INT64"),
-    ]
-    bucket_obj = storage_client.bucket.return_value
-    new_blob = _fake_blob("dumps/res-1/fields-x/csv/<rev>_000.csv")
-    bucket_obj.list_blobs.side_effect = [[], [new_blob], [new_blob]]
-    backend.client.query.return_value = MagicMock()
-
-    async def go() -> None:
-        await backend.dump("res-1", "csv", fields=["b", "a"])
-        if backend._cleanup_tasks:
-            await asyncio.gather(*list(backend._cleanup_tasks))
-
-    asyncio.run(go())
-
-    sql = backend.client.query.call_args.args[0]
-    select = sql.split(" AS SELECT ", 1)[1]
-    assert select.startswith("`b`, `a` FROM ")
-    assert "WHERE" not in select
-    assert select.endswith("ORDER BY `_id`")
-    prefixes = [c.kwargs["prefix"] for c in bucket_obj.list_blobs.call_args_list]
-    assert all(p.startswith("dumps/res-1/fields-") for p in prefixes)
-    assert not any(p.startswith("dumps/res-1/csv/") for p in prefixes)
-    # The header names only the selected columns.
-    composed = bucket_obj.blob.return_value
-    assert any(
-        call.args and call.args[0] == b"b,a\n"
-        for call in composed.upload_from_string.call_args_list
-    )
-
-
-def test_dump_with_unknown_field_returns_validation_error_before_export() -> None:
-    import asyncio
-
-    backend, _ = _engine_with_storage([])
-    backend.client.get_table.return_value.schema = [_bq_field("a", "STRING")]
-    with pytest.raises(ValidationError):
-        asyncio.run(backend.dump("res-1", "csv", fields=["nope"]))
-    backend.client.query.assert_not_called()
 
 
 # --- test infrastructure --------------------------------------------------
