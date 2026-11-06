@@ -127,10 +127,17 @@ class DatastoreBackend(ABC):
 
     @abstractmethod
     async def dump(
-        self, resource_id: str, fmt: str, *, filename_base: str | None = None
+        self,
+        resource_id: str,
+        fmt: str,
+        *,
+        filename_base: str | None = None,
+        fields: list[str] | None = None,
     ) -> list[str]:
         """Download a table as CSV/NDJSON/Parquet. The file is named
-        `filename_base` (default: `resource_id`) plus the format's extension."""
+        `filename_base` (default: `resource_id`) plus the format's extension.
+        `fields` limits the download to those columns, in that order
+        (default: every column)."""
 
     @abstractmethod
     async def dump_sql(
