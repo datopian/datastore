@@ -27,6 +27,31 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
+# Columns the engine manages itself; a caller may echo them back in a record.
+_SYSTEM_COLUMNS = frozenset({"_id", "_updated_at"})
+
+
+def _check_columns_exist(schema: dict[str, Any], records: list[dict[str, Any]]) -> list[str]:
+    """List records that carry a column the stored schema does not have.
+
+    The write SQL is built from the stored schema, so an unknown key is dropped
+    without a word and the caller sees success while the data is lost. A column
+    must be created with `datastore_create` before data is published to it.
+    """
+    known = {str(f.get("name")) for f in schema.get("fields", [])} | _SYSTEM_COLUMNS
+
+    messages: list[str] = []
+    for index, record in enumerate(records, start=1):
+        unknown = sorted(str(k) for k in record if k not in known)
+        if unknown:
+            messages.append(
+                f"Record {index}: column(s) not in the resource schema: "
+                + ", ".join(unknown)
+                + ". Create them with datastore_create before upserting data."
+            )
+    return messages
+
+
 def _check_primary_keys_populated(
     schema: dict[str, Any], records: list[dict[str, Any]]
 ) -> list[str]:
@@ -52,8 +77,7 @@ def _check_primary_keys_populated(
         ]
         if empty:
             messages.append(
-                f"Record {index}: missing value for primary key column(s): "
-                + ", ".join(empty)
+                f"Record {index}: missing value for primary key column(s): " + ", ".join(empty)
             )
     return messages
 
@@ -62,6 +86,8 @@ def _validate_records(
     resource_id: str,
     schema: dict[str, Any],
     records: list[dict[str, Any]],
+    *,
+    reject_unknown_columns: bool = False,
 ) -> None:
     """Validate in-memory records against a stored Frictionless schema.
 
@@ -73,6 +99,8 @@ def _validate_records(
         return
 
     key_messages = _check_primary_keys_populated(schema, records)
+    if reject_unknown_columns:
+        key_messages += _check_columns_exist(schema, records)
     if key_messages:
         raise ValidationError(
             f"Provided records do not conform to the schema for resource {resource_id!r}",
@@ -235,7 +263,14 @@ async def upsert_datastore(
 
     engine = get_datastore_engine(context, mode="rw")
     info = await asyncio.to_thread(engine.info, resource_id)
-    _validate_records(resource_id=resource_id, schema=info.schema, records=records)
+    # Upsert never changes the column set; `datastore_create` does. Create
+    # keeps accepting records because it defines the schema they are checked on.
+    _validate_records(
+        resource_id=resource_id,
+        schema=info.schema,
+        records=records,
+        reject_unknown_columns=True,
+    )
 
     write_result = await asyncio.to_thread(
         engine.upsert,

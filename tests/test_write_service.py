@@ -489,6 +489,80 @@ def test_upsert_accepts_fully_populated_composite_key(
     assert result is not None
 
 
+@pytest.mark.parametrize("method", ["upsert", "insert", "update"])
+def test_upsert_rejects_unknown_column_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    from datastore.infrastructure.engines.bigquery import BigQueryBackend
+
+    schema = {"fields": [{"name": "date", "type": "string"}, {"name": "cp", "type": "string"}]}
+    writes: list[list[dict[str, Any]]] = []
+    monkeypatch.setattr(
+        BigQueryBackend,
+        "info",
+        lambda self, resource_id: InfoResult(schema=schema, meta={}),
+    )
+    monkeypatch.setattr(
+        BigQueryBackend,
+        "upsert",
+        lambda self, **kwargs: writes.append(kwargs["records"]) or {"total": 1},
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        asyncio.run(
+            upsert_datastore(
+                _ctx(),
+                {
+                    "resource_id": "res-1",
+                    "records": [{"date": "2026-08-22", "cp": "A", "extra": 1}],
+                    "method": method,
+                },
+            )
+        )
+
+    message = exc_info.value.fields["records"][0]
+    assert "extra" in message
+    assert "datastore_create" in message
+    assert writes == []
+
+
+def test_upsert_accepts_partial_records_and_system_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datastore.infrastructure.engines.bigquery import BigQueryBackend
+
+    schema = {
+        "fields": [
+            {"name": "date", "type": "string"},
+            {"name": "cp", "type": "string"},
+            {"name": "value", "type": "integer"},
+        ],
+        "primaryKey": ["date", "cp"],
+    }
+    monkeypatch.setattr(
+        BigQueryBackend,
+        "info",
+        lambda self, resource_id: InfoResult(schema=schema, meta={}),
+    )
+    monkeypatch.setattr(BigQueryBackend, "upsert", lambda self, **kwargs: {"total": 2})
+
+    result = asyncio.run(
+        upsert_datastore(
+            _ctx(),
+            {
+                "resource_id": "res-1",
+                # key only, no `value`: a partial update is still allowed
+                "records": [
+                    {"date": "2026-08-22", "cp": "A"},
+                    {"_id": 7, "date": "2026-08-23", "cp": "B", "value": 3},
+                ],
+                "method": "upsert",
+            },
+        )
+    )
+    assert result is not None
+
+
 def test_upsert_default_method_is_upsert() -> None:
     """`method` is optional; absence resolves to 'upsert' inside the service."""
     ctx = _ctx()
