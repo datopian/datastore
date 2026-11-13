@@ -25,6 +25,7 @@ delegates into that module.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -92,15 +93,36 @@ def _bq_error_reason(e: Exception) -> str:
     return ""
 
 
+# BigQuery's wording for a query that references a dropped / never
+# created table: "Not found: Table proj:dataset.<table> was not found in
+# location EU". The captured group is the bare table name, i.e. the CKAN
+# resource_id.
+_TABLE_NOT_FOUND_RE = re.compile(r"Not found: Table [^\s:]+:[^\s.]+\.([^\s]+) was not found")
+
+
+def _missing_table(e: Exception) -> str | None:
+    """Return the resource_id of the missing table, or `None`."""
+    if _bq_error_reason(e) != "notFound":
+        return None
+    match = _TABLE_NOT_FOUND_RE.search(str(e))
+    return match.group(1).strip("`") if match else None
+
+
 def _classify_bq_error(e: Exception, op: str, resource_id: str | None = None) -> APIError:
     """Map a BigQuery exception to the right side of the 4xx/5xx line.
 
-    Caller mistakes become `ValidationError`; everything else stays
-    `ServerError`. Either way the upstream text - engine name, region,
-    job id - rides in `detail`, which is logged and never serialised.
+    A query against a table that does not exist (e.g. `datastore_delete`
+    dropped it) is a `NotFoundError` naming the resource, matching
+    `datastore_search` / `datastore_info`. Other caller mistakes become
+    `ValidationError`; everything else stays `ServerError`. Either way
+    the upstream text - engine name, region, job id - rides in
+    `detail`, which is logged and never serialised.
     """
     where = f" for resource {resource_id!r}" if resource_id else ""
     detail = f"BigQuery {op} failed{where}: {e}"
+    missing = _missing_table(e)
+    if missing:
+        return NotFoundError(f"resource {missing!r} not found.", detail=detail)
     if _bq_error_reason(e) in _CLIENT_ERROR_REASONS:
         return ValidationError(_CLIENT_ERROR_MESSAGE, detail=detail)
     return ServerError("internal error", detail=detail)

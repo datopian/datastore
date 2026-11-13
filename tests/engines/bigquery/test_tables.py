@@ -2217,3 +2217,48 @@ def test_use_query_cache_respects_config_opt_out(
 
     cfg = _job_config_kwarg(mock_client.query.call_args)
     assert cfg.use_query_cache is False
+
+
+# --- search_sql error classification ----------------------------------------
+
+
+class _BQError(Exception):
+    """Stand-in for a `google.api_core` exception: reason in `errors`."""
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.errors = [{"reason": reason, "message": message}]
+
+
+def _ro_backend(mock_client: MagicMock) -> BigQueryBackend:
+    b = _backend(mock_client)
+    b.mode = "ro"
+    b.config.BIGQUERY_TRANSLATE_PG_SQL = False
+    return b
+
+
+def test_search_sql_on_dropped_table_is_not_found(mock_client: MagicMock) -> None:
+    """A deleted resource's table is gone; search_sql must 404 like
+    datastore_search / datastore_info, not 400 with a schema hint."""
+    rid = "fe0d187a-aa73-44ff-9b1e-000000000000"
+    mock_client.query.return_value.result.side_effect = _BQError(
+        f"404 Not found: Table proj-1:ds-1.{rid} was not found in location EU",
+        "notFound",
+    )
+    backend = _ro_backend(mock_client)
+
+    with pytest.raises(NotFoundError) as exc:
+        backend.search_sql(f'SELECT * FROM "{rid}"', limit=10)
+    assert exc.value.message == f"resource {rid!r} not found."
+
+
+def test_search_sql_unknown_column_stays_validation_error(
+    mock_client: MagicMock,
+) -> None:
+    mock_client.query.return_value.result.side_effect = _BQError(
+        "400 Unrecognized name: nope at [1:8]", "invalidQuery"
+    )
+    backend = _ro_backend(mock_client)
+
+    with pytest.raises(ValidationError, match="check column names"):
+        backend.search_sql('SELECT nope FROM "res-1"', limit=10)
