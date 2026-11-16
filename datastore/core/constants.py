@@ -172,6 +172,7 @@ FRICTIONLESS_TO_POSTGRES: dict[str, str] = {
     "array": "jsonb",
     "geojson": "jsonb",
     "geopoint": "text",
+    "year": "int4",
     "yearmonth": "text",
     "duration": "text",
     "any": "text",
@@ -180,7 +181,7 @@ FRICTIONLESS_TO_POSTGRES: dict[str, str] = {
 
 # Frictionless field types the datastore accepts. A narrow, opinionated
 # subset of the full Frictionless vocabulary — values outside this set
-# (`year`, …) are rejected at the request
+# (`list`, custom types, …) are rejected at the request
 # boundary so storage layout stays predictable and engine type maps
 # don't need to grow ad-hoc.
 ALLOWED_FRICTIONLESS_TYPES: frozenset[str] = frozenset(
@@ -194,6 +195,7 @@ ALLOWED_FRICTIONLESS_TYPES: frozenset[str] = frozenset(
         "datetime",
         "object",
         "array",
+        "year",
         "yearmonth",
         "duration",
         "geojson",

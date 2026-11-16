@@ -257,7 +257,7 @@ def validate_frictionless_schema(value: Any) -> dict[str, Any] | None:
       1. `frictionless.Schema.from_descriptor` validates the descriptor
          shape (raises on missing `fields`, unknown field type, etc.).
       2. Field types must be in `ALLOWED_FRICTIONLESS_TYPES` — wider
-         Frictionless vocabulary (e.g. `year`)
+         Frictionless vocabulary (e.g. `list`)
          is rejected here so storage layout stays predictable and the
          engine type maps don't grow ad-hoc.
       3. Field names must not collide with engine-reserved system

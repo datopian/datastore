@@ -2555,3 +2555,23 @@ def test_schema_accepts_duration_and_rejects_non_default_geopoint_format() -> No
         validate_frictionless_schema(
             {"fields": [{"name": "p", "type": "geopoint", "format": "array"}]}
         )
+
+
+# --- year → INT64 ------------------------------------------------------------
+
+
+def test_year_is_accepted_stored_as_int64_and_filtered_as_integer() -> None:
+    from datastore.infrastructure.engines.bigquery.lib import delete_sql, insert_sql
+    from datastore.infrastructure.engines.bigquery.types import bigquery_type
+    from datastore.schemas.validators import validate_frictionless_schema
+
+    schema = {"fields": [{"name": "y", "type": "year"}]}
+    assert validate_frictionless_schema(schema) == schema
+    assert bigquery_type("year") == "INT64"
+    assert "CAST(JSON_VALUE(r, '$.y') AS INT64)" in insert_sql("`p.d.t`", schema)
+
+    # The filter parameter must be INT64 too, or BigQuery rejects `INT64 = STRING`.
+    _, params, _ = _geo_search(schema, filters={"y": 2025})
+    assert params[0].type_ == "INT64"
+    _, del_params = delete_sql("`p.d.t`", schema, {"y": [2024, 2025]})
+    assert del_params[0].array_type == "INT64"

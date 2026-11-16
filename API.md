@@ -113,7 +113,7 @@ existing resource adds columns and widens types (see below).
 `geojson`, `any`) or SQL aliases (`int4`, `bigint`, `varchar`, `text`, `float`,
 `numeric`, `bool`, `timestamp`, `json`, …), normalised to canonical on storage.
 
-`yearmonth` and `duration` are accepted too. Storage rules worth knowing:
+`year`, `yearmonth` and `duration` are accepted too. Storage rules worth knowing:
 
 - `geopoint` and `geojson` are stored as BigQuery `GEOGRAPHY`. A `geopoint`
   is sent and returned as `"lon, lat"` (default format only); a `geojson`
@@ -122,6 +122,8 @@ existing resource adds columns and widens types (see below).
   return these shapes; `datastore_search_sql` and SQL downloads return WKT
   text (`POINT(-0.1276 51.5072)`). These columns cannot be used in `filters`
   or `sort`. Tables created before this mapping keep their old columns.
+- `year` is stored as an integer (`2025`), so numeric filters, ranges and
+  sorting work.
 - `duration` is stored as text and returned exactly as sent (ISO 8601, e.g.
   `PT30M`).
 

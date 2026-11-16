@@ -49,6 +49,7 @@ SYSTEM_COLUMN_NAMES: frozenset[str] = frozenset({"_id", "_updated_at"})
 # JSON / array / geojson absent — equality on those is rejected.
 _FILTER_PARAM_TYPE: dict[str, str] = {
     "integer": "INT64",
+    "year": "INT64",
     "number": "BIGNUMERIC",
     "boolean": "BOOL",
     "string": "STRING",
