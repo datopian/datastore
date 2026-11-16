@@ -2262,3 +2262,296 @@ def test_search_sql_unknown_column_stays_validation_error(
 
     with pytest.raises(ValidationError, match="check column names"):
         backend.search_sql('SELECT nope FROM "res-1"', limit=10)
+
+
+# --- yearmonth → 'YYYY-MM' --------------------------------------------------
+
+
+def test_array_stays_json_and_yearmonth_is_string() -> None:
+    from datastore.infrastructure.engines.bigquery.types import bigquery_type
+
+    assert bigquery_type("array") == "JSON"
+    assert bigquery_type("yearmonth") == "STRING"
+
+
+def test_insert_normalises_yearmonth_to_canonical_form() -> None:
+    from datastore.infrastructure.engines.bigquery.lib import insert_sql
+
+    sql = insert_sql("`p.d.t`", {"fields": [{"name": "period", "type": "yearmonth"}]})
+    assert "FORMAT_DATE('%Y-%m', PARSE_DATE('%Y-%m', JSON_VALUE(r, '$.period')))" in sql
+
+
+def test_schema_accepts_yearmonth_but_not_a_custom_format_or_list() -> None:
+    from datastore.schemas.validators import validate_frictionless_schema
+
+    with pytest.raises(ValueError, match="unsupported type 'list'"):
+        validate_frictionless_schema({"fields": [{"name": "tags", "type": "list"}]})
+
+    ok = {
+        "fields": [
+            {"name": "period", "type": "yearmonth"},
+            {"name": "p2", "type": "yearmonth", "format": "default"},
+        ]
+    }
+    assert validate_frictionless_schema(ok) == ok
+    with pytest.raises(ValueError, match="custom format"):
+        validate_frictionless_schema(
+            {"fields": [{"name": "period", "type": "yearmonth", "format": "%m/%Y"}]}
+        )
+
+
+def test_yearmonth_is_read_and_filtered_as_plain_string() -> None:
+    from datastore.infrastructure.engines.bigquery.search import build_search
+
+    sql, params, _ = build_search(
+        table_ref="`p.d.t`",
+        schema={"fields": [{"name": "period", "type": "yearmonth"}]},
+        include_updated_at=False,
+        fields=["period"],
+        filters={"period": "2025-11"},
+        q=None,
+        distinct=False,
+        sort=None,
+        limit=10,
+        offset=0,
+    )
+    # No cast on the way out: what was stored is what is returned.
+    assert sql.startswith("SELECT `period` FROM")
+    assert "`period` = @f0" in sql
+    assert params[0].type_ == "STRING"
+
+
+def test_filters_on_array_columns_are_rejected() -> None:
+    from datastore.infrastructure.engines.bigquery.search import build_search
+
+    for ftype in ("array",):
+        with pytest.raises(ValueError, match="JSON/array/geojson"):
+            build_search(
+                table_ref="`p.d.t`",
+                schema={"fields": [{"name": "tags", "type": ftype}]},
+                include_updated_at=False,
+                fields=None,
+                filters={"tags": "a"},
+                q=None,
+                distinct=False,
+                sort=None,
+                limit=10,
+                offset=0,
+            )
+
+
+def test_merge_compares_array_columns_through_to_json_string() -> None:
+    from datastore.infrastructure.engines.bigquery.lib import merge_sql
+
+    sql = merge_sql(
+        "`p.d.t`",
+        {
+            "fields": [{"name": "id", "type": "integer"}, {"name": "tags", "type": "array"}],
+            "primaryKey": ["id"],
+        },
+    )
+    assert "TO_JSON_STRING(T.`tags`) IS DISTINCT FROM TO_JSON_STRING(S.`tags`)" in sql
+
+
+def test_bad_yearmonth_value_is_a_validation_error() -> None:
+    from datastore.core.exceptions import ServerError
+    from datastore.infrastructure.engines.bigquery.backend import _translate_bigquery_error
+
+    exc = ServerError("internal error", detail='Failed to parse input string "2025-13"')
+    out = _translate_bigquery_error(exc, "res-1", "insert")
+    assert isinstance(out, ValidationError)
+    assert "2025-13" in str(out)
+
+
+# --- geopoint / geojson → GEOGRAPHY, duration → STRING ----------------------
+
+_GEO_SCHEMA: dict[str, Any] = {
+    "fields": [
+        {"name": "id", "type": "integer"},
+        {"name": "loc", "type": "geopoint"},
+        {"name": "area", "type": "geojson"},
+    ],
+    "primaryKey": ["id"],
+}
+
+
+def _geo_search(schema: dict[str, Any], **overrides: Any) -> tuple[str, list, dict]:
+    from datastore.infrastructure.engines.bigquery.search import build_search
+
+    kwargs: dict[str, Any] = {
+        "table_ref": "`p.d.t`",
+        "schema": schema,
+        "include_updated_at": False,
+        "fields": None,
+        "filters": None,
+        "q": None,
+        "distinct": False,
+        "sort": None,
+        "limit": 10,
+        "offset": 0,
+    }
+    kwargs.update(overrides)
+    return build_search(**kwargs)
+
+
+def test_geo_types_map_to_geography_and_duration_to_string() -> None:
+    from datastore.infrastructure.engines.bigquery.lib import column_defs
+    from datastore.infrastructure.engines.bigquery.types import bigquery_type
+
+    assert bigquery_type("geopoint") == "GEOGRAPHY"
+    assert bigquery_type("geojson") == "GEOGRAPHY"
+    assert bigquery_type("duration") == "STRING"
+    defs = column_defs(_GEO_SCHEMA)
+    assert "`loc` GEOGRAPHY" in defs
+    assert "`area` GEOGRAPHY" in defs
+
+
+def test_write_builds_geography_values() -> None:
+    from datastore.infrastructure.engines.bigquery.lib import insert_sql, merge_sql
+
+    sql = insert_sql("`p.d.t`", _GEO_SCHEMA)
+    assert (
+        "ST_GEOGPOINT(CAST(TRIM(SPLIT(JSON_VALUE(r, '$.loc'), ',')[SAFE_OFFSET(0)]) AS FLOAT64), "
+        "CAST(TRIM(SPLIT(JSON_VALUE(r, '$.loc'), ',')[SAFE_OFFSET(1)]) AS FLOAT64))"
+    ) in sql
+    assert "ST_GEOGFROMGEOJSON(JSON_QUERY(r, '$.area'), make_valid => TRUE)" in sql
+
+    # GEOGRAPHY has no IS DISTINCT FROM — change detection compares WKT.
+    merge = merge_sql("`p.d.t`", _GEO_SCHEMA)
+    assert "ST_ASTEXT(T.`loc`) IS DISTINCT FROM ST_ASTEXT(S.`loc`)" in merge
+    assert "ST_ASTEXT(T.`area`) IS DISTINCT FROM ST_ASTEXT(S.`area`)" in merge
+
+
+def test_search_reads_geography_back_in_frictionless_shape() -> None:
+    sql, _, result_schema = _geo_search(_GEO_SCHEMA)
+    assert (
+        "CONCAT(CAST(ROUND(ST_X(`loc`), 9) AS STRING), ', ', "
+        "CAST(ROUND(ST_Y(`loc`), 9) AS STRING)) AS `loc`"
+    ) in sql
+    assert "PARSE_JSON(ST_ASGEOJSON(`area`)) AS `area`" in sql
+    types = [f["type"] for f in result_schema["fields"]]
+    assert types == ["integer", "integer", "geopoint", "geojson"]
+
+
+def test_geography_columns_cannot_be_filtered_or_sorted() -> None:
+    for col in ("loc", "area"):
+        with pytest.raises(ValueError, match="filters cannot target"):
+            _geo_search(_GEO_SCHEMA, filters={col: "x"})
+        with pytest.raises(ValueError, match="sort cannot target"):
+            _geo_search(_GEO_SCHEMA, sort=f"{col} asc")
+
+
+def test_format_select_column_renders_untyped_geography_as_wkt() -> None:
+    from datastore.infrastructure.engines.bigquery.lib import format_select_column
+
+    assert format_select_column("g", "GEOGRAPHY") == "ST_ASTEXT(`g`) AS `g`"
+
+
+def test_storage_schema_keeps_pre_geography_columns_on_the_old_path() -> None:
+    from datastore.infrastructure.engines.bigquery.lib import (
+        insert_sql,
+        legacy_geo_columns,
+        storage_schema,
+    )
+
+    def col(name: str, field_type: str) -> MagicMock:
+        c = MagicMock()
+        c.name, c.field_type = name, field_type
+        return c
+
+    table = MagicMock()
+    table.schema = [col("id", "INT64"), col("loc", "STRING"), col("area", "GEOGRAPHY")]
+    legacy = legacy_geo_columns(table)
+    assert legacy == frozenset({"id", "loc"})
+
+    view = storage_schema(_GEO_SCHEMA, legacy)
+    assert [f["type"] for f in view["fields"]] == ["integer", "string", "geojson"]
+    # The declared schema is untouched, and no legacy column → same object.
+    assert _GEO_SCHEMA["fields"][1]["type"] == "geopoint"
+    assert storage_schema(_GEO_SCHEMA, frozenset({"id"})) is _GEO_SCHEMA
+
+    sql = insert_sql("`p.d.t`", view)
+    assert "JSON_VALUE(r, '$.loc')" in sql and "ST_GEOGPOINT" not in sql
+    assert "ST_GEOGFROMGEOJSON(JSON_QUERY(r, '$.area')" in sql
+
+
+def _legacy_geo_table() -> MagicMock:
+    """A table created while geopoint → STRING and geojson → JSON."""
+
+    def col(name: str, field_type: str) -> MagicMock:
+        c = MagicMock()
+        c.name, c.field_type = name, field_type
+        return c
+
+    table = MagicMock()
+    table.schema = [col("id", "INT64"), col("loc", "STRING"), col("area", "JSON")]
+    table.description = json.dumps({"datastore": {"schema": _GEO_SCHEMA}})
+    return table
+
+
+def test_upsert_on_pre_geography_table_writes_string_and_json(mock_client: MagicMock) -> None:
+    backend = _backend(mock_client)
+    mock_client.get_table.return_value = _legacy_geo_table()
+
+    backend.upsert("res-1", [{"id": 1, "loc": "1, 2", "area": {"type": "Point"}}], "upsert", False)
+
+    sql = mock_client.query.call_args[0][0]
+    assert "JSON_VALUE(r, '$.loc') AS `loc`" in sql
+    assert "PARSE_JSON(JSON_QUERY(r, '$.area')) AS `area`" in sql
+    assert "ST_GEOG" not in sql and "ST_ASTEXT" not in sql
+
+
+def test_search_on_pre_geography_table_reads_raw_but_reports_declared_types(
+    mock_client: MagicMock,
+) -> None:
+    backend = _backend(mock_client)
+    backend.config.INCLUDE_UPDATED_AT = False
+    mock_client.get_table.return_value = _legacy_geo_table()
+
+    result = backend.search(
+        "res-1", None, None, False, True, "english", 10, 0, ["loc", "area"], None, False
+    )
+
+    sql = mock_client.query.call_args[0][0]
+    assert sql.startswith("SELECT `loc`, `area` FROM")
+    assert [f["type"] for f in result.schema["fields"]] == ["geopoint", "geojson"]
+
+
+def test_bad_geo_values_are_validation_errors() -> None:
+    from datastore.core.exceptions import ServerError
+    from datastore.infrastructure.engines.bigquery.backend import _translate_bigquery_error
+
+    point = _translate_bigquery_error(
+        ServerError(
+            "internal error",
+            detail="ST_GeogPoint failed: Latitude must be between -90 and 90 degrees. "
+            "Actual value was 95; reason: invalidQuery",
+        ),
+        "res-1",
+        "insert",
+    )
+    assert isinstance(point, ValidationError)
+    assert "Invalid geopoint value: Latitude must be between -90 and 90" in str(point)
+
+    feature = _translate_bigquery_error(
+        ServerError(
+            "internal error",
+            detail="ST_GeogFromGeoJSON failed: GeoJSON reader accepts Geometry objects, "
+            "not Feature or FeatureCollection objects; reason: invalidQuery",
+        ),
+        "res-1",
+        "insert",
+    )
+    assert isinstance(feature, ValidationError)
+    assert "Invalid geojson value" in str(feature)
+
+
+def test_schema_accepts_duration_and_rejects_non_default_geopoint_format() -> None:
+    from datastore.schemas.validators import validate_frictionless_schema
+
+    ok = {"fields": [{"name": "d", "type": "duration"}, {"name": "p", "type": "geopoint"}]}
+    assert validate_frictionless_schema(ok) == ok
+    with pytest.raises(ValueError, match="only the default format"):
+        validate_frictionless_schema(
+            {"fields": [{"name": "p", "type": "geopoint", "format": "array"}]}
+        )

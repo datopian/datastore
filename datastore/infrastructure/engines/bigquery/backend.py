@@ -53,12 +53,14 @@ from datastore.infrastructure.engines.bigquery.lib import (
     drop_columns_sql,
     insert_guarded_sql,
     insert_sql,
+    legacy_geo_columns,
     merge_sql,
     normalize_pk,
     qualify_table_refs,
     reject_unsupported_type_changes,
     schema_diff,
     set_table_options_sql,
+    storage_schema,
     strip_limit_offset,
     table_options_clause,
     table_to_schema,
@@ -150,6 +152,11 @@ class BigQueryBackend(DatastoreBackend):
         # In-flight fire-and-forget cleanup tasks (compose part deletion,
         # revision GC) — tracked so tests can await them deterministically.
         self._cleanup_tasks: set[Any] = set()
+        # resource_id → columns that are not physically GEOGRAPHY,
+        # refreshed by every `_read_schema`. Lets the SQL builders keep
+        # treating `geopoint` / `geojson` columns of pre-GEOGRAPHY tables
+        # as the STRING / JSON they are (see `_storage_schema`).
+        self._legacy_geo: dict[str, frozenset[str]] = {}
 
     def initialize(self) -> None:
         """Build the BigQuery client when project + dataset are configured.
@@ -193,13 +200,21 @@ class BigQueryBackend(DatastoreBackend):
         try:
             table = self.client.get_table(ref)
         except NotFound:
+            self._legacy_geo.pop(resource_id, None)
             return None
         except Exception as e:
             raise ServerError(
                 "internal error",
                 detail=f"BigQuery tables.get failed for resource {resource_id!r}: {e}",
             ) from e
+        self._legacy_geo[resource_id] = legacy_geo_columns(table)
         return table_to_schema(table)
+
+    def _storage_schema(self, resource_id: str, schema: dict[str, Any]) -> dict[str, Any]:
+        """`schema` as the SQL builders must see it: geo fields whose
+        column predates GEOGRAPHY are retyped to their physical storage.
+        Internal only — never return this to a client."""
+        return storage_schema(schema, self._legacy_geo.get(resource_id, frozenset()))
 
     # ----- table refs + low-level client wrappers ------------------------
 
@@ -347,6 +362,7 @@ class BigQueryBackend(DatastoreBackend):
 
     def _build_dml(self, builder: Any, resource_id: str, schema: dict) -> str:
         """Render a DML builder's SQL, surfacing its `ValueError` as 400."""
+        schema = self._storage_schema(resource_id, schema)
         try:
             return builder(
                 self._data_table_ref(resource_id),
@@ -624,6 +640,8 @@ class BigQueryBackend(DatastoreBackend):
         if schema is None:
             raise NotFoundError(f"resource {resource_id!r} not found.")
 
+        declared = schema
+        schema = self._storage_schema(resource_id, declared)
         try:
             sql, params, projected = build_search(
                 table_ref=self._data_table_ref(resource_id),
@@ -639,6 +657,13 @@ class BigQueryBackend(DatastoreBackend):
             )
         except ValueError as e:
             raise ValidationError(str(e)) from e
+        if schema is not declared:
+            # Report the declared types, not the storage view's.
+            by_name = {f.get("name"): f for f in declared.get("fields", [])}
+            projected = {
+                **projected,
+                "fields": [by_name.get(f.get("name"), f) for f in projected["fields"]],
+            }
 
         # Read-path configs use the query-results cache (see
         # _read_job_config). Identical search params hit a 24h cache
@@ -869,7 +894,7 @@ class BigQueryBackend(DatastoreBackend):
         try:
             sql, params = delete_sql(
                 self._data_table_ref(resource_id),
-                schema,
+                self._storage_schema(resource_id, schema),
                 filters,
             )
         except ValueError as e:
@@ -1123,6 +1148,19 @@ def _translate_bigquery_error(exc: ServerError, resource_id: str, action: str) -
             "Found duplicated rows with the same primary key. "
             f"Deduplicate the records and retry the {action} operation."
         )
+
+    # `Failed to parse input string "<v>"` — PARSE_DATE on a `yearmonth`
+    # value that doesn't match the field's format.
+    m = re.search(r"Failed to parse input string ['\"](.+?)['\"]", msg)
+    if m:
+        return ValidationError(f"Value {m.group(1)!r} is not a valid yearmonth. Expected YYYY-MM.")
+
+    # `ST_GeogPoint failed: Latitude must be between -90 and 90 …` /
+    # `ST_GeogFromGeoJSON failed: GeoJSON reader accepts Geometry objects …`
+    m = re.search(r"(ST_GeogPoint|ST_GeogFromGeoJSON) failed: (.+?)(?:;|\\n|$)", msg)
+    if m:
+        kind = "geopoint" if m.group(1) == "ST_GeogPoint" else "geojson"
+        return ValidationError(f"Invalid {kind} value: {m.group(2).strip()}")
 
     # `Bad int64 value: <v>` etc. — type-coercion failure on CAST(JSON_VALUE).
     m = re.search(

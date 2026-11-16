@@ -12,8 +12,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from datastore.infrastructure.engines.bigquery.lib import (
-    JSON_FRICTIONLESS_TYPES,
     SYSTEM_COLUMN_NAMES,
+    UNFILTERABLE_FRICTIONLESS_TYPES,
     format_select_column,
 )
 from datastore.infrastructure.engines.bigquery.types import bigquery_type
@@ -170,9 +170,9 @@ def _build_where(
             if col not in type_map:
                 raise ValueError(f"filters references unknown column {col!r}")
             ftype = type_map[col]
-            if ftype in JSON_FRICTIONLESS_TYPES:
+            if ftype in UNFILTERABLE_FRICTIONLESS_TYPES:
                 raise ValueError(
-                    f"filters cannot target JSON/array/geojson column "
+                    f"filters cannot target JSON/array/geojson/geopoint column "
                     f"{col!r}; use datastore_search_sql for structural "
                     "matches"
                 )
@@ -214,7 +214,8 @@ def _project_column(col: str, type_map: dict[str, str]) -> str:
     `2026-06-08T00:00:00` (UTC implicit) in both endpoints; other
     columns pass through as the native type.
     """
-    return format_select_column(col, bigquery_type(type_map.get(col)))
+    fr_type = type_map.get(col)
+    return format_select_column(col, bigquery_type(fr_type), fr_type)
 
 
 def build_search(
@@ -266,6 +267,9 @@ def build_search(
     sort_pairs: list[tuple[str, str]]
     if sort:
         sort_pairs = parse_sort(sort, all_cols)
+        for col, _ in sort_pairs:
+            if type_map[col] in UNFILTERABLE_FRICTIONLESS_TYPES:
+                raise ValueError(f"sort cannot target JSON/array/geojson/geopoint column {col!r}")
     elif "_id" in projected:
         sort_pairs = [("_id", "ASC")]
     else:
