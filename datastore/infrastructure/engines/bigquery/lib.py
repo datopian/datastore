@@ -19,7 +19,27 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # Frictionless types that map to BigQuery `JSON`.
-JSON_FRICTIONLESS_TYPES = frozenset({"object", "array", "geojson"})
+JSON_FRICTIONLESS_TYPES = frozenset({"object", "array"})
+
+# Frictionless types that map to BigQuery `GEOGRAPHY`.
+GEOGRAPHY_FRICTIONLESS_TYPES = frozenset({"geopoint", "geojson"})
+
+# No `=` / ORDER BY semantics in BigQuery: rejected as filter and sort
+# targets.
+UNFILTERABLE_FRICTIONLESS_TYPES = JSON_FRICTIONLESS_TYPES | GEOGRAPHY_FRICTIONLESS_TYPES
+
+# What a pre-GEOGRAPHY column of each type is physically stored as —
+# and therefore how it must still be written and read (`storage_schema`).
+_LEGACY_GEO_STORAGE_TYPE = {"geopoint": "string", "geojson": "object"}
+
+# Decimal places kept when a point is read back. GEOGRAPHY snaps
+# coordinates to its internal grid (51.5072 reads back as
+# 51.50719999999999); 9 places (~0.1 mm) hides that without losing data.
+_GEOPOINT_DECIMALS = 9
+
+# Canonical stored form of a `yearmonth` value (BigQuery date format
+# elements); incoming values are parsed with the same pattern.
+YEARMONTH_FORMAT = "%Y-%m"
 
 # Engine-managed columns. `_id` always present; `_updated_at` opt-in
 # via `Config.INCLUDE_UPDATED_AT`. Same-named user fields are dropped.
@@ -61,11 +81,16 @@ def _system_col_insert_list(include_updated_at: bool) -> str:
     return "`_id`, `_updated_at`" if include_updated_at else "`_id`"
 
 
-def format_select_column(name: str, bq_type: str | None) -> str:
+def format_select_column(name: str, bq_type: str | None, fr_type: str | None = None) -> str:
     """Render a SELECT-list expression for one column, casting TIMESTAMP /
     DATETIME values to a fixed-shape ISO 8601 string
     (`YYYY-MM-DDTHH:MM:SS` — UTC implicit, no offset, no fractional).
     Other types pass through unchanged.
+
+    GEOGRAPHY columns are turned back into the Frictionless shape the
+    field declares (`fr_type`): `geopoint` → `"lon, lat"`, `geojson` →
+    a GeoJSON geometry (JSON). With no Frictionless type to go by
+    (arbitrary SQL) the value is rendered as WKT text.
 
     Shared by `datastore_search` (engine-built projection) and the
     `datastore_dump` `EXPORT DATA` SELECT, so both read paths emit the
@@ -80,6 +105,16 @@ def format_select_column(name: str, bq_type: str | None) -> str:
         return f"FORMAT_DATETIME('%Y-%m-%dT%H:%M:%S', `{name}`) AS `{name}`"
     if bq in ("NUMERIC", "BIGNUMERIC"):
         return f"CAST(`{name}` AS FLOAT64) AS `{name}`"
+    if bq == "GEOGRAPHY":
+        if fr_type == "geopoint":
+            d = _GEOPOINT_DECIMALS
+            return (
+                f"CONCAT(CAST(ROUND(ST_X(`{name}`), {d}) AS STRING), ', ', "
+                f"CAST(ROUND(ST_Y(`{name}`), {d}) AS STRING)) AS `{name}`"
+            )
+        if fr_type == "geojson":
+            return f"PARSE_JSON(ST_ASGEOJSON(`{name}`)) AS `{name}`"
+        return f"ST_ASTEXT(`{name}`) AS `{name}`"
     return f"`{name}`"
 
 
@@ -411,9 +446,9 @@ def delete_sql(
         if col not in type_map:
             raise ValueError(f"filters references unknown column {col!r}")
         ftype = type_map[col]
-        if ftype in JSON_FRICTIONLESS_TYPES:
+        if ftype in UNFILTERABLE_FRICTIONLESS_TYPES:
             raise ValueError(
-                f"filters cannot target JSON/array/geojson column "
+                f"filters cannot target JSON/array/geojson/geopoint column "
                 f"{col!r}; use datastore_search_sql for structural matches"
             )
         bq_type = _FILTER_PARAM_TYPE.get(ftype, "STRING")
@@ -433,10 +468,13 @@ def delete_sql(
 
 def _diff_expr(field: dict) -> str:
     """NULL-safe inequality between `T.<col>` and `S.<col>`.
-    JSON columns are canonicalised via `TO_JSON_STRING` first."""
+    JSON columns are canonicalised via `TO_JSON_STRING` first, GEOGRAPHY
+    columns via `ST_ASTEXT` (neither type supports the comparison)."""
     name = field["name"]
     if field.get("type") in JSON_FRICTIONLESS_TYPES:
         return f"TO_JSON_STRING(T.`{name}`) IS DISTINCT FROM TO_JSON_STRING(S.`{name}`)"
+    if field.get("type") in GEOGRAPHY_FRICTIONLESS_TYPES:
+        return f"ST_ASTEXT(T.`{name}`) IS DISTINCT FROM ST_ASTEXT(S.`{name}`)"
     return f"T.`{name}` IS DISTINCT FROM S.`{name}`"
 
 
@@ -448,6 +486,26 @@ def _json_extract(field: dict) -> str:
     path = f"'$.{name}'"
     if fr_type in JSON_FRICTIONLESS_TYPES:
         return f"PARSE_JSON(JSON_QUERY(r, {path}))"
+    if fr_type == "geojson":
+        # Geometry objects only — BigQuery rejects Feature /
+        # FeatureCollection. `make_valid` repairs self-intersections and
+        # ring orientation instead of failing the write.
+        return f"ST_GEOGFROMGEOJSON(JSON_QUERY(r, {path}), make_valid => TRUE)"
+    if fr_type == "geopoint":
+        # Frictionless default form: the string `"lon, lat"`.
+        parts = f"SPLIT(JSON_VALUE(r, {path}), ',')"
+        return (
+            f"ST_GEOGPOINT(CAST(TRIM({parts}[SAFE_OFFSET(0)]) AS FLOAT64), "
+            f"CAST(TRIM({parts}[SAFE_OFFSET(1)]) AS FLOAT64))"
+        )
+    if fr_type == "yearmonth":
+        # Parse then re-format so only the canonical `YYYY-MM` is ever
+        # stored (`2025-1` → `2025-01`) — that fixed width is what makes
+        # string comparison order the column chronologically.
+        return (
+            f"FORMAT_DATE('{YEARMONTH_FORMAT}', "
+            f"PARSE_DATE('{YEARMONTH_FORMAT}', JSON_VALUE(r, {path})))"
+        )
     if bq_type == "STRING":
         return f"JSON_VALUE(r, {path})"
     return f"CAST(JSON_VALUE(r, {path}) AS {bq_type})"
@@ -644,6 +702,41 @@ def _infer_schema_from_bq(table: "bigquery.Table") -> dict[str, Any]:
         if col.name not in SYSTEM_COLUMN_NAMES
     ]
     return {"fields": fields}
+
+
+def legacy_geo_columns(table: "bigquery.Table") -> frozenset[str]:
+    """Names of the table's columns that are NOT physically `GEOGRAPHY`."""
+    return frozenset(
+        col.name
+        for col in (table.schema or [])
+        if not (isinstance(col.field_type, str) and col.field_type.upper() == "GEOGRAPHY")
+    )
+
+
+def storage_schema(schema: dict[str, Any], legacy_columns: frozenset[str]) -> dict[str, Any]:
+    """`schema` as the SQL builders should see it for an existing table.
+
+    `geopoint` / `geojson` used to map to STRING / JSON, and BigQuery
+    cannot convert such a column to GEOGRAPHY in place. A geo field whose
+    column is listed in `legacy_columns` is therefore retyped to what it
+    is physically stored as (`string` / `object`), so tables created
+    before the mapping change keep reading and writing the old way.
+    Never returned to clients — only handed to the SQL builders. Returns
+    `schema` itself when nothing needs retargeting.
+    """
+
+    def legacy(f: dict[str, Any]) -> bool:
+        return f.get("name") in legacy_columns and f.get("type") in _LEGACY_GEO_STORAGE_TYPE
+
+    fields = schema.get("fields", [])
+    if not legacy_columns or not any(legacy(f) for f in fields):
+        return schema
+    return {
+        **schema,
+        "fields": [
+            {**f, "type": _LEGACY_GEO_STORAGE_TYPE[f["type"]]} if legacy(f) else f for f in fields
+        ],
+    }
 
 
 def table_options_clause(schema: dict[str, Any]) -> str:

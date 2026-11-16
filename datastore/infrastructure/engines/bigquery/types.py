@@ -16,8 +16,19 @@ from __future__ import annotations
 
 # Many-to-one on purpose: every Frictionless type maps to the widest
 # BigQuery type that can hold its values. `year` → INT64 keeps it
-# arithmetically useful; `yearmonth` / `duration` stay STRING because
-# BigQuery has no native equivalent that round-trips losslessly.
+# arithmetically useful; `duration` stays STRING because BigQuery has no
+# native equivalent that round-trips losslessly.
+#
+# `geopoint` / `geojson` → GEOGRAPHY, BigQuery's native spatial type, so
+# SQL can use the `ST_*` functions on them. The write path builds the
+# value (`ST_GEOGPOINT` / `ST_GEOGFROMGEOJSON`) and the read path turns
+# it back into the Frictionless shape — see `lib._json_extract` and
+# `lib.format_select_column`. Tables created while these mapped to
+# STRING / JSON keep those columns (`lib.storage_schema`).
+#
+# `yearmonth` → STRING holding the canonical `YYYY-MM` text. The write
+# path normalises the incoming value, so every read path — search,
+# search_sql, dump — returns the same `YYYY-MM` with no cast.
 FRICTIONLESS_TO_BIGQUERY: dict[str, str] = {
     "integer": "INT64",
     "number": "BIGNUMERIC",
@@ -29,8 +40,8 @@ FRICTIONLESS_TO_BIGQUERY: dict[str, str] = {
     "duration": "STRING",
     "object": "JSON",
     "array": "JSON",
-    "geojson": "JSON",
-    "geopoint": "STRING",
+    "geojson": "GEOGRAPHY",
+    "geopoint": "GEOGRAPHY",
     "year": "INT64",
     "yearmonth": "STRING",
     "any": "STRING",

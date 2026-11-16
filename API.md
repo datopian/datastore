@@ -112,6 +112,23 @@ existing resource adds columns and widens types (see below).
 `string`, `boolean`, `date`, `datetime`, `time`, `object`, `array`, `geopoint`,
 `geojson`, `any`) or SQL aliases (`int4`, `bigint`, `varchar`, `text`, `float`,
 `numeric`, `bool`, `timestamp`, `json`, …), normalised to canonical on storage.
+
+`yearmonth` and `duration` are accepted too. Storage rules worth knowing:
+
+- `geopoint` and `geojson` are stored as BigQuery `GEOGRAPHY`. A `geopoint`
+  is sent and returned as `"lon, lat"` (default format only); a `geojson`
+  value must be a GeoJSON *geometry* (`Point`, `Polygon`, …) — `Feature` and
+  `FeatureCollection` are rejected. `datastore_search` and table downloads
+  return these shapes; `datastore_search_sql` and SQL downloads return WKT
+  text (`POINT(-0.1276 51.5072)`). These columns cannot be used in `filters`
+  or `sort`. Tables created before this mapping keep their old columns.
+- `duration` is stored as text and returned exactly as sent (ISO 8601, e.g.
+  `PT30M`).
+
+- `yearmonth` is stored and returned as `YYYY-MM` everywhere (search, SQL
+  search, downloads). Incoming values must be `YYYY-MM` (`2025-1` is
+  normalised to `2025-01`); anything else is rejected with a `Validation
+  Error`. A custom `format` on a `yearmonth` field is not supported.
 Each field may carry an `info` table schema (`title`, `description`,
 `comment`, `example`, `unit`, plus custom keys), stored verbatim and
 round-tripped by `datastore_info`.

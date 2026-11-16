@@ -43,6 +43,7 @@ from datastore.core.helper import content_disposition
 from datastore.infrastructure.engines.bigquery.lib import (
     format_select_column,
     qualify_table_refs,
+    table_to_schema,
 )
 
 log = logging.getLogger(__name__)
@@ -132,13 +133,17 @@ async def dump(
     source = f"`{backend.config.BIGQUERY_PROJECT}.{backend.config.BIGQUERY_DATASET}.{resource_id}`"
 
     columns = _dump_column_order(table.schema)
+    # Frictionless type per column — tells the export how to render a
+    # GEOGRAPHY column (`geopoint` vs `geojson`).
+    stored = table_to_schema(table) if isinstance(table.description, str) else {}
+    field_types = {f.get("name"): f.get("type") for f in stored.get("fields", [])}
 
     async def build_export_sql(uri: str) -> tuple[str, bytes | None]:
         # Schema is already known from get_table — no dry run needed.
         sql = _export_data_sql(
             uri,
             fmt,
-            _export_select_list(columns, fmt),
+            _export_select_list(columns, fmt, field_types),
             source=source,
             suffix=" ORDER BY `_id`",
         )
@@ -634,13 +639,21 @@ def _dump_column_order(schema: Any) -> list[Any]:
     ]
 
 
-def _export_select_list(schema: Any, fmt: str) -> str:
+def _export_select_list(
+    schema: Any, fmt: str, field_types: dict[str, str | None] | None = None
+) -> str:
     """SELECT column list for an export.
 
     Every format applies the same `format_select_column` casts as
     `datastore_search`, so one row reads back identically whichever
     format the caller picked. Parquet additionally casts JSON columns
     to strings, because BigQuery cannot export native JSON to parquet.
+
+    `field_types` maps column name → Frictionless type. It is only known
+    for a whole-table dump, and decides how a GEOGRAPHY column is
+    rendered: `geopoint` → `lon, lat`, `geojson` → GeoJSON (a nested
+    object in ndjson, compact JSON text elsewhere). Without it (SQL
+    dumps) a GEOGRAPHY column exports as WKT text.
 
     Parquet used to export `*`, which kept BigQuery's native TIMESTAMP
     while csv/ndjson rendered a whole-second ISO string - the same row
@@ -649,20 +662,28 @@ def _export_select_list(schema: Any, fmt: str) -> str:
     keeps the common case free of a column list.
     """
     fields = list(schema)
-    if fmt == "parquet":
-        if not any(
-            (f.field_type or "").upper() in ("JSON", "TIMESTAMP", "DATETIME") for f in fields
-        ):
-            return "*"
-        return ", ".join(
-            (
-                f"TO_JSON_STRING(`{f.name}`) AS `{f.name}`"
-                if (f.field_type or "").upper() == "JSON"
-                else format_select_column(f.name, f.field_type)
-            )
-            for f in fields
-        )
-    return ", ".join(format_select_column(f.name, f.field_type) for f in fields)
+    types = field_types or {}
+
+    def bq_type(f: Any) -> str:
+        return (f.field_type or "").upper()
+
+    def column(f: Any) -> str:
+        fr_type = types.get(f.name)
+        if bq_type(f) == "GEOGRAPHY" and fr_type == "geojson":
+            doc = f"PARSE_JSON(ST_ASGEOJSON(`{f.name}`))"
+            if fmt == "ndjson":
+                return f"{doc} AS `{f.name}`"
+            # Guarded: TO_JSON_STRING(NULL) is the text `null`, not NULL.
+            return f"IF(`{f.name}` IS NULL, NULL, TO_JSON_STRING({doc})) AS `{f.name}`"
+        if fmt == "parquet" and bq_type(f) == "JSON":
+            return f"TO_JSON_STRING(`{f.name}`) AS `{f.name}`"
+        return format_select_column(f.name, f.field_type, fr_type)
+
+    if fmt == "parquet" and not any(
+        bq_type(f) in ("JSON", "TIMESTAMP", "DATETIME", "GEOGRAPHY") for f in fields
+    ):
+        return "*"
+    return ", ".join(column(f) for f in fields)
 
 
 def _csv_header_bytes(schema: Any, fmt: str) -> bytes:

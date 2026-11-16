@@ -257,7 +257,7 @@ def validate_frictionless_schema(value: Any) -> dict[str, Any] | None:
       1. `frictionless.Schema.from_descriptor` validates the descriptor
          shape (raises on missing `fields`, unknown field type, etc.).
       2. Field types must be in `ALLOWED_FRICTIONLESS_TYPES` — wider
-         Frictionless vocabulary (e.g. `duration`, `year`, `yearmonth`)
+         Frictionless vocabulary (e.g. `year`)
          is rejected here so storage layout stays predictable and the
          engine type maps don't grow ad-hoc.
       3. Field names must not collide with engine-reserved system
@@ -300,6 +300,20 @@ def validate_frictionless_schema(value: Any) -> dict[str, Any] | None:
             raise ValueError(
                 f"field {name!r} has unsupported type {ftype!r}; "
                 f"allowed: {sorted(ALLOWED_FRICTIONLESS_TYPES)}"
+            )
+        if ftype == "geopoint" and f.get("format") not in (None, "default"):
+            # Only the `"lon, lat"` string form is written to the
+            # GEOGRAPHY column; `array` / `object` values would not be.
+            raise ValueError(
+                f"field {name!r}: geopoint supports only the default format "
+                '("lon, lat"); remove `format`'
+            )
+        if ftype == "yearmonth" and f.get("format") not in (None, "default"):
+            # Frictionless reads `yearmonth` as `YYYY-MM` only; a custom
+            # format would be accepted here and then fail every write.
+            raise ValueError(
+                f"field {name!r}: yearmonth does not support a custom format; "
+                "values must be YYYY-MM"
             )
     return value
 

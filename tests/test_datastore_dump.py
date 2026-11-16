@@ -624,3 +624,31 @@ def test_dump_cache_key_changes_when_table_modified_advances() -> None:
 
 
 # --- test infrastructure --------------------------------------------------
+
+
+def test_export_select_renders_geography_columns() -> None:
+    """A table dump knows the Frictionless type, so GEOGRAPHY exports in
+    the same shape `datastore_search` returns; a SQL dump doesn't, and
+    falls back to WKT."""
+    schema = [
+        _bq_field("id", "INT64"),
+        _bq_field("loc", "GEOGRAPHY"),
+        _bq_field("area", "GEOGRAPHY"),
+    ]
+    types = {"id": "integer", "loc": "geopoint", "area": "geojson"}
+    point = (
+        "CONCAT(CAST(ROUND(ST_X(`loc`), 9) AS STRING), ', ', "
+        "CAST(ROUND(ST_Y(`loc`), 9) AS STRING)) AS `loc`"
+    )
+    doc = "PARSE_JSON(ST_ASGEOJSON(`area`))"
+
+    for fmt in ("csv", "gzip", "parquet"):
+        assert _export_select_list(schema, fmt, types) == (
+            f"`id`, {point}, IF(`area` IS NULL, NULL, TO_JSON_STRING({doc})) AS `area`"
+        )
+    assert _export_select_list(schema, "ndjson", types) == f"`id`, {point}, {doc} AS `area`"
+    # No Frictionless types (SQL dump) → WKT, in every format.
+    for fmt in ("csv", "ndjson", "parquet"):
+        assert _export_select_list(schema, fmt) == (
+            "`id`, ST_ASTEXT(`loc`) AS `loc`, ST_ASTEXT(`area`) AS `area`"
+        )
