@@ -2284,7 +2284,9 @@ def test_insert_normalises_yearmonth_to_canonical_form() -> None:
 def test_schema_accepts_yearmonth_but_not_a_custom_format_or_list() -> None:
     from datastore.schemas.validators import validate_frictionless_schema
 
-    with pytest.raises(ValueError, match="unsupported type 'list'"):
+    # Frictionless 5.19 rejects `list` itself; 5.21 accepts it and our own
+    # allowed-type check rejects it. Either way the schema is refused.
+    with pytest.raises(ValueError, match="unsupported type 'list'|\"list\" is not supported"):
         validate_frictionless_schema({"fields": [{"name": "tags", "type": "list"}]})
 
     ok = {
@@ -2575,3 +2577,59 @@ def test_year_is_accepted_stored_as_int64_and_filtered_as_integer() -> None:
     assert params[0].type_ == "INT64"
     _, del_params = delete_sql("`p.d.t`", schema, {"y": [2024, 2025]})
     assert del_params[0].array_type == "INT64"
+
+
+# --- empty string in a typed column → 400 ------------------------------------
+
+
+def test_empty_string_in_a_typed_column_is_rejected_like_legacy_ckan(
+    mock_client: MagicMock,
+) -> None:
+    """`""` for a number is a 400 carrying the legacy datastore's wording,
+    not a 500 and not a silent NULL."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Invalid BIGNUMERIC value: ; reason: invalidQuery, location: query"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "number"}], "primaryKey": ["id"]},
+    )
+    with pytest.raises(ValidationError) as exc:
+        backend.upsert("res-1", [{"id": ""}], method="upsert", include_total=False)
+    message = str(exc.value)
+    assert message.startswith(
+        "The data was invalid (for example: a numeric value is out of range "
+        "or was inserted into a text field)."
+    )
+    assert "An empty string is not a valid number" in message
+
+
+def test_invalid_bignumeric_value_is_a_validation_error(mock_client: MagicMock) -> None:
+    """`Invalid BIGNUMERIC value: …` is a 400, not a 500."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 Invalid BIGNUMERIC value: abc; reason: invalidQuery"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "number"}], "primaryKey": ["id"]},
+    )
+    with pytest.raises(ValidationError) as exc:
+        backend.upsert("res-1", [{"id": "abc"}], method="upsert", include_total=False)
+    assert "'abc'" in str(exc.value)
+    assert "number" in str(exc.value)
+
+
+def test_empty_string_error_from_a_script_is_a_validation_error(mock_client: MagicMock) -> None:
+    """The CREATE TABLE + INSERT script reports the same failure with a
+    statement position and no `;` — value terminated by a newline."""
+    mock_client.query.return_value.result.side_effect = RuntimeError(
+        "400 GET https://bigquery.googleapis.com/bigquery/v2/projects/p/queries/j"
+        "?maxResults=0: Query error: Invalid BIGNUMERIC value:  at [2:1]\n\n"
+        "Location: europe-west1\nJob ID: j\n"
+    )
+    backend = _backend_with_schema(
+        mock_client,
+        {"fields": [{"name": "id", "type": "number"}], "primaryKey": ["id"]},
+    )
+    with pytest.raises(ValidationError, match="An empty string is not a valid number"):
+        backend.upsert("res-1", [{"id": ""}], method="upsert", include_total=False)
