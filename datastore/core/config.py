@@ -54,7 +54,7 @@ class Config(BaseSettings):
 
     # Request limits
     MAX_REQUEST_BODY_MB: int = Field(
-        default=10,
+        default=500,
         ge=1,
         le=1000,
         description="Maximum request body size in MB",
@@ -286,6 +286,18 @@ class Config(BaseSettings):
         ge=1,
         le=168,
         description=("Signed-URL TTL for dump manifest entries (hours). Defaults to 1h."),
+    )
+
+    BIGQUERY_WRITE_CHUNK_MB: int = Field(
+        default=9,
+        ge=1,
+        le=9,
+        description=(
+            "Largest record payload (MB of JSON) written to BigQuery in one statement. "
+            "A write within it is a single job; a larger one is split into chunks of "
+            "this size and written inside one transaction, so it lands whole or not at "
+            "all. BigQuery caps a query request at about 10 MB."
+        ),
     )
 
     # Per-row system columns

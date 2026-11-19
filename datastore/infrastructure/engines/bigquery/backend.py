@@ -42,6 +42,7 @@ from datastore.infrastructure.engines.base import (
     SearchResult,
     WriteResult,
 )
+from datastore.infrastructure.engines.bigquery import chunked_write
 from datastore.infrastructure.engines.bigquery import export as bq_export
 from datastore.infrastructure.engines.bigquery.lib import (
     PK_CONFLICT_SENTINEL,
@@ -381,6 +382,16 @@ class BigQueryBackend(DatastoreBackend):
         each write is a single round-trip. Returns the job for callers
         that need `num_dml_affected_rows`.
         """
+        # Records too big for one request go in chunks inside a transaction.
+        try:
+            chunked = chunked_write.write_if_oversized(
+                self, resource_id, sql, op=op, records=records
+            )
+        except ServerError as e:
+            raise _translate_bigquery_error(e, resource_id, action) from e
+        if chunked is not None:
+            return chunked
+
         try:
             job = self._run_query(
                 sql,
@@ -477,6 +488,14 @@ class BigQueryBackend(DatastoreBackend):
                 resource_id=resource_id,
             )
             log.info("BigQuery table created: %s", resource_id)
+            return
+
+        # DDL cannot run inside a transaction, so for records too big for
+        # one request the table is created first.
+        if chunked_write.is_oversized(self.config, records):
+            self._run_query(create_sql, op="CREATE TABLE", resource_id=resource_id)
+            log.info("BigQuery table created: %s", resource_id)
+            self._insert_records(resource_id, schema, records)
             return
 
         # `;` joins the DDL + DML into one BigQuery script — one job
@@ -1130,7 +1149,10 @@ def _translate_bigquery_error(exc: ServerError, resource_id: str, action: str) -
 
     from datastore.core.exceptions import ValidationError
 
-    msg = str(exc)
+    # A script failure (CREATE TABLE + INSERT) appends the statement's
+    # position — `Invalid BIGNUMERIC value:  at [2:1]` — which is not part
+    # of the offending value.
+    msg = re.sub(r" at \[\d+:\d+\]", "", str(exc))
 
     # `insert_guarded_sql` RAISEs "<sentinel> <count>" when an INSERT would
     # duplicate a primary key. Rebuild the user-facing message here (the
@@ -1157,19 +1179,28 @@ def _translate_bigquery_error(exc: ServerError, resource_id: str, action: str) -
 
     # `ST_GeogPoint failed: Latitude must be between -90 and 90 …` /
     # `ST_GeogFromGeoJSON failed: GeoJSON reader accepts Geometry objects …`
-    m = re.search(r"(ST_GeogPoint|ST_GeogFromGeoJSON) failed: (.+?)(?:;|\\n|$)", msg)
+    m = re.search(r"(ST_GeogPoint|ST_GeogFromGeoJSON) failed: (.+?)(?:;|\n|$)", msg)
     if m:
         kind = "geopoint" if m.group(1) == "ST_GeogPoint" else "geojson"
         return ValidationError(f"Invalid {kind} value: {m.group(2).strip()}")
 
-    # `Bad int64 value: <v>` etc. — type-coercion failure on CAST(JSON_VALUE).
+    # `Bad int64 value: <v>` / `Invalid BIGNUMERIC value: <v>` — type-coercion
+    # failure on CAST(JSON_VALUE). The value is empty when the record sent `""`.
     m = re.search(
-        r"Bad (int64|double|bool|numeric|bignumeric) value: (.+?)(?:;|\\n|$)",
+        r"(?:Bad|Invalid) (int64|double|bool|numeric|bignumeric) value: (.*?)(?:;|\n|$)",
         msg,
         re.IGNORECASE,
     )
     if m:
         bq_type, bad_value = m.group(1).lower(), m.group(2).strip()
+        if not bad_value:
+            # Lead with the legacy CKAN datastore's wording for this case.
+            return ValidationError(
+                "The data was invalid (for example: a numeric value is out of "
+                "range or was inserted into a text field). An empty string is "
+                f"not a valid {_FRIENDLY_BQ_TYPE.get(bq_type, bq_type)}. "
+                "Send null or omit the key for a missing value."
+            )
         return ValidationError(
             f"Value {bad_value!r} is not a valid "
             f"{_FRIENDLY_BQ_TYPE.get(bq_type, bq_type)}. "
@@ -1197,7 +1228,7 @@ def _translate_bigquery_error(exc: ServerError, resource_id: str, action: str) -
     # `Value out of range for INT64: <v>` / `Numeric value … out of range` —
     # the value parsed but doesn't fit the column type's range.
     m = re.search(
-        r"(?:Value )?out of range(?: for (\w+))?:? (.+?)(?:;|\\n|$)",
+        r"(?:Value )?out of range(?: for (\w+))?:? (.+?)(?:;|\n|$)",
         msg,
         re.IGNORECASE,
     )
@@ -1213,7 +1244,7 @@ def _translate_bigquery_error(exc: ServerError, resource_id: str, action: str) -
     # `Invalid date: <v>`, `Invalid timestamp: <v>`, `Invalid time: <v>` —
     # date/time literal that couldn't be parsed.
     m = re.search(
-        r"Invalid (date|timestamp|datetime|time)(?: value)?: (.+?)(?:;|\\n|$)",
+        r"Invalid (date|timestamp|datetime|time)(?: value)?: (.+?)(?:;|\n|$)",
         msg,
         re.IGNORECASE,
     )
