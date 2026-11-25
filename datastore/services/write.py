@@ -79,8 +79,18 @@ def _validate_records(
             fields={"records": key_messages[:100]},
         )
 
+    # `example` is column documentation (it rides in `info` alongside
+    # `comment` / `unit`), but Frictionless treats it as a typed sample and
+    # rejects the whole schema when it does not parse as the field's type.
+    # Validate rows against a copy without it; the stored schema is untouched.
+    row_schema = {
+        **schema,
+        "fields": [
+            {k: v for k, v in field.items() if k != "example"} for field in schema["fields"]
+        ],
+    }
     try:
-        schema_obj = Schema.from_descriptor(schema)
+        schema_obj = Schema.from_descriptor(row_schema)
         resource = Resource(data=records, schema=schema_obj, format="inline")
         report = resource.validate(
             parallel=False,
